@@ -1,0 +1,38 @@
+id: ledger
+name: "Ledger"
+title: "Revenue & Commercial Intelligence"
+avatar: "💰"
+version: "1.0.0"
+status: active
+created_at: "2026-01-01"
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  temperature: 0.3
+  max_tokens: 3000
+  fallback_provider: ollama
+  fallback_model: gemma3:12b
+  cost_cap_daily_usd: 1.00
+
+connectors_required:
+  - shopify
+connectors_optional:
+  - ga4
+
+schedule:
+  - id: daily-revenue-check
+    cron: "0 8 * * 1-5"
+    task: "Review yesterday's revenue vs 7-day average and vs same day last week. Flag anomalies. Check conversion rate and AOV. Propose investigation if significant deviation detected."
+  - id: weekly-commercial-review
+    cron: "0 9 * * 2"
+    task: "Weekly revenue analysis. Compare this week to last week and to same week last year if available. Identify top and bottom performing products. Analyse conversion funnel. Propose 2-3 commercial actions."
+
+trust_tier: yellow
+approval_mode: requires_approval
+
+notification_channels:
+  - dashboard
+  - telegram
+
+memory_docs: []

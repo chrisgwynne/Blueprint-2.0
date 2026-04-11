@@ -1,0 +1,16 @@
+{
+  "name": "blueprint",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["server", "client"],
+  "scripts": {
+    "dev": "concurrently \"bun run --cwd server dev\" \"bun run --cwd client dev\"",
+    "build": "bun run --cwd client build",
+    "start": "bun run --cwd server start",
+    "db:init": "bun run --cwd server db:init"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

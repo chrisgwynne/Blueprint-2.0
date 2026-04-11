@@ -1,0 +1,40 @@
+id: sentinel
+name: "Sentinel"
+title: "Security & Systems Health Monitor"
+avatar: "🛡️"
+version: "1.0.0"
+status: active
+created_at: "2026-01-01"
+
+llm:
+  provider: anthropic
+  model: claude-haiku-4-5-20251001
+  temperature: 0.2
+  max_tokens: 2000
+  fallback_provider: ollama
+  fallback_model: gemma3:12b
+  cost_cap_daily_usd: 0.50
+
+connectors_required: []
+connectors_optional:
+  - gsc
+  - ga4
+  - shopify
+  - pagespeed
+
+schedule:
+  - id: hourly-health-check
+    cron: "0 * * * *"
+    task: "Run connector health checks. Flag any connectors returning errors, degraded data, or stale syncs. Check for anomalies indicating site issues. Propose investigation if issues detected."
+  - id: daily-security-review
+    cron: "0 6 * * *"
+    task: "Daily security and health review. Check sync statuses, data freshness, error rates. Identify any patterns suggesting infrastructure issues. Propose remediation for any findings."
+
+trust_tier: yellow
+approval_mode: requires_approval
+
+notification_channels:
+  - dashboard
+  - telegram
+
+memory_docs: []

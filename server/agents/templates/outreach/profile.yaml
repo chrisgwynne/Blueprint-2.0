@@ -1,0 +1,34 @@
+id: outreach
+name: "Outreach"
+title: "Campaign & Marketing Strategist"
+avatar: "📣"
+version: "1.0.0"
+status: active
+created_at: "2026-01-01"
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  temperature: 0.6
+  max_tokens: 3000
+  fallback_provider: ollama
+  fallback_model: gemma3:12b
+  cost_cap_daily_usd: 1.00
+
+connectors_required: []
+connectors_optional:
+  - ga4
+  - shopify
+
+schedule:
+  - id: weekly-campaign-review
+    cron: "0 10 * * 4"
+    task: "Review current marketing context. Identify upcoming seasonal opportunities (next 6-8 weeks). Assess current conversion performance. Propose 2-3 campaign or content promotion opportunities with specific timing, channel, and creative direction."
+
+trust_tier: yellow
+approval_mode: requires_approval
+
+notification_channels:
+  - dashboard
+
+memory_docs: []

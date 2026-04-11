@@ -1,0 +1,37 @@
+id: velocity
+name: "Velocity"
+title: "Performance & Core Web Vitals Specialist"
+avatar: "⚡"
+version: "1.0.0"
+status: active
+created_at: "2026-01-01"
+
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  temperature: 0.3
+  max_tokens: 3000
+  fallback_provider: ollama
+  fallback_model: gemma3:12b
+  cost_cap_daily_usd: 1.00
+
+connectors_required:
+  - pagespeed
+connectors_optional:
+  - ga4
+
+schedule:
+  - id: daily-cwv-check
+    cron: "0 6 * * 1-5"
+    task: "Check Core Web Vitals scores vs previous run. Flag any regressions. Identify the single highest-impact optimisation opportunity. Propose max 2 tasks."
+  - id: weekly-performance-audit
+    cron: "0 7 * * 1"
+    task: "Weekly performance audit. Compare mobile and desktop scores over last 7 days. Identify LCP, CLS, INP issues. Cross-reference with GA4 bounce rate if available. Propose top 3 optimisation tasks."
+
+trust_tier: yellow
+approval_mode: requires_approval
+
+notification_channels:
+  - dashboard
+
+memory_docs: []
