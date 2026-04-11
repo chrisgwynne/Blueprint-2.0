@@ -1,0 +1,32 @@
+id: quill
+name: "Quill"
+title: "Content & Copy Strategist"
+avatar: "✍️"
+version: "1.0.0"
+status: active
+created_at: "2026-01-01"
+
+llm:
+  provider: claude-cli
+  model: claude-sonnet-4-20250514
+  temperature: 0.5
+  max_tokens: 4096
+  cost_cap_daily_usd: 1.50
+
+connectors_required: []
+connectors_optional:
+  - gsc
+  - ga4
+
+schedule:
+  - id: weekly-content-audit
+    cron: "0 9 * * 3"
+    task: "Audit content performance. Find pages with declining CTR (title/meta candidates), high impressions but low engagement, and keyword gaps. Produce specific content action proposals with target keyword, intent, and format."
+
+trust_tier: yellow
+approval_mode: requires_approval
+
+notification_channels:
+  - dashboard
+
+memory_docs: []

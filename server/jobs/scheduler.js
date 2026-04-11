@@ -130,6 +130,14 @@ function getDefaultDataType(connectorType) {
     pagespeed: 'performance',
     gsc: 'search_analytics',
     ga4: 'report',
+    shopify: 'orders',
+    uptimerobot: 'monitors',
+    todoist: 'tasks',
+    brevo: 'campaigns',
+    stannp: 'campaigns',
+    wordpress: 'content',
+    kirby: 'pages',
+    'google-ads': 'campaigns',
   };
   return defaults[connectorType] ?? 'default';
 }
@@ -161,7 +169,19 @@ export function startScheduler() {
 
       for (const connector of connectors) {
         // Determine the polling interval — user-configured value takes priority
-        const pollingDefaults = { pagespeed: 1440, gsc: 720, ga4: 360, shopify: 360 };
+        const pollingDefaults = {
+          pagespeed: 1440,
+          gsc: 720,
+          ga4: 360,
+          shopify: 360,
+          uptimerobot: 15,
+          todoist: 60,
+          brevo: 360,
+          stannp: 720,
+          wordpress: 360,
+          kirby: 720,
+          'google-ads': 360,
+        };
         let configuredInterval = null;
         try {
           if (connector.config) {

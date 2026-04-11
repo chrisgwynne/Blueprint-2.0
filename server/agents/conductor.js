@@ -106,19 +106,29 @@ export async function runConductor(businessId) {
     return { runs: [], errors: [] };
   }
 
-  // 2. Load all YAML profiles
+  // 2. Load all YAML profiles. Canonical location is /server/agents/profiles/{id}.yaml.
+  // Falls back to legacy agent.profile_path for any straggler.
+  const CANONICAL_PROFILES_DIR = resolve(PROJECT_ROOT, 'server/agents/profiles');
   const profileMap = new Map();
   for (const agent of agents) {
-    const profilePath = resolve(PROJECT_ROOT, agent.profile_path);
-    if (!existsSync(profilePath)) {
-      console.warn(`[conductor] Profile not found for agent ${agent.id}: ${profilePath}`);
-      continue;
+    const candidates = [
+      resolve(CANONICAL_PROFILES_DIR, `${agent.id}.yaml`),
+      resolve(PROJECT_ROOT, agent.profile_path),
+    ];
+    let loaded = false;
+    for (const profilePath of candidates) {
+      if (!existsSync(profilePath)) continue;
+      try {
+        const profile = yaml.load(readFileSync(profilePath, 'utf8'));
+        profileMap.set(agent.id, profile);
+        loaded = true;
+        break;
+      } catch (err) {
+        console.error(`[conductor] Failed to parse profile for agent ${agent.id} at ${profilePath}:`, err.message);
+      }
     }
-    try {
-      const profile = yaml.load(readFileSync(profilePath, 'utf8'));
-      profileMap.set(agent.id, profile);
-    } catch (err) {
-      console.error(`[conductor] Failed to parse profile for agent ${agent.id}:`, err.message);
+    if (!loaded) {
+      console.warn(`[conductor] Profile not found for agent ${agent.id} (tried: ${candidates.join(', ')})`);
     }
   }
 

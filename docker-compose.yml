@@ -7,13 +7,13 @@ services:
     volumes:
       - ./data:/app/data
       - ./kb:/app/kb
-      - ./agents:/app/agents
+      # Persist agent state (memory.json, run-log.jsonl, inbox.jsonl) across restarts
+      - ./server/agents:/app/server/agents
     environment:
       - NODE_ENV=production
       - PORT=4000
       - DATABASE_PATH=/app/data/blueprint.db
       - KB_PATH=/app/kb
-      - AGENTS_PATH=/app/agents
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SESSION_SECRET=${SESSION_SECRET}
       - ADMIN_USERNAME=${ADMIN_USERNAME}

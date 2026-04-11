@@ -175,6 +175,174 @@ router.get('/google/callback', async (req, res) => {
 });
 
 /**
+ * GET /api/oauth/todoist
+ * Initiates Todoist OAuth flow.
+ *
+ * Query params:
+ *   businessId — required
+ */
+router.get('/todoist', async (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  try {
+    const { default: todoistConnector } = await import('../connectors/todoist/index.js');
+    const state = Buffer.from(JSON.stringify({ businessId, type: 'todoist' })).toString('base64url');
+    const authUrl = await todoistConnector.getAuthUrl(state);
+    return res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth] Todoist init error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/oauth/todoist/callback
+ * OAuth callback from Todoist.
+ */
+router.get('/todoist/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error)}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+
+  const { businessId } = parsedState;
+
+  try {
+    const { default: todoistConnector } = await import('../connectors/todoist/index.js');
+    const credentials = await todoistConnector.exchangeCode(code);
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'todoist'"
+    ).get(businessId);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'todoist', 'Todoist', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+
+    return res.redirect(`${clientUrl}/connectors?connected=todoist`);
+  } catch (err) {
+    console.error('[oauth] Todoist callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+/**
+ * GET /api/oauth/google-ads
+ * Initiates Google Ads OAuth flow (uses Google OAuth with adwords scope).
+ */
+router.get('/google-ads', (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/google-ads/callback')}`;
+  if (!clientId) return res.status(500).json({ error: 'GOOGLE_CLIENT_ID is not configured.' });
+
+  const state = Buffer.from(JSON.stringify({ businessId, type: 'google-ads' })).toString('base64url');
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: 'https://www.googleapis.com/auth/adwords',
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return res.redirect(`${AUTH_BASE}?${params.toString()}`);
+});
+
+/**
+ * GET /api/oauth/google-ads/callback
+ */
+router.get('/google-ads/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error)}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/google-ads/callback')}`;
+
+  try {
+    const tokenRes = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.text();
+      console.error('[oauth] Google Ads token exchange failed:', err.substring(0, 300));
+      return res.redirect(`${clientUrl}/connectors?error=token_exchange_failed`);
+    }
+
+    const tokens = await tokenRes.json();
+    const credentials = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || null,
+      expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+      scope: tokens.scope,
+    };
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'google-ads'"
+    ).get(businessId);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'google-ads', 'Google Ads', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+
+    return res.redirect(`${clientUrl}/connectors?connected=google-ads`);
+  } catch (err) {
+    console.error('[oauth] Google Ads callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+/**
  * DELETE /api/oauth/google/:businessId
  * Revokes Google access and sets GSC + GA4 connectors to disconnected.
  */

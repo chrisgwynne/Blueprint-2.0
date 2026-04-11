@@ -633,6 +633,540 @@ export const rules = [
       };
     },
   },
+
+  // ─── UPTIME ROBOT ───────────────────────────────────────────────────────────
+
+  {
+    id: 'monitor_down',
+    connectorType: 'uptimerobot',
+    type: 'monitor_down',
+    severity: 'critical',
+    name: 'Monitor Down',
+    evaluate(current) {
+      const monitors = current?.monitors ?? [];
+      const down = monitors.filter(m => m?.status === 9);
+      if (down.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const names = down.map(m => m.friendly_name).filter(Boolean);
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count: down.length, monitors: names },
+        title: down.length === 1 ? `${names[0]} is DOWN` : `${down.length} monitors are DOWN`,
+        description: `The following monitors are reporting hard down: ${names.join(', ')}. Investigate immediately.`,
+      };
+    },
+  },
+
+  {
+    id: 'monitor_seems_down',
+    connectorType: 'uptimerobot',
+    type: 'monitor_seems_down',
+    severity: 'alert',
+    name: 'Monitor Seems Down',
+    evaluate(current) {
+      const monitors = current?.monitors ?? [];
+      const seems = monitors.filter(m => m?.status === 8);
+      if (seems.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const names = seems.map(m => m.friendly_name).filter(Boolean);
+      return {
+        triggered: true,
+        confidence: 0.85,
+        data: { count: seems.length, monitors: names },
+        title: `${seems.length} monitor${seems.length > 1 ? 's' : ''} reporting "seems down"`,
+        description: `Pre-confirmation status — UptimeRobot is rechecking. Likely transient but watch closely: ${names.join(', ')}.`,
+      };
+    },
+  },
+
+  {
+    id: 'uptime_below_threshold',
+    connectorType: 'uptimerobot',
+    type: 'uptime_drop',
+    severity: 'warning',
+    name: 'Uptime Below Threshold',
+    evaluate(current) {
+      const monitors = current?.monitors ?? [];
+      if (monitors.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const below = monitors
+        .map(m => {
+          const ratio = parseFloat(String(m.custom_uptime_ratio ?? '').split('-').pop());
+          return isNaN(ratio) ? null : { name: m.friendly_name, ratio };
+        })
+        .filter(x => x && x.ratio < 99.5);
+      if (below.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.95,
+        data: { monitors: below },
+        title: `${below.length} monitor${below.length > 1 ? 's' : ''} below 99.5% uptime (30-day)`,
+        description: below.map(b => `${b.name}: ${b.ratio}%`).join(', '),
+      };
+    },
+  },
+
+  {
+    id: 'uptimerobot_response_time_spike',
+    connectorType: 'uptimerobot',
+    type: 'response_time_spike',
+    severity: 'warning',
+    name: 'Response Time Spike',
+    evaluate(current, previous) {
+      const currMons = current?.monitors ?? [];
+      const prevMons = previous?.monitors ?? [];
+      if (currMons.length === 0 || prevMons.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const prevById = new Map(prevMons.map(m => [m.id, m]));
+      const spiked = [];
+      for (const m of currMons) {
+        const curr = m.response_times?.[0]?.value ?? 0;
+        const prev = prevById.get(m.id)?.response_times?.[0]?.value ?? 0;
+        if (prev > 0 && curr > prev * 1.5 && curr > 500) {
+          spiked.push({ name: m.friendly_name, prev_ms: prev, curr_ms: curr });
+        }
+      }
+      if (spiked.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { monitors: spiked },
+        title: `${spiked.length} monitor${spiked.length > 1 ? 's' : ''} showing response time spike`,
+        description: spiked.map(s => `${s.name}: ${s.prev_ms}ms → ${s.curr_ms}ms`).join(', '),
+      };
+    },
+  },
+
+  // ─── TODOIST ────────────────────────────────────────────────────────────────
+
+  {
+    id: 'high_priority_overdue',
+    connectorType: 'todoist',
+    type: 'high_priority_overdue',
+    severity: 'alert',
+    name: 'High-Priority Tasks Overdue',
+    evaluate(current) {
+      const overdue = current?.overdue_tasks ?? [];
+      const p1 = overdue.filter(t => t.priority === 4);
+      if (p1.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count: p1.length, tasks: p1.slice(0, 10).map(t => t.content) },
+        title: `${p1.length} priority-1 task${p1.length > 1 ? 's are' : ' is'} overdue`,
+        description: p1.slice(0, 5).map(t => `• ${t.content}`).join('\n'),
+      };
+    },
+  },
+
+  {
+    id: 'overdue_tasks_spike',
+    connectorType: 'todoist',
+    type: 'overdue_spike',
+    severity: 'warning',
+    name: 'Overdue Tasks Spike',
+    evaluate(current, previous) {
+      const curr = current?.tasks_overdue ?? 0;
+      const prev = previous?.tasks_overdue ?? 0;
+      const increase = curr - prev;
+      if (increase < 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.85,
+        data: { current: curr, previous: prev, increase },
+        title: `Overdue tasks jumped from ${prev} to ${curr}`,
+        description: `${increase} new tasks have become overdue since last check.`,
+      };
+    },
+  },
+
+  {
+    id: 'tasks_completed_drop',
+    connectorType: 'todoist',
+    type: 'productivity_drop',
+    severity: 'info',
+    name: 'Completion Velocity Drop',
+    evaluate(current, previous) {
+      const curr = current?.tasks_completed_7d ?? 0;
+      const prev = previous?.tasks_completed_7d ?? 0;
+      if (prev === 0 || prev - curr <= 5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.75,
+        data: { current: curr, previous: prev },
+        title: `Task completion dropped ${prev - curr} this week`,
+        description: `Last week you completed ${prev} tasks; this week ${curr}. Investigate if this is intentional capacity reduction or a focus issue.`,
+      };
+    },
+  },
+
+  // ─── BREVO ──────────────────────────────────────────────────────────────────
+
+  {
+    id: 'open_rate_drop',
+    connectorType: 'brevo',
+    type: 'open_rate_drop',
+    severity: 'warning',
+    name: 'Email Open Rate Drop',
+    evaluate(current, previous) {
+      const currOpen = current?.avg_open_rate;
+      const prevOpen = previous?.avg_open_rate;
+      if (!currOpen || !prevOpen) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = prevOpen - currOpen;
+      if (drop < 5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { from: prevOpen, to: currOpen, drop },
+        title: `Email open rate fell ${drop.toFixed(1)}% (${prevOpen.toFixed(1)}% → ${currOpen.toFixed(1)}%)`,
+        description: 'Recent campaigns are getting fewer opens. Review subject lines, send time, and list hygiene.',
+      };
+    },
+  },
+
+  {
+    id: 'unsubscribe_spike',
+    connectorType: 'brevo',
+    type: 'unsubscribe_spike',
+    severity: 'alert',
+    name: 'Unsubscribe Spike',
+    evaluate(current) {
+      const rate = current?.avg_unsubscribe_rate ?? 0;
+      if (rate <= 0.5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { rate },
+        title: `Unsubscribe rate at ${rate.toFixed(2)}% (above 0.5% threshold)`,
+        description: 'Recent campaigns are losing subscribers above expected rate. Review content relevance and frequency.',
+      };
+    },
+  },
+
+  {
+    id: 'bounce_rate_high',
+    connectorType: 'brevo',
+    type: 'bounce_rate_high',
+    severity: 'alert',
+    name: 'Email Bounce Rate High',
+    evaluate(current) {
+      const rate = current?.avg_bounce_rate ?? 0;
+      if (rate <= 2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.95,
+        data: { rate },
+        title: `Email bounce rate at ${rate.toFixed(1)}% (above 2% threshold)`,
+        description: 'High bounce rates damage sender reputation. Clean your list and verify recent imports.',
+      };
+    },
+  },
+
+  // ─── STANNP ─────────────────────────────────────────────────────────────────
+
+  {
+    id: 'low_campaign_balance',
+    connectorType: 'stannp',
+    type: 'low_balance',
+    severity: 'warning',
+    name: 'Low Stannp Balance',
+    evaluate(current) {
+      const balance = current?.account_balance ?? 0;
+      if (balance >= 50) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { balance },
+        title: `Stannp balance low: £${balance.toFixed(2)} remaining`,
+        description: 'Top up before scheduling new direct mail campaigns to avoid send failures.',
+      };
+    },
+  },
+
+  {
+    id: 'stannp_campaign_failed',
+    connectorType: 'stannp',
+    type: 'campaign_failed',
+    severity: 'alert',
+    name: 'Stannp Campaign Failed',
+    evaluate(current) {
+      const failed = (current?.campaigns ?? []).filter(c => c.status === 'failed');
+      if (failed.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count: failed.length, campaigns: failed.map(c => c.name) },
+        title: `${failed.length} Stannp campaign${failed.length > 1 ? 's' : ''} failed`,
+        description: failed.map(c => `${c.name} (#${c.id})`).join(', '),
+      };
+    },
+  },
+
+  {
+    id: 'stannp_delivery_rate_drop',
+    connectorType: 'stannp',
+    type: 'delivery_drop',
+    severity: 'warning',
+    name: 'Delivery Rate Drop',
+    evaluate(current, previous) {
+      const curr = current?.avg_delivery_rate;
+      const prev = previous?.avg_delivery_rate;
+      if (!curr || !prev || prev - curr < 0.05) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { from: prev, to: curr },
+        title: `Direct mail delivery rate dropped from ${(prev * 100).toFixed(1)}% to ${(curr * 100).toFixed(1)}%`,
+        description: 'Investigate address quality and recent recipient list imports.',
+      };
+    },
+  },
+
+  // ─── WORDPRESS ──────────────────────────────────────────────────────────────
+
+  {
+    id: 'wp_plugin_update_available',
+    connectorType: 'wordpress',
+    type: 'plugin_update',
+    severity: 'warning',
+    name: 'Plugin Updates Available',
+    evaluate(current) {
+      const count = current?.plugins_update_available ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count, plugins: current.plugins_needing_update ?? [] },
+        title: `${count} WordPress plugin${count > 1 ? 's need' : ' needs'} updating`,
+        description: 'Outdated plugins are a security risk. Schedule a maintenance window to update.',
+      };
+    },
+  },
+
+  {
+    id: 'wp_posts_published_drop',
+    connectorType: 'wordpress',
+    type: 'content_drop',
+    severity: 'info',
+    name: 'Publishing Velocity Drop',
+    evaluate(current, previous) {
+      const curr = current?.posts_published_30d ?? 0;
+      const prev = previous?.posts_published_30d ?? 0;
+      if (prev === 0 || prev - curr <= 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.75,
+        data: { current: curr, previous: prev },
+        title: `Publishing dropped from ${prev} to ${curr} posts (last 30 days)`,
+        description: 'Content cadence has slowed. Consider whether this is intentional or a backlog issue.',
+      };
+    },
+  },
+
+  {
+    id: 'wp_comments_spam_spike',
+    connectorType: 'wordpress',
+    type: 'spam_spike',
+    severity: 'info',
+    name: 'Comment Spam Spike',
+    evaluate(current, previous) {
+      const curr = current?.comments_spam ?? 0;
+      const prev = previous?.comments_spam ?? 0;
+      if (curr - prev <= 20) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { count: curr, increase: curr - prev },
+        title: `${curr - prev} new spam comments`,
+        description: 'Spam queue growing fast. Review filter rules or enable a stronger anti-spam plugin.',
+      };
+    },
+  },
+
+  {
+    id: 'wp_drafts_piling_up',
+    connectorType: 'wordpress',
+    type: 'drafts_piling',
+    severity: 'info',
+    name: 'Drafts Piling Up',
+    evaluate(current) {
+      const drafts = current?.posts_draft ?? 0;
+      if (drafts <= 10) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.7,
+        data: { count: drafts },
+        title: `${drafts} draft posts unpublished`,
+        description: 'A growing draft backlog suggests stalled content. Review and either publish, schedule, or archive.',
+      };
+    },
+  },
+
+  // ─── KIRBY ──────────────────────────────────────────────────────────────────
+
+  {
+    id: 'kirby_drafts_piling',
+    connectorType: 'kirby',
+    type: 'kirby_drafts',
+    severity: 'info',
+    name: 'Kirby Drafts Piling Up',
+    evaluate(current) {
+      const drafts = current?.draft_pages ?? 0;
+      if (drafts <= 5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { count: drafts },
+        title: `${drafts} unpublished Kirby pages`,
+        description: 'Draft pages are accumulating in the Panel. Review and publish or archive.',
+      };
+    },
+  },
+
+  {
+    id: 'kirby_missing_meta',
+    connectorType: 'kirby',
+    type: 'missing_meta',
+    severity: 'warning',
+    name: 'Kirby Pages Missing Meta',
+    evaluate(current) {
+      const count = current?.pages_missing_meta ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count },
+        title: `${count} Kirby page${count > 1 ? 's' : ''} missing meta title or description`,
+        description: 'Pages without meta tags hurt SEO. Add them before they accumulate further.',
+      };
+    },
+  },
+
+  {
+    id: 'kirby_stale_content',
+    connectorType: 'kirby',
+    type: 'stale_content',
+    severity: 'info',
+    name: 'Kirby Stale Content',
+    evaluate(current) {
+      const stale = current?.pages_not_updated_90d ?? 0;
+      if (stale <= 10) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.7,
+        data: { count: stale },
+        title: `${stale} Kirby pages not updated in 90+ days`,
+        description: 'Stale content can hurt SEO and engagement. Identify high-traffic stale pages first.',
+      };
+    },
+  },
+
+  // ─── GOOGLE ADS ─────────────────────────────────────────────────────────────
+
+  {
+    id: 'google_ads_roas_drop',
+    connectorType: 'google-ads',
+    type: 'roas_drop',
+    severity: 'alert',
+    name: 'Google Ads ROAS Drop',
+    evaluate(current, previous) {
+      const curr = current?.roas;
+      const prev = previous?.roas;
+      if (!curr || !prev || prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.85,
+        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
+        title: `ROAS dropped ${Math.round(dropPct * 100)}% (${prev.toFixed(2)}x → ${curr.toFixed(2)}x)`,
+        description: 'Return on ad spend is falling. Check landing pages, audience targeting, and recent creative changes.',
+      };
+    },
+  },
+
+  {
+    id: 'google_ads_spend_spike',
+    connectorType: 'google-ads',
+    type: 'spend_spike',
+    severity: 'warning',
+    name: 'Google Ads Spend Spike',
+    evaluate(current, previous) {
+      const curr = current?.total_spend_30d ?? 0;
+      const prev = previous?.total_spend_30d ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const increase = (curr - prev) / prev;
+      if (increase < 0.25) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { from: prev, to: curr, increasePct: Math.round(increase * 100) },
+        title: `Ad spend up ${Math.round(increase * 100)}% (£${prev.toFixed(2)} → £${curr.toFixed(2)})`,
+        description: 'Spend has jumped significantly. Verify this matches a deliberate budget change.',
+      };
+    },
+  },
+
+  {
+    id: 'google_ads_cpa_increase',
+    connectorType: 'google-ads',
+    type: 'cpa_increase',
+    severity: 'warning',
+    name: 'Google Ads CPA Increase',
+    evaluate(current, previous) {
+      const curr = current?.cpa;
+      const prev = previous?.cpa;
+      if (!curr || !prev || prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const increase = (curr - prev) / prev;
+      if (increase < 0.3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { from: prev, to: curr, increasePct: Math.round(increase * 100) },
+        title: `CPA up ${Math.round(increase * 100)}% (£${prev.toFixed(2)} → £${curr.toFixed(2)})`,
+        description: 'Cost per acquisition rising. Audit underperforming campaigns and ad groups.',
+      };
+    },
+  },
+
+  {
+    id: 'google_ads_impression_share_drop',
+    connectorType: 'google-ads',
+    type: 'impression_share_drop',
+    severity: 'warning',
+    name: 'Impression Share Drop',
+    evaluate(current, previous) {
+      const curr = current?.impression_share;
+      const prev = previous?.impression_share;
+      if (curr == null || prev == null) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = prev - curr;
+      if (drop < 0.1) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { from: prev, to: curr },
+        title: `Impression share dropped ${(drop * 100).toFixed(1)}%`,
+        description: 'You are losing visibility in auctions. Possible causes: budget caps, bid lowering, or new competition.',
+      };
+    },
+  },
+
+  {
+    id: 'google_ads_low_quality_scores',
+    connectorType: 'google-ads',
+    type: 'quality_score_drop',
+    severity: 'info',
+    name: 'Low Quality Score Keywords',
+    evaluate(current) {
+      const keywords = current?.keywords_data ?? [];
+      const lowQS = keywords.filter(k => (k.quality_score ?? 10) < 5 && (k.cost_micros ?? 0) > 1_000_000);
+      if (lowQS.length <= 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { count: lowQS.length, keywords: lowQS.slice(0, 10).map(k => k.text) },
+        title: `${lowQS.length} keywords with quality score below 5`,
+        description: 'Low quality scores increase costs. Improve landing page relevance and ad copy.',
+      };
+    },
+  },
 ];
 
 /**

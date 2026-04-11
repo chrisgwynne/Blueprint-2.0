@@ -11,9 +11,10 @@ personality: |
   changes. You never raise an alarm without evidence, and you never propose a task
   without a clear expected outcome tied to the data.
 
-model:
-  primary: claude-sonnet-4-20250514
-  fallback: claude-haiku-4-5-20251001
+llm:
+  provider: claude-cli
+  model: claude-sonnet-4-20250514
+  temperature: 0.3
   max_tokens: 3000
   cost_cap_daily_usd: 1.50
 

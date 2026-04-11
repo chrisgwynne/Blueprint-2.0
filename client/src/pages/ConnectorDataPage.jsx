@@ -8,6 +8,7 @@ import {
   AlertTriangle, CheckCircle, Globe, Phone, Navigation,
   Star, Eye, MessageSquare, FileText, Image,
   CreditCard, GitBranch, Plus,
+  Activity, CheckSquare, Mail, Send,
 } from 'lucide-react'
 import {
   AreaChart, Area, BarChart, Bar, LineChart, Line,
@@ -20,25 +21,39 @@ import Gauge from '../components/Gauge.jsx'
 import { chartDefaults, CHART_COLORS } from '../lib/chartTheme.js'
 
 const CONNECTOR_META = {
-  gsc:       { icon: Search,      label: 'Search Console',    color: 'var(--bp-blue)' },
-  ga4:       { icon: BarChart2,   label: 'Google Analytics',  color: 'var(--bp-green)' },
-  pagespeed: { icon: Zap,         label: 'PageSpeed',         color: 'var(--bp-amber)' },
-  shopify:   { icon: ShoppingBag, label: 'Shopify',           color: 'var(--bp-green)' },
-  gbp:       { icon: MapPin,      label: 'Business Profile',  color: 'var(--bp-blue)' },
-  stripe:    { icon: CreditCard,  label: 'Stripe',            color: 'var(--bp-purple)' },
-  github:    { icon: GitBranch,   label: 'GitHub',            color: 'var(--bp-text-3)' },
-  default:   { icon: Database,    label: 'Data Source',       color: 'var(--bp-text-3)' },
+  gsc:           { icon: Search,      label: 'Search Console',     color: 'var(--bp-blue)' },
+  ga4:           { icon: BarChart2,   label: 'Google Analytics',   color: 'var(--bp-green)' },
+  pagespeed:     { icon: Zap,         label: 'PageSpeed',          color: 'var(--bp-amber)' },
+  shopify:       { icon: ShoppingBag, label: 'Shopify',            color: 'var(--bp-green)' },
+  gbp:           { icon: MapPin,      label: 'Business Profile',   color: 'var(--bp-blue)' },
+  stripe:        { icon: CreditCard,  label: 'Stripe',             color: 'var(--bp-purple)' },
+  github:        { icon: GitBranch,   label: 'GitHub',             color: 'var(--bp-text-3)' },
+  uptimerobot:   { icon: Activity,    label: 'UptimeRobot',        color: 'var(--bp-green)' },
+  todoist:       { icon: CheckSquare, label: 'Todoist',            color: 'var(--bp-red)' },
+  brevo:         { icon: Mail,        label: 'Brevo',              color: 'var(--bp-blue)' },
+  stannp:        { icon: Send,        label: 'Stannp',             color: 'var(--bp-purple)' },
+  wordpress:     { icon: Globe,       label: 'WordPress',          color: 'var(--bp-blue)' },
+  kirby:         { icon: FileText,    label: 'Kirby',              color: 'var(--bp-amber)' },
+  'google-ads':  { icon: TrendingUp,  label: 'Google Ads',         color: 'var(--bp-amber)' },
+  default:       { icon: Database,    label: 'Data Source',        color: 'var(--bp-text-3)' },
 }
 
 const CONNECTOR_TABS = {
-  gsc:       ['Overview', 'Keywords', 'Pages', 'Raw Data'],
-  ga4:       ['Overview', 'Traffic', 'Pages', 'Acquisition', 'Raw Data'],
-  pagespeed: ['Overview', 'Mobile', 'Desktop', 'History', 'Opportunities'],
-  shopify:   ['Overview', 'Orders', 'Products', 'Customers', 'Inventory', 'Raw Data'],
-  gbp:       ['Overview', 'Reviews', 'Insights', 'Posts', 'Photos', 'Q&A', 'Raw Data'],
-  stripe:    ['Overview', 'Revenue', 'Customers', 'Subscriptions', 'Payouts', 'Raw Data'],
-  github:    ['Overview', 'Pull Requests', 'Issues', 'Deployments', 'Raw Data'],
-  default:   ['Overview', 'Raw Data'],
+  gsc:           ['Overview', 'Keywords', 'Pages', 'Raw Data'],
+  ga4:           ['Overview', 'Traffic', 'Pages', 'Acquisition', 'Raw Data'],
+  pagespeed:     ['Overview', 'Mobile', 'Desktop', 'History', 'Opportunities'],
+  shopify:       ['Overview', 'Orders', 'Products', 'Customers', 'Inventory', 'Raw Data'],
+  gbp:           ['Overview', 'Reviews', 'Insights', 'Posts', 'Photos', 'Q&A', 'Raw Data'],
+  stripe:        ['Overview', 'Revenue', 'Customers', 'Subscriptions', 'Payouts', 'Raw Data'],
+  github:        ['Overview', 'Pull Requests', 'Issues', 'Deployments', 'Raw Data'],
+  uptimerobot:   ['Overview', 'Monitors', 'Incidents', 'Response Times', 'Raw Data'],
+  todoist:       ['Overview', 'Tasks', 'Projects', 'Productivity', 'Raw Data'],
+  brevo:         ['Overview', 'Campaigns', 'Contacts', 'Transactional', 'Raw Data'],
+  stannp:        ['Overview', 'Campaigns', 'Recipients', 'Costs', 'Raw Data'],
+  wordpress:     ['Overview', 'Posts', 'Pages', 'Plugins', 'Comments', 'Media', 'Raw Data'],
+  kirby:         ['Overview', 'Pages', 'Drafts', 'Content Health', 'Raw Data'],
+  'google-ads':  ['Overview', 'Campaigns', 'Keywords', 'Performance', 'Budget', 'Raw Data'],
+  default:       ['Overview', 'Raw Data'],
 }
 
 const RANGE_OPTIONS = ['today', 'yesterday', '7d', '14d', '30d']

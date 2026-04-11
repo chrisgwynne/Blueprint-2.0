@@ -97,7 +97,13 @@ router.post('/', (req, res) => {
       approval_mode: approval_mode ?? 'requires_approval',
     });
 
-    createTaskEvent(task.id, 'created', req.body.proposed_by || 'system', `Task created: "${task.title}"`, { status: 'proposed' });
+    createTaskEvent(
+      task.id,
+      'created',
+      req.session.userId || 'human',
+      `Task created manually: "${task.title}"`,
+      { status: 'proposed', source: 'manual' }
+    );
 
     return res.status(201).json(parseRow(task));
   } catch (err) {

@@ -157,6 +157,66 @@ const connector = {
   async refreshToken(credentials) {
     return ensureFreshToken({ ...credentials, expiresAt: 0 }); // force refresh
   },
+
+  /**
+   * Extract individual metric rows from a search_analytics fetch result.
+   * Expects data in the shape returned by fetchSearchAnalytics:
+   *   { current: [{query, clicks, impressions, ctr, position}], previous: [...], period }
+   */
+  extractMetrics(data, runAt) {
+    const metrics = [];
+    const current = Array.isArray(data?.current) ? data.current : [];
+    const previous = Array.isArray(data?.previous) ? data.previous : [];
+
+    if (current.length === 0) return metrics;
+
+    // Aggregates
+    const totalClicks = current.reduce((s, k) => s + (k.clicks || 0), 0);
+    const totalImpressions = current.reduce((s, k) => s + (k.impressions || 0), 0);
+    const avgCtr = totalImpressions > 0 ? totalClicks / totalImpressions : 0;
+    const avgPosition = current.length > 0
+      ? current.reduce((s, k) => s + (k.position || 0), 0) / current.length
+      : 0;
+
+    metrics.push(
+      { name: 'gsc.total_clicks',      value: totalClicks,                  data: null },
+      { name: 'gsc.total_impressions', value: totalImpressions,             data: null },
+      { name: 'gsc.avg_ctr',           value: Math.round(avgCtr * 10000) / 10000, data: null },
+      { name: 'gsc.avg_position',      value: Math.round(avgPosition * 100) / 100, data: null },
+      { name: 'gsc.keyword_count',     value: current.length,               data: null },
+    );
+
+    // Rich data: top keywords (current period)
+    metrics.push({ name: 'gsc.keywords', value: current.length, data: current.slice(0, 100) });
+
+    // Position movements vs previous period (>3 position swing)
+    const prevByQuery = new Map(previous.map(k => [k.query, k]));
+    const movers = current
+      .map(k => {
+        const prev = prevByQuery.get(k.query);
+        if (!prev) return null;
+        const delta = (prev.position || 0) - (k.position || 0); // positive = improved
+        return { ...k, position_change: Math.round(delta * 100) / 100 };
+      })
+      .filter(Boolean);
+
+    const keywordsUp = movers.filter(k => k.position_change > 3).sort((a, b) => b.position_change - a.position_change);
+    const keywordsDown = movers.filter(k => k.position_change < -3).sort((a, b) => a.position_change - b.position_change);
+
+    metrics.push(
+      { name: 'gsc.keywords_up',   value: keywordsUp.length,   data: keywordsUp.slice(0, 50) },
+      { name: 'gsc.keywords_down', value: keywordsDown.length, data: keywordsDown.slice(0, 50) },
+    );
+
+    // Opportunities: high impressions (>500) but low CTR (<2%)
+    const opportunities = current
+      .filter(k => (k.impressions || 0) > 500 && (k.ctr || 0) < 0.02)
+      .sort((a, b) => (b.impressions || 0) - (a.impressions || 0));
+
+    metrics.push({ name: 'gsc.opportunities', value: opportunities.length, data: opportunities.slice(0, 50) });
+
+    return metrics;
+  },
 };
 
 async function fetchSearchAnalytics(creds, params) {

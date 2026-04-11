@@ -20,27 +20,53 @@ import {
   ShoppingBag,
   MapPin,
   Database,
+  Activity,
+  Mail,
+  Send,
+  Globe,
+  FileText,
+  TrendingUp,
+  CreditCard,
+  GitBranch,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors } from '../lib/api.js'
 
 const CONNECTOR_ICONS = {
-  gsc:       Search,
-  ga4:       BarChart2,
-  pagespeed: Zap,
-  shopify:   ShoppingBag,
-  gbp:       MapPin,
-  default:   Database,
+  gsc:           Search,
+  ga4:           BarChart2,
+  pagespeed:     Zap,
+  shopify:       ShoppingBag,
+  gbp:           MapPin,
+  stripe:        CreditCard,
+  github:        GitBranch,
+  uptimerobot:   Activity,
+  todoist:       CheckSquare,
+  brevo:         Mail,
+  stannp:        Send,
+  wordpress:     Globe,
+  kirby:         FileText,
+  'google-ads':  TrendingUp,
+  default:       Database,
 }
 
 const CONNECTOR_LABELS = {
-  gsc:       'Search',
-  ga4:       'Analytics',
-  pagespeed: 'PageSpeed',
-  shopify:   'Shopify',
-  gbp:       'Business Profile',
-  default:   'Data',
+  gsc:           'Search',
+  ga4:           'Analytics',
+  pagespeed:     'PageSpeed',
+  shopify:       'Shopify',
+  gbp:           'Business Profile',
+  stripe:        'Stripe',
+  github:        'GitHub',
+  uptimerobot:   'Uptime',
+  todoist:       'Todoist',
+  brevo:         'Brevo',
+  stannp:        'Stannp',
+  wordpress:     'WordPress',
+  kirby:         'Kirby',
+  'google-ads':  'Google Ads',
+  default:       'Data',
 }
 
 const NAV_ITEMS = [

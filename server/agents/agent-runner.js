@@ -331,17 +331,23 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
   if (!agentRow) throw new Error(`Agent '${agentId}' not found in database.`);
   if (agentRow.status !== 'active') throw new Error(`Agent '${agentId}' is not active (status: ${agentRow.status}).`);
 
-  // 2. Load profile (from live directory, falling back to profile_path for legacy)
+  // 2. Load profile (live dir → canonical profiles/ → legacy DB profile_path)
   let profile;
   try {
     profile = loadProfile(agentId);
   } catch {
-    // Legacy fallback: load from profile_path stored in DB
-    const profilePath = resolve(PROJECT_ROOT, agentRow.profile_path);
-    if (!existsSync(profilePath)) {
-      throw new Error(`Agent profile not found. Install the agent first.`);
+    const candidates = [
+      resolve(PROJECT_ROOT, 'server/agents/profiles', `${agentId}.yaml`),
+      resolve(PROJECT_ROOT, agentRow.profile_path ?? ''),
+    ].filter(Boolean);
+    let found = null;
+    for (const path of candidates) {
+      if (existsSync(path)) { found = path; break; }
     }
-    profile = yaml.load(readFileSync(profilePath, 'utf8'));
+    if (!found) {
+      throw new Error(`Agent profile not found for '${agentId}'. Install the agent first.`);
+    }
+    profile = yaml.load(readFileSync(found, 'utf8'));
   }
 
   // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model)
@@ -526,14 +532,18 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
       runId,
     );
 
-    // 13. Update agent stats
-    db.prepare(`
-      UPDATE agents SET
-        last_run = CURRENT_TIMESTAMP,
-        run_count = run_count + 1,
-        total_cost_usd = total_cost_usd + ?
-      WHERE id = ?
-    `).run(costUsd, agentId);
+    // 13. Update agent stats (non-fatal — never let stats failure kill a successful run)
+    try {
+      db.prepare(`
+        UPDATE agents SET
+          last_run = CURRENT_TIMESTAMP,
+          run_count = run_count + 1,
+          total_cost_usd = total_cost_usd + ?
+        WHERE id = ?
+      `).run(costUsd, agentId);
+    } catch (statsErr) {
+      console.warn('[agent-runner] Failed to update agent stats (non-fatal):', statsErr.message);
+    }
 
     // 14. Update memory with learnings
     const learnings = Array.isArray(parsed.learnings) ? parsed.learnings : [];
@@ -571,6 +581,19 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(err.message, runId);
+
+    // Update agent stats even on failure so last_run + run_count reflect reality
+    try {
+      db.prepare(`
+        UPDATE agents SET
+          last_run = CURRENT_TIMESTAMP,
+          run_count = run_count + 1
+        WHERE id = ?
+      `).run(agentId);
+    } catch (statsErr) {
+      console.warn('[agent-runner] Failed to update agent stats on failure (non-fatal):', statsErr.message);
+    }
+
     appendRunLog(agentId, {
       run_id: runId,
       timestamp: startedAt,

@@ -13,9 +13,10 @@ personality: |
   worth the effort?). You have a nose for high-leverage, low-competition opportunities
   that others would scroll past.
 
-model:
-  primary: claude-sonnet-4-20250514
-  fallback: claude-haiku-4-5-20251001
+llm:
+  provider: claude-cli
+  model: claude-sonnet-4-20250514
+  temperature: 0.5
   max_tokens: 3000
   cost_cap_daily_usd: 1.00
 

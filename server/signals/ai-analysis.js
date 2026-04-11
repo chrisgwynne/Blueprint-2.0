@@ -3,6 +3,39 @@ import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
 import { runLLM, getProviderCredentials, listProviders } from '../lib/llm-providers.js';
 
+/**
+ * Robust JSON extractor for LLM responses.
+ * Tries multiple strategies in order:
+ *   1. Direct parse (clean JSON)
+ *   2. Fenced ```json ... ``` blocks
+ *   3. First `{` to last `}` slice (handles prose wrapping)
+ * Returns null on total failure (logs raw content for debugging).
+ */
+function extractJSON(rawContent) {
+  if (!rawContent) return null;
+  const text = String(rawContent).trim();
+
+  // Strategy 1: direct parse
+  try { return JSON.parse(text); } catch {}
+
+  // Strategy 2: fenced code block
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced) {
+    try { return JSON.parse(fenced[1].trim()); } catch {}
+  }
+
+  // Strategy 3: first { to last }
+  const firstBrace = text.indexOf('{');
+  const lastBrace = text.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    try { return JSON.parse(text.slice(firstBrace, lastBrace + 1)); } catch {}
+  }
+
+  console.error('[ai-analysis] Failed to parse response. Raw content (first 500 chars):');
+  console.error(text.slice(0, 500));
+  return null;
+}
+
 // Resolve which provider + model to use for AI analysis.
 // Priority: settings table 'ai_analysis_provider' → first configured provider → anthropic
 function resolveAnalysisProvider() {
@@ -62,6 +95,110 @@ Respond ONLY in valid JSON:
     }
   ]
 }`;
+
+function v(latestByName, key, fallback = 'N/A') {
+  const m = latestByName[key];
+  if (!m) return fallback;
+  return m.value !== null && m.value !== undefined ? m.value : fallback;
+}
+
+function vData(latestByName, key) {
+  return latestByName[key]?.data ?? null;
+}
+
+function buildCustomConnectorSummary(type, latestByName) {
+  if (type === 'uptimerobot') {
+    const downData = vData(latestByName, 'uptimerobot.down_monitors_data') ?? [];
+    const downNames = Array.isArray(downData) ? downData.map(d => d.friendly_name).join(', ') : '';
+    return `### UPTIME ROBOT
+Monitors total: ${v(latestByName, 'uptimerobot.monitors_total')}
+Up: ${v(latestByName, 'uptimerobot.monitors_up')}, Down: ${v(latestByName, 'uptimerobot.monitors_down')}, Seems-down: ${v(latestByName, 'uptimerobot.monitors_seems_down')}
+Overall uptime (30d avg): ${v(latestByName, 'uptimerobot.overall_uptime')}%
+Down monitors: ${downNames || 'none'}`;
+  }
+
+  if (type === 'todoist') {
+    const overdueData = vData(latestByName, 'todoist.overdue_tasks') ?? [];
+    const p1Overdue = Array.isArray(overdueData) ? overdueData.filter(t => t.priority === 4).length : 0;
+    return `### TODOIST
+Active tasks: ${v(latestByName, 'todoist.tasks_active')}
+Overdue: ${v(latestByName, 'todoist.tasks_overdue')} (${p1Overdue} priority-1)
+Due today: ${v(latestByName, 'todoist.tasks_due_today')}
+Completed last 7d: ${v(latestByName, 'todoist.tasks_completed_7d')}
+Projects: ${v(latestByName, 'todoist.projects_count')}`;
+  }
+
+  if (type === 'brevo') {
+    return `### BREVO EMAIL
+Total contacts: ${v(latestByName, 'brevo.total_contacts')}
+Campaigns sent (30d): ${v(latestByName, 'brevo.campaigns_sent_30d')}
+Avg open rate: ${v(latestByName, 'brevo.avg_open_rate')}%
+Avg click rate: ${v(latestByName, 'brevo.avg_click_rate')}%
+Avg unsubscribe rate: ${v(latestByName, 'brevo.avg_unsubscribe_rate')}%
+Avg bounce rate: ${v(latestByName, 'brevo.avg_bounce_rate')}%`;
+  }
+
+  if (type === 'stannp') {
+    return `### STANNP DIRECT MAIL
+Account balance: £${v(latestByName, 'stannp.account_balance')}
+Campaigns total: ${v(latestByName, 'stannp.campaigns_total')} (delivered: ${v(latestByName, 'stannp.campaigns_delivered')}, pending: ${v(latestByName, 'stannp.campaigns_pending')})
+Total recipients (30d): ${v(latestByName, 'stannp.total_sent_30d')}
+Avg delivery rate: ${(parseFloat(v(latestByName, 'stannp.avg_delivery_rate', 0)) * 100).toFixed(1)}%
+Total spend (30d): £${v(latestByName, 'stannp.total_spend_30d')}`;
+  }
+
+  if (type === 'wordpress') {
+    return `### WORDPRESS
+Published posts (total): ${v(latestByName, 'wordpress.posts_published_total')}
+Published last 30d: ${v(latestByName, 'wordpress.posts_published_30d')}
+Drafts: ${v(latestByName, 'wordpress.posts_draft')}
+Comments approved: ${v(latestByName, 'wordpress.comments_approved')}, spam: ${v(latestByName, 'wordpress.comments_spam')}
+Plugins: ${v(latestByName, 'wordpress.plugins_total')} (${v(latestByName, 'wordpress.plugins_update_available')} need update)
+Media items: ${v(latestByName, 'wordpress.media_count')}`;
+  }
+
+  if (type === 'kirby') {
+    return `### KIRBY CMS
+Total pages: ${v(latestByName, 'kirby.total_pages')}
+Published: ${v(latestByName, 'kirby.published_pages')}, Drafts: ${v(latestByName, 'kirby.draft_pages')}
+Pages missing meta: ${v(latestByName, 'kirby.pages_missing_meta')}
+Pages not updated 90d+: ${v(latestByName, 'kirby.pages_not_updated_90d')}`;
+  }
+
+  if (type === 'google-ads') {
+    return `### GOOGLE ADS (last 30 days)
+Total spend: £${v(latestByName, 'google-ads.total_spend_30d')}
+Total clicks: ${v(latestByName, 'google-ads.total_clicks_30d')}
+Total impressions: ${v(latestByName, 'google-ads.total_impressions_30d')}
+Total conversions: ${v(latestByName, 'google-ads.total_conversions_30d')}
+Conversion value: £${v(latestByName, 'google-ads.total_conversion_value_30d')}
+ROAS: ${v(latestByName, 'google-ads.roas')}x | CPA: £${v(latestByName, 'google-ads.cpa')}
+Avg CPC: £${v(latestByName, 'google-ads.avg_cpc')} | Avg CTR: ${v(latestByName, 'google-ads.avg_ctr')}
+Impression share: ${(parseFloat(v(latestByName, 'google-ads.impression_share', 0)) * 100).toFixed(1)}%`;
+  }
+
+  if (type === 'gsc') {
+    return `### GOOGLE SEARCH CONSOLE
+Total clicks: ${v(latestByName, 'gsc.total_clicks')}
+Total impressions: ${v(latestByName, 'gsc.total_impressions')}
+Avg CTR: ${(parseFloat(v(latestByName, 'gsc.avg_ctr', 0)) * 100).toFixed(2)}%
+Avg position: ${v(latestByName, 'gsc.avg_position')}
+Tracked keywords: ${v(latestByName, 'gsc.keyword_count')}
+Keywords improved >3 positions: ${v(latestByName, 'gsc.keywords_up')}
+Keywords dropped >3 positions: ${v(latestByName, 'gsc.keywords_down')}
+Opportunities (>500 imp, <2% CTR): ${v(latestByName, 'gsc.opportunities')}`;
+  }
+
+  if (type === 'ga4') {
+    return `### GOOGLE ANALYTICS 4
+Sessions: ${v(latestByName, 'ga4.sessions')} (prev period: ${v(latestByName, 'ga4.sessions_prev')})
+Users: ${v(latestByName, 'ga4.users')} (prev: ${v(latestByName, 'ga4.users_prev')})
+Bounce rate: ${(parseFloat(v(latestByName, 'ga4.bounce_rate', 0)) * 100).toFixed(1)}%
+Conversions: ${v(latestByName, 'ga4.conversions')} (prev: ${v(latestByName, 'ga4.conversions_prev')})`;
+  }
+
+  return null;
+}
 
 function buildShopifySummary(latestByName) {
   const revenue   = latestByName['revenue']?.value;
@@ -210,7 +347,9 @@ ${Object.keys(metricsByConnector).length > 0
         if (!latestByName[m.metric]) latestByName[m.metric] = m;
       }
       if (type === 'shopify') return buildShopifySummary(latestByName);
-      // Generic fallback for other connectors
+      const custom = buildCustomConnectorSummary(type, latestByName);
+      if (custom) return custom;
+      // Generic fallback for any connector without a custom summary
       return `### ${type.toUpperCase()}\n${Object.values(latestByName)
         .filter(m => m.value !== null || !m.data)
         .map(m => `- ${m.metric}: ${m.value ?? 'N/A'}`)
@@ -234,7 +373,7 @@ Identify insights and proposed tasks based solely on this data.`;
     const response = await runLLM(analysisProvider, analysisModel, {
       system: ANALYSIS_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userPrompt }],
-      max_tokens: 4096,
+      max_tokens: 8192,
       temperature: 0.3,
     });
 
@@ -242,17 +381,13 @@ Identify insights and proposed tasks based solely on this data.`;
     const rawContent = response.content ?? '';
     const usage = response.usage ?? { input_tokens: 0, output_tokens: 0 };
 
-    // 3. Parse JSON response (handle markdown code blocks like agent-runner.js)
-    let parsed;
-    try {
-      const jsonMatch = rawContent.match(/```(?:json)?\s*([\s\S]*?)```/) ||
-                        rawContent.match(/(\{[\s\S]*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : rawContent;
-      parsed = JSON.parse(jsonStr.trim());
-    } catch (err) {
-      console.error('[ai-analysis] Failed to parse response as JSON:', rawContent.substring(0, 500));
-      parsed = { summary: 'Analysis failed to parse.', health_score: null, insights: [] };
-    }
+    // 3. Parse JSON response — multi-strategy parser, robust against truncation,
+    //    fenced code blocks, and prose-wrapped JSON.
+    const parsed = extractJSON(rawContent) ?? {
+      summary: 'Analysis failed to parse.',
+      health_score: null,
+      insights: [],
+    };
 
     const insights = Array.isArray(parsed.insights) ? parsed.insights : [];
     const healthScore = parsed.health_score ?? null;

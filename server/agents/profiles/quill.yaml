@@ -14,9 +14,10 @@ personality: |
   you produce is specific enough that a writer can produce a first draft without
   asking follow-up questions.
 
-model:
-  primary: claude-sonnet-4-20250514
-  fallback: claude-haiku-4-5-20251001
+llm:
+  provider: claude-cli
+  model: claude-sonnet-4-20250514
+  temperature: 0.5
   max_tokens: 4096
   cost_cap_daily_usd: 1.50
 

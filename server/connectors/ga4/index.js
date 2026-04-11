@@ -156,6 +156,40 @@ const connector = {
   async refreshToken(credentials) {
     return ensureFreshToken({ ...credentials, expiresAt: 0 });
   },
+
+  /**
+   * Extract individual metric rows from a report fetch result.
+   * Expects data in the shape returned by fetchReport:
+   *   { current: {sessions, activeUsers, bounceRate, conversions},
+   *     previous: {...}, topPages: [...], sources: [...], period }
+   */
+  extractMetrics(data, runAt) {
+    const metrics = [];
+    if (!data || !data.current) return metrics;
+
+    const c = data.current;
+    const p = data.previous ?? {};
+
+    metrics.push(
+      { name: 'ga4.sessions',       value: c.sessions ?? 0,       data: null },
+      { name: 'ga4.sessions_prev',  value: p.sessions ?? 0,       data: null },
+      { name: 'ga4.users',          value: c.activeUsers ?? 0,    data: null },
+      { name: 'ga4.users_prev',     value: p.activeUsers ?? 0,    data: null },
+      { name: 'ga4.bounce_rate',    value: c.bounceRate ?? 0,     data: null },
+      { name: 'ga4.conversions',    value: c.conversions ?? 0,    data: null },
+      { name: 'ga4.conversions_prev', value: p.conversions ?? 0,  data: null },
+    );
+
+    // Rich data
+    if (Array.isArray(data.topPages) && data.topPages.length > 0) {
+      metrics.push({ name: 'ga4.top_pages', value: data.topPages.length, data: data.topPages });
+    }
+    if (Array.isArray(data.sources) && data.sources.length > 0) {
+      metrics.push({ name: 'ga4.traffic_sources', value: data.sources.length, data: data.sources });
+    }
+
+    return metrics;
+  },
 };
 
 async function fetchReport(creds, propertyId, params) {
