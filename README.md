@@ -117,22 +117,35 @@ Approved tasks don't just create reports — they execute real changes:
 
 Every write-back creates rollback data. Every action can be undone.
 
+## Using Blueprint from an AI agent
+
+If you're connecting an AI agent (Claude Code, OpenClaw, Hermes, or any LLM agent), install the skill file:
+
+```bash
+# Copy into your agent's skill directory
+cp SKILL.md /path/to/your/agent/skills/blueprint.md
+```
+
+Or reference the raw URL in your agent config:
+```
+https://raw.githubusercontent.com/chrisgwynne/blueprint/main/SKILL.md
+```
+
+The skill file ([SKILL.md](SKILL.md)) tells the agent what Blueprint is, what tools are available, when to use each one, and how to operate. No manual integration needed.
+
+For the technical API reference, see [server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md).
+
 ## External Agents (BAP)
 
 Any agent that speaks HTTP can connect via the Blueprint Agent Protocol:
 
 ```bash
-# Register
 curl -X POST http://localhost:4000/api/bap/v1/register \
   -H "Content-Type: application/json" \
-  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose"],"business_access":["*"]}'
-
-# Get business health
-curl http://localhost:4000/api/bap/v1/businesses/BIZ_ID/health \
-  -H "BAP-Key: bap_your_key_here"
+  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose","kb:read"],"business_access":["*"]}'
 ```
 
-See [AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for Node.js and Python SDKs.
+See [SKILL.md](SKILL.md) for the complete tool reference with 9 tools and 5 operational patterns.
 
 ## Architecture
 
