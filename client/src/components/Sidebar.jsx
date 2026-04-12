@@ -49,6 +49,7 @@ const CONNECTOR_ICONS = {
   wordpress:     Globe,
   kirby:         FileText,
   'google-ads':  TrendingUp,
+  'meta-ads':    Target,
   default:       Database,
 }
 
@@ -67,6 +68,7 @@ const CONNECTOR_LABELS = {
   wordpress:     'WordPress',
   kirby:         'Kirby',
   'google-ads':  'Google Ads',
+  'meta-ads':    'Meta Ads',
   default:       'Data',
 }
 

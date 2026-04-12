@@ -7,7 +7,7 @@ import {
   TrendingUp, TrendingDown, Minus,
   AlertTriangle, CheckCircle, Globe, Phone, Navigation,
   Star, Eye, MessageSquare, FileText, Image,
-  CreditCard, GitBranch, Plus,
+  CreditCard, GitBranch, Plus, Target,
   Activity, CheckSquare, Mail, Send,
 } from 'lucide-react'
 import {
@@ -35,6 +35,7 @@ const CONNECTOR_META = {
   wordpress:     { icon: Globe,       label: 'WordPress',          color: 'var(--bp-blue)' },
   kirby:         { icon: FileText,    label: 'Kirby',              color: 'var(--bp-amber)' },
   'google-ads':  { icon: TrendingUp,  label: 'Google Ads',         color: 'var(--bp-amber)' },
+  'meta-ads':    { icon: Target,      label: 'Meta Ads',           color: '#1877F2' },
   default:       { icon: Database,    label: 'Data Source',        color: 'var(--bp-text-3)' },
 }
 
@@ -53,6 +54,7 @@ const CONNECTOR_TABS = {
   wordpress:     ['Overview', 'Posts', 'Pages', 'Plugins', 'Comments', 'Media', 'Raw Data'],
   kirby:         ['Overview', 'Pages', 'Drafts', 'Content Health', 'Raw Data'],
   'google-ads':  ['Overview', 'Campaigns', 'Keywords', 'Performance', 'Budget', 'Raw Data'],
+  'meta-ads':    ['Overview', 'Campaigns', 'Audiences', 'Creative', 'Raw Data'],
   default:       ['Overview', 'Raw Data'],
 }
 
@@ -1499,6 +1501,130 @@ function EmptyState({ message = 'No data available yet. Run a sync to pull data.
   )
 }
 
+// ─── Meta Ads tabs ────────────────────────────────────────────────────────────
+
+function metaNum(metrics, name) {
+  const row = metrics?.find(m => m.metric_name === name)
+  return row?.metric_value != null ? Number(row.metric_value) : 0
+}
+function metaData(metrics, name) {
+  const row = metrics?.find(m => m.metric_name === name)
+  if (!row?.metric_data) return null
+  try { return typeof row.metric_data === 'string' ? JSON.parse(row.metric_data) : row.metric_data }
+  catch { return null }
+}
+function fmtCurrency(n, ccy = '£') {
+  const num = Number(n) || 0
+  return `${ccy}${num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+function fmtInt(n) {
+  return Math.round(Number(n) || 0).toLocaleString('en-GB')
+}
+
+function MetaAdsOverview({ metrics }) {
+  const spend      = metaNum(metrics, 'meta-ads.spend_30d')
+  const revenue    = metaNum(metrics, 'meta-ads.revenue_30d')
+  const roas       = metaNum(metrics, 'meta-ads.roas')
+  const purchases  = metaNum(metrics, 'meta-ads.purchases_30d')
+  const reach      = metaNum(metrics, 'meta-ads.reach_30d')
+  const frequency  = metaNum(metrics, 'meta-ads.frequency')
+  const prevSpend  = metaNum(metrics, 'meta-ads.prev_spend_30d')
+  const prevRev    = metaNum(metrics, 'meta-ads.prev_revenue_30d')
+
+  const roasColor = roas >= 3 ? 'var(--bp-green)' : roas >= 1 ? 'var(--bp-amber)' : 'var(--bp-red)'
+
+  const cards = [
+    { label: 'Spend (30d)',  value: fmtCurrency(spend) },
+    { label: 'Revenue',      value: fmtCurrency(revenue) },
+    { label: 'ROAS',         value: `${roas.toFixed(2)}x`, color: roasColor },
+    { label: 'Purchases',    value: fmtInt(purchases) },
+    { label: 'Reach',        value: fmtInt(reach) },
+    { label: 'Frequency',    value: frequency.toFixed(2) },
+  ]
+
+  const comparison = [
+    { period: 'Previous', spend: prevSpend, revenue: prevRev },
+    { period: 'Current',  spend,            revenue },
+  ]
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10 }}>
+        {cards.map((c) => (
+          <div key={c.label} className="bp-card" style={{ padding: 14 }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 20, fontWeight: 700, color: c.color ?? 'var(--bp-text)' }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 16 }}>
+        <div className="bp-card">
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 12 }}>ROAS Gauge</div>
+          <div style={{ display: 'flex', justifyContent: 'center', padding: '12px 0' }}>
+            <Gauge value={roas} max={5} goodThreshold={3} needsWorkThreshold={1} label="ROAS" unit="x" />
+          </div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textAlign: 'center', marginTop: 8 }}>
+            {roas >= 3 ? 'Strong return' : roas >= 1 ? 'Break-even zone' : 'Below break-even'}
+          </div>
+        </div>
+        <div className="bp-card">
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 12 }}>Spend vs Revenue</div>
+          <div style={{ width: '100%', height: 220 }}>
+            <ResponsiveContainer>
+              <BarChart data={comparison}>
+                <CartesianGrid stroke="rgba(77,166,255,0.06)" strokeDasharray="3 3" />
+                <XAxis dataKey="period" tick={{ fill: '#4d7a96', fontSize: 10 }} />
+                <YAxis tick={{ fill: '#4d7a96', fontSize: 10 }} />
+                <Tooltip contentStyle={{ background: 'var(--bp-surface-2)', border: '1px solid var(--bp-border)', fontSize: 11 }} />
+                <Bar dataKey="spend"   fill="#ff5252" name="Spend"   />
+                <Bar dataKey="revenue" fill="#00c9a7" name="Revenue" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function MetaAdsCampaigns({ metrics }) {
+  const campaigns = metaData(metrics, 'meta-ads.campaigns_data') ?? []
+  if (campaigns.length === 0) return <EmptyState message="No campaign data available yet. Sync the connector to pull the last 30 days of performance." />
+  const sorted = [...campaigns].sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0))
+
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--bp-border)', background: 'var(--bp-surface-2)' }}>
+            {['Campaign', 'Objective', 'Spend', 'Revenue', 'ROAS', 'CTR', 'CPM', 'Reach'].map((h, i) => (
+              <th key={h} style={{ padding: '10px 12px', textAlign: i < 2 ? 'left' : 'right', fontSize: 9, letterSpacing: '0.10em', textTransform: 'uppercase', color: 'var(--bp-text-3)', fontWeight: 500 }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((c, i) => {
+            const roasCol = c.roas >= 3 ? 'var(--bp-green)' : c.roas >= 1 ? 'var(--bp-amber)' : 'var(--bp-red)'
+            return (
+              <tr key={c.id ?? i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+                <td style={{ padding: '10px 12px', color: 'var(--bp-text)', fontWeight: 500 }}>{c.name}</td>
+                <td style={{ padding: '10px 12px', color: 'var(--bp-text-2)' }}>{c.objective ?? '—'}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--bp-text-2)' }}>{fmtCurrency(c.spend)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--bp-text-2)' }}>{fmtCurrency(c.revenue)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: roasCol, fontWeight: 600 }}>{(c.roas ?? 0).toFixed(2)}x</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--bp-text-2)' }}>{((c.ctr ?? 0) * 100).toFixed(2)}%</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--bp-text-2)' }}>{fmtCurrency(c.cpm)}</td>
+                <td style={{ padding: '10px 12px', textAlign: 'right', color: 'var(--bp-text-2)' }}>{fmtInt(c.reach)}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ─── Tab content router ───────────────────────────────────────────────────────
 
 function renderTab(connector, tab, data, range) {
@@ -1544,6 +1670,12 @@ function renderTab(connector, tab, data, range) {
     if (tab === 'Products') return <ShopifyProducts metrics={metrics} />
     if (tab === 'Customers') return <ShopifyCustomers metrics={metrics} range={range} />
     if (tab === 'Inventory') return <ShopifyInventory metrics={metrics} />
+  }
+  if (type === 'meta-ads') {
+    if (tab === 'Overview')  return <MetaAdsOverview  metrics={metrics} />
+    if (tab === 'Campaigns') return <MetaAdsCampaigns metrics={metrics} />
+    if (tab === 'Audiences') return <EmptyState message="Ad set and audience breakdown coming soon." />
+    if (tab === 'Creative')  return <EmptyState message="Creative performance breakdown coming soon." />
   }
 
   return <EmptyState message="This view is coming soon." />

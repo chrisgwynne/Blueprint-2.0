@@ -1479,6 +1479,184 @@ export const rules = [
     },
   },
 
+  // ─── Meta Ads rules ────────────────────────────────────────────────────────
+  // Rules receive raw fetch payload { account, campaigns, previous }.
+  // `flattenMeta` extracts the flat fields needed for comparisons.
+
+  {
+    id: 'meta_roas_drop',
+    connectorType: 'meta-ads',
+    type: 'anomaly',
+    severity: 'alert',
+    name: 'Meta Ads ROAS Drop',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const prev = flattenMetaPrev(current);
+      if (!prev || !prev.roas || prev.roas === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const drop = (prev.roas - curr.roas) / prev.roas;
+      const triggered = drop > 0.2;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(drop, 1) : 0,
+        data: {
+          from: +prev.roas.toFixed(2),
+          to: +curr.roas.toFixed(2),
+          drop_pct: +(drop * 100).toFixed(1),
+        },
+        title: triggered
+          ? `Meta Ads ROAS dropped ${(drop * 100).toFixed(0)}%`
+          : '',
+        description: triggered
+          ? `ROAS fell from ${prev.roas.toFixed(2)}x to ${curr.roas.toFixed(2)}x vs the previous 30-day period. Review audience targeting, creative fatigue, or bid strategy.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'meta_cpm_spike',
+    connectorType: 'meta-ads',
+    type: 'anomaly',
+    severity: 'warning',
+    name: 'Meta CPM Spike',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const prev = flattenMetaPrev(current);
+      if (!prev || !prev.cpm || prev.cpm === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const increase = (curr.cpm - prev.cpm) / prev.cpm;
+      const triggered = increase > 0.3;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(increase, 1) : 0,
+        data: {
+          from: +prev.cpm.toFixed(2),
+          to: +curr.cpm.toFixed(2),
+          increase_pct: +(increase * 100).toFixed(1),
+        },
+        title: triggered
+          ? `Meta CPM up ${(increase * 100).toFixed(0)}%`
+          : '',
+        description: triggered
+          ? `CPM rose from £${prev.cpm.toFixed(2)} to £${curr.cpm.toFixed(2)}. Audience saturation or higher auction competition likely.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'meta_spend_spike',
+    connectorType: 'meta-ads',
+    type: 'anomaly',
+    severity: 'warning',
+    name: 'Meta Spend Spike',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const prev = flattenMetaPrev(current);
+      if (!prev || !prev.spend_30d || prev.spend_30d === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const increase = (curr.spend_30d - prev.spend_30d) / prev.spend_30d;
+      const triggered = increase > 0.25;
+      return {
+        triggered,
+        confidence: triggered ? 0.9 : 0,
+        data: {
+          from: +prev.spend_30d.toFixed(2),
+          to: +curr.spend_30d.toFixed(2),
+          increase_pct: +(increase * 100).toFixed(1),
+        },
+        title: triggered ? `Meta spend up ${(increase * 100).toFixed(0)}%` : '',
+        description: triggered
+          ? `Spend rose from £${prev.spend_30d.toFixed(2)} to £${curr.spend_30d.toFixed(2)} vs the previous 30-day window.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'meta_frequency_high',
+    connectorType: 'meta-ads',
+    type: 'risk',
+    severity: 'warning',
+    name: 'Ad Frequency Too High',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const triggered = curr.frequency > 3.5;
+      return {
+        triggered,
+        confidence: triggered ? 0.85 : 0,
+        data: {
+          frequency: +curr.frequency.toFixed(2),
+          note: 'Audiences seeing ads too often — expect rising CPM and falling CTR',
+        },
+        title: triggered
+          ? `Ad frequency at ${curr.frequency.toFixed(2)}`
+          : '',
+        description: triggered
+          ? `Each person in the audience has now seen the ad ${curr.frequency.toFixed(2)} times on average. Rotate creative or expand the audience.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'meta_roas_below_threshold',
+    connectorType: 'meta-ads',
+    type: 'risk',
+    severity: 'alert',
+    name: 'Meta ROAS Below 1x',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const triggered = curr.spend_30d > 50 && curr.roas > 0 && curr.roas < 1;
+      return {
+        triggered,
+        confidence: triggered ? 1.0 : 0,
+        data: {
+          roas: +curr.roas.toFixed(2),
+          spend: +curr.spend_30d.toFixed(2),
+          note: 'Spending more than earning — immediate review needed',
+        },
+        title: triggered ? `Meta ROAS below 1x (${curr.roas.toFixed(2)}x)` : '',
+        description: triggered
+          ? `ROAS is ${curr.roas.toFixed(2)}x on £${curr.spend_30d.toFixed(2)} spend. Campaigns are losing money — pause or restructure.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'meta_ctr_drop',
+    connectorType: 'meta-ads',
+    type: 'anomaly',
+    severity: 'info',
+    name: 'Meta CTR Drop',
+    evaluate(current) {
+      const curr = flattenMeta(current);
+      const prev = flattenMetaPrev(current);
+      if (!prev || !prev.ctr || prev.ctr === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const drop = (prev.ctr - curr.ctr) / prev.ctr;
+      const triggered = drop > 0.25;
+      return {
+        triggered,
+        confidence: triggered ? 0.8 : 0,
+        data: {
+          from: +(prev.ctr * 100).toFixed(2) + '%',
+          to: +(curr.ctr * 100).toFixed(2) + '%',
+        },
+        title: triggered ? `Meta CTR dropped ${(drop * 100).toFixed(0)}%` : '',
+        description: triggered
+          ? `CTR fell from ${(prev.ctr * 100).toFixed(2)}% to ${(curr.ctr * 100).toFixed(2)}%. Creative fatigue is the most common cause.`
+          : '',
+      };
+    },
+  },
+
   {
     id: 'google_ads_low_quality_scores',
     connectorType: 'google-ads',
@@ -1499,6 +1677,70 @@ export const rules = [
     },
   },
 ];
+
+// ─── Meta Ads helpers ────────────────────────────────────────────────────────
+
+function _num(v) {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function _getAction(arr, type) {
+  if (!Array.isArray(arr)) return 0;
+  return _num(arr.find(a => a.action_type === type)?.value);
+}
+
+/**
+ * Flatten Meta Ads fetch payload to a comparable shape.
+ * Handles both raw fetch result (`{account, campaigns, previous}`) and
+ * already-flat shapes (defensive against future callers).
+ */
+export function flattenMeta(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { roas: 0, cpm: 0, cpc: 0, ctr: 0, spend_30d: 0, frequency: 0 };
+  }
+
+  // Already flat — preserve existing numeric fields
+  if ('roas' in payload || 'spend_30d' in payload) {
+    return {
+      roas: _num(payload.roas),
+      cpm: _num(payload.cpm),
+      cpc: _num(payload.cpc),
+      ctr: _num(payload.ctr),
+      spend_30d: _num(payload.spend_30d ?? payload.spend),
+      frequency: _num(payload.frequency),
+    };
+  }
+
+  const current = payload.account?.data?.[0] ?? {};
+  const spend = _num(current.spend);
+  const revenue = _getAction(current.action_values, 'purchase');
+  return {
+    roas: spend > 0 ? revenue / spend : 0,
+    cpm: _num(current.cpm),
+    cpc: _num(current.cpc),
+    ctr: _num(current.ctr),
+    spend_30d: spend,
+    frequency: _num(current.frequency),
+  };
+}
+
+export function flattenMetaPrev(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const prev = payload.previous?.data?.[0];
+  if (!prev) return null;
+  const spend = _num(prev.spend);
+  const revenue = _getAction(prev.action_values, 'purchase');
+  return {
+    roas: spend > 0 ? revenue / spend : 0,
+    cpm: _num(prev.cpm),
+    cpc: _num(prev.cpc),
+    ctr: _num(prev.ctr),
+    spend_30d: spend,
+    frequency: _num(prev.frequency),
+  };
+}
 
 /**
  * Get rules applicable to a given connector type.
