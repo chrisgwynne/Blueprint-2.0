@@ -9,7 +9,7 @@ description: Running Blueprint with Docker Compose
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
 cp .env.example .env
-# Edit .env — set ENCRYPTION_KEY, SESSION_SECRET, ADMIN_PASSWORD, ANTHROPIC_API_KEY
+# Edit .env — configure your LLM provider (Ollama needs no API key)
 docker compose up -d
 ```
 

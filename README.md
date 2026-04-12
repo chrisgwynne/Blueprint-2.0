@@ -45,11 +45,10 @@ Everything is logged. Every action has a paper trail. You can roll back any chan
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
 cp .env.example .env
-# Edit .env — add ANTHROPIC_API_KEY at minimum
 docker compose up -d
 ```
 
-Open **http://localhost:4000** — the onboarding wizard guides you through the rest.
+Open **http://localhost:4000** — the onboarding wizard guides you through choosing your LLM provider and connecting your first data source. No API key required if you use [Ollama](https://ollama.ai) (free, local).
 
 **Local development:**
 
@@ -57,7 +56,7 @@ Open **http://localhost:4000** — the onboarding wizard guides you through the 
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
 bash scripts/setup.sh
-# Add ANTHROPIC_API_KEY to .env
+# Configure your LLM in .env (Ollama works with no API key)
 cd server && bun index.js
 ```
 
@@ -141,18 +140,19 @@ See [AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for Node.js and Python SDKs.
 |---|---|
 | Backend | Bun + Express + SQLite (better-sqlite3, WAL mode) |
 | Frontend | React 18 + Vite 5 + Tailwind CSS |
-| LLM | Claude Code CLI (default), Anthropic API, OpenAI, Gemini, Ollama, LM Studio |
+| LLM | Any provider — Ollama (free/local), Anthropic, OpenAI, Gemini, LM Studio |
 | KB | File-based markdown, isomorphic-git, Obsidian-compatible |
 | Deploy | Docker Compose, single container |
 
 ## Self-Hosting
 
-Blueprint is designed for self-hosted deployment:
+Blueprint runs anywhere Docker runs:
 
-- **Docker Compose** — `docker compose up -d`
-- **Coolify** — one-click deploy from this repo
-- **Bare metal** — `bash scripts/setup.sh`
-- **Raspberry Pi** — use Ollama-only mode (no API costs)
+```bash
+docker compose up -d
+```
+
+Tested on: Ubuntu, Debian, Raspberry Pi OS, macOS. Works on any VPS (Hetzner, DigitalOcean, Vultr, Linode). Works on bare metal with `bash scripts/setup.sh`. Run fully local with Ollama on a Raspberry Pi — zero API costs.
 
 ## Requirements
 
@@ -161,7 +161,7 @@ Blueprint is designed for self-hosted deployment:
 | Node.js | 20.0 | 22.0 LTS |
 | RAM | 512MB | 2GB |
 | Disk | 1GB | 10GB |
-| LLM | Ollama (free) | Claude Sonnet |
+| LLM | Ollama (free, local) | Any cloud provider |
 
 ## Environment Variables
 

@@ -18,7 +18,9 @@ services:
       - SESSION_SECRET=${SESSION_SECRET}
       - ADMIN_USERNAME=${ADMIN_USERNAME}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # LLM — set at least one provider in .env (Ollama needs no key)
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}

@@ -16,7 +16,7 @@ Thank you for your interest in contributing.
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
 cp .env.example .env
-# Add ANTHROPIC_API_KEY to .env (or configure Ollama)
+# Configure your LLM in .env — Ollama is easiest for dev (free, no API key)
 
 cd server && bun install && bun run db/init.js
 cd ../client && bun install
