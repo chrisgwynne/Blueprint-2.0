@@ -5,3 +5,8 @@
 # SQLite transient runtime files (regenerated on each DB connection)
 *.db-shm
 *.db-wal
+
+# Business KB directories — runtime data, mounted via docker volume.
+# Each business gets its own nested git repo at kb/{slug}/.
+# Anchored to repo root so it doesn't match server/kb/ source code.
+/kb/

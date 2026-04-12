@@ -592,6 +592,57 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     // 16. Brief conductor (non-conductor runs only)
     briefConductor(agentId, parsed, businessId);
 
+    // 17. Write significant findings to the KB (non-fatal — never blocks the run)
+    if (createdTasks.length > 0 || (parsed.reasoning && parsed.reasoning.length > 200)) {
+      try {
+        const { getKBForBusiness } = await import('../kb/kb-config.js');
+        const result = await getKBForBusiness(businessId);
+        if (result?.engine) {
+          const slug = `agent-${agentId}-${runId.slice(0, 8)}`;
+          const taskList = createdTasks.length > 0
+            ? createdTasks.map(t => `- **[${t.priority}]** ${t.title}`).join('\n')
+            : '_(no tasks proposed)_';
+          const body = `# ${profile.name ?? agentId} Run
+
+**Run ID:** \`${runId}\`
+**Trigger:** ${trigger}${triggerId ? ` (${triggerId})` : ''}
+**Started:** ${startedAt}
+**Cost:** $${(costUsd ?? 0).toFixed(4)}
+
+## Summary
+
+${parsed.summary ?? '_(no summary)_'}
+
+## Reasoning
+
+${(parsed.reasoning ?? '').slice(0, 4000)}
+
+## Tasks Proposed (${createdTasks.length})
+
+${taskList}
+
+## Signals Considered
+
+${signalsDetected} signal(s) reviewed.
+`;
+          await result.engine.writeFile(
+            `signals/${slug}.md`,
+            body,
+            {
+              title: `${profile.name ?? agentId} run ${runId.slice(0, 8)}`,
+              tags: ['agent-run', agentId, trigger],
+              created: startedAt.split('T')[0],
+              source_count: 1,
+              run_id: runId,
+            },
+            `agent-run: ${agentId}/${runId.slice(0, 8)}`
+          );
+        }
+      } catch (kbErr) {
+        console.warn('[agent-runner] KB write failed (non-fatal):', kbErr.message);
+      }
+    }
+
     console.log(`[agent-runner] '${agentId}' complete. Tasks: ${createdTasks.length}, Cost: $${costUsd.toFixed(6)}`);
 
     return { runId, tasksProposed: createdTasks.length, signalsDetected, costUsd };

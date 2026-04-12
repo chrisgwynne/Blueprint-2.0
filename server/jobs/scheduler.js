@@ -240,6 +240,45 @@ export function startScheduler() {
     }
   });
 
+  // Weekly KB lint — every Monday at 8am
+  cron.schedule('0 8 * * 1', async () => {
+    console.log('[scheduler] Running weekly KB lint pass...');
+    try {
+      const { getKBForBusiness } = await import('../kb/kb-config.js');
+      const { KBAgent } = await import('../kb/kb-agent.js');
+      const { createTask } = await import('../tasks/task-queue.js');
+
+      const businesses = db.prepare('SELECT id, slug FROM businesses').all();
+      for (const business of businesses) {
+        try {
+          const result = await getKBForBusiness(business.id);
+          if (!result) continue;
+          const agent = new KBAgent(result.engine);
+          const lintResult = await agent.runLint();
+
+          // If serious issues found, create a Blueprint task
+          const seriousIssues =
+            lintResult.issues.dead_links.length + lintResult.issues.orphans.length;
+          if (seriousIssues > 5) {
+            createTask({
+              business_id: business.id,
+              title: 'KB Maintenance Required',
+              description: `Weekly lint found ${lintResult.issues.dead_links.length} dead links, ${lintResult.issues.orphans.length} orphan pages, ${lintResult.issues.contradictions.length} open contradictions.`,
+              proposed_by: 'system:kb-lint',
+              action_type: 'investigation',
+              priority: 'p3',
+              trust_tier: 'green',
+            });
+          }
+        } catch (bizErr) {
+          console.warn(`[scheduler] KB lint failed for ${business.slug}:`, bizErr.message);
+        }
+      }
+    } catch (err) {
+      console.error('[scheduler] Weekly KB lint failed:', err);
+    }
+  });
+
   console.log('[scheduler] All jobs scheduled. Ready.');
 }
 

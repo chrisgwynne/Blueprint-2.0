@@ -270,18 +270,9 @@ async function start() {
       console.warn('[startup] Telegram polling not started:', err.message);
     }
 
-    // Build KB search index on startup
-    try {
-      const { listDocs } = await import('./kb/kb.js');
-      const { buildIndex } = await import('./kb/search.js');
-      const kbPath = process.env.KB_PATH || resolve(__dirname, '../kb');
-      if (existsSync(kbPath)) {
-        const docs = await listDocs(kbPath, null);
-        buildIndex(docs);
-      }
-    } catch (err) {
-      console.warn('[startup] KB index build failed (non-fatal):', err.message);
-    }
+    // KB engines are now business-scoped and lazy-initialized on first access
+    // (see /server/kb/kb-engine.js + /server/routes/kb.js). No global index
+    // to build at startup.
 
     // Start server
     app.listen(PORT, () => {

@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image } from 'lucide-react'
+import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb } from '../lib/api.js'
 
 const TABS = [
   { id: 'business',  label: 'Business Profile' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'llm',       label: 'LLM Providers' },
+  { id: 'kb',        label: 'Knowledge Base' },
   { id: 'agents',    label: 'Agent Defaults' },
   { id: 'data',      label: 'Data' },
   { id: 'system',    label: 'System' },
@@ -882,6 +883,199 @@ function AboutTab() {
 }
 
 // ============================================
+// Tab: Knowledge Base
+// ============================================
+function KBTab() {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const addNotification = useStore((s) => s.addNotification)
+  const businessId = currentBusiness?.id
+
+  const [settings, setSettings] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [mode, setMode] = useState('native')
+  const [vaultPath, setVaultPath] = useState('')
+
+  useEffect(() => {
+    if (!businessId) { setLoading(false); return }
+    getKbSettings(businessId)
+      .then((data) => {
+        setSettings(data)
+        setMode(data.config?.mode ?? 'native')
+        setVaultPath(data.config?.obsidian_vault_path ?? '')
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [businessId])
+
+  async function handleSave() {
+    if (!businessId) return
+    setSaving(true)
+    try {
+      const payload = { mode }
+      if (mode === 'obsidian') {
+        if (!vaultPath) {
+          addNotification({ type: 'error', message: 'Obsidian vault path is required.' })
+          setSaving(false)
+          return
+        }
+        payload.obsidian_vault_path = vaultPath
+      }
+      const result = await saveKbSettings(businessId, payload)
+      setSettings({ ...settings, config: result.config })
+      addNotification({ type: 'success', message: 'KB settings saved' })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function handleReinit() {
+    if (!businessId) return
+    if (!confirm('Re-initialize the KB? Existing files are preserved; this just ensures the structure is in place.')) return
+    try {
+      await initKb(businessId)
+      addNotification({ type: 'success', message: 'KB initialized' })
+      const data = await getKbSettings(businessId)
+      setSettings(data)
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  if (!businessId) {
+    return <div className="text-xs text-blueprint-muted">Select a business to configure its KB.</div>
+  }
+  if (loading) {
+    return <div className="text-xs text-blueprint-muted">Loading KB settings…</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section
+        title="Knowledge Base Mode"
+        description="Choose where this business's wiki lives. Both modes use the same Karpathy LLM Wiki engine."
+      >
+        <div className="space-y-3">
+          {/* Native */}
+          <label className={clsx(
+            'block bp-card p-3 cursor-pointer transition-colors',
+            mode === 'native' ? 'border-blueprint-blue/50' : 'hover:border-blueprint-border'
+          )}>
+            <div className="flex items-start gap-3">
+              <input
+                type="radio"
+                name="kb-mode"
+                value="native"
+                checked={mode === 'native'}
+                onChange={() => setMode('native')}
+                className="mt-1"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <BookOpen size={12} className="text-blueprint-blue" />
+                  <span className="text-sm font-semibold text-slate-100">Blueprint Native</span>
+                  {settings?.config?.mode === 'native' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-400 uppercase tracking-wider">Active</span>
+                  )}
+                </div>
+                <p className="text-xs text-blueprint-muted mt-1">
+                  Fresh KB managed entirely by Blueprint. Stored at <code className="text-blueprint-muted/80">/kb/{currentBusiness?.slug}/</code>.
+                  Git-backed, auto-committed on every save.
+                </p>
+              </div>
+            </div>
+          </label>
+
+          {/* Obsidian */}
+          <label className={clsx(
+            'block bp-card p-3 cursor-pointer transition-colors',
+            mode === 'obsidian' ? 'border-blueprint-purple/50' : 'hover:border-blueprint-border'
+          )}>
+            <div className="flex items-start gap-3">
+              <input
+                type="radio"
+                name="kb-mode"
+                value="obsidian"
+                checked={mode === 'obsidian'}
+                onChange={() => setMode('obsidian')}
+                className="mt-1"
+              />
+              <div className="flex-1">
+                <div className="flex items-center gap-2">
+                  <FolderOpen size={12} className="text-purple-400" />
+                  <span className="text-sm font-semibold text-slate-100">Obsidian Vault</span>
+                  {settings?.config?.mode === 'obsidian' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-purple-500/20 text-purple-400 uppercase tracking-wider">Active</span>
+                  )}
+                </div>
+                <p className="text-xs text-blueprint-muted mt-1">
+                  Point Blueprint at an existing Obsidian vault. Blueprint creates a <code className="text-blueprint-muted/80">blueprint/</code> subfolder
+                  inside the vault and operates within it. Your existing notes are not touched.
+                </p>
+
+                {mode === 'obsidian' && (
+                  <div className="mt-3">
+                    <label className="block text-xs text-blueprint-muted mb-1">Vault path</label>
+                    <input
+                      value={vaultPath}
+                      onChange={(e) => setVaultPath(e.target.value)}
+                      className="bp-input"
+                      placeholder="/Users/you/Documents/ObsidianVault"
+                    />
+                    <p className="text-[10px] text-blueprint-muted mt-1">
+                      Must contain a <code className="text-blueprint-muted/80">.obsidian/</code> directory.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </label>
+        </div>
+
+        <div className="flex gap-2 mt-4">
+          <button onClick={handleReinit} className="bp-btn bp-btn-secondary text-xs">
+            <RefreshCw size={11} /> Re-initialize
+          </button>
+          <button onClick={handleSave} disabled={saving} className="bp-btn bp-btn-primary text-xs ml-auto">
+            <Save size={11} />
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </Section>
+
+      {settings?.config && (
+        <Section title="Current Status">
+          <div className="space-y-1 text-xs">
+            <div className="flex justify-between">
+              <span className="text-blueprint-muted">Root path</span>
+              <span className="text-slate-200 font-mono text-[10px]">{settings.config.root}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-blueprint-muted">Initialized</span>
+              <span className="text-slate-200">{settings.config.initialized ? '✅' : '❌'}</span>
+            </div>
+            {settings.config.last_ingest && (
+              <div className="flex justify-between">
+                <span className="text-blueprint-muted">Last ingest</span>
+                <span className="text-slate-200">{new Date(settings.config.last_ingest).toLocaleString()}</span>
+              </div>
+            )}
+            {settings.config.last_lint && (
+              <div className="flex justify-between">
+                <span className="text-blueprint-muted">Last lint</span>
+                <span className="text-slate-200">{new Date(settings.config.last_lint).toLocaleString()}</span>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+    </div>
+  )
+}
+
+// ============================================
 // Settings Page
 // ============================================
 function Settings() {
@@ -891,6 +1085,7 @@ function Settings() {
     business:      <BusinessTab />,
     notifications: <NotificationsTab />,
     llm:           <LLMTab />,
+    kb:            <KBTab />,
     agents:        <AgentDefaultsTab />,
     data:          <DataTab />,
     system:        <SystemTab />,

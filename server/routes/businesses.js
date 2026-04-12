@@ -51,8 +51,12 @@ router.get('/:id', (req, res) => {
 
 /**
  * POST /api/businesses
+ *
+ * Also auto-initializes a Karpathy-style KB for the new business in native mode
+ * (KB lives at {KB_ROOT}/{slug}/). Failure to init the KB does not block the
+ * business creation — it can be retried later via /api/kb/:businessId/init.
  */
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   try {
     const { name, type, description, settings } = req.body;
     if (!name) return res.status(400).json({ error: 'name is required.' });
@@ -86,6 +90,15 @@ router.post('/', (req, res) => {
 
     const created = parseRow(db.prepare('SELECT * FROM businesses WHERE id = ?').get(id));
     audit(id, 'business', id, 'create', req.session.userId, null, created);
+
+    // Auto-initialize KB (non-fatal if it fails)
+    try {
+      const { getKBForBusiness } = await import('../kb/kb-config.js');
+      await getKBForBusiness(id);
+      console.log(`[businesses] KB initialized for new business ${slug}`);
+    } catch (kbErr) {
+      console.warn(`[businesses] KB auto-init failed for ${slug} (non-fatal):`, kbErr.message);
+    }
 
     return res.status(201).json(created);
   } catch (err) {

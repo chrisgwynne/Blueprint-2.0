@@ -145,9 +145,35 @@ export function getGoogleAuthUrl(businessId, types = 'gsc,ga4') {
 export const revokeGoogleAuth = (businessId) => del(`/oauth/google/${businessId}`)
 
 // ============================================
-// Knowledge Base
+// Knowledge Base (business-scoped, Karpathy wiki pattern)
 // ============================================
 
+// Settings + init
+export const getKbSettings = (businessId) => get(`/kb/${businessId}/settings`)
+export const saveKbSettings = (businessId, data) => post(`/kb/${businessId}/settings`, data)
+export const initKb = (businessId) => post(`/kb/${businessId}/init`)
+
+// Read
+export const getKbTree = (businessId) => get(`/kb/${businessId}/tree`)
+export const getKbLog = (businessId, params) => get(`/kb/${businessId}/log`, params)
+export const searchKb = (businessId, q) => get(`/kb/${businessId}/search`, { q })
+export const getKbFile = (businessId, path) => get(`/kb/${businessId}/file/${path}`)
+export const getKbBacklinks = (businessId, path) => get(`/kb/${businessId}/backlinks/${path}`)
+export const getKbHistory = (businessId, path) => get(`/kb/${businessId}/history/${path}`)
+export const getKbDiff = (businessId, hash, path) => get(`/kb/${businessId}/diff/${hash}/${path}`)
+
+// Write
+export const saveKbFile = (businessId, path, data) => post(`/kb/${businessId}/file/${path}`, data)
+export const archiveKbFile = (businessId, path) => del(`/kb/${businessId}/file/${path}`)
+export const restoreKbVersion = (businessId, data) => post(`/kb/${businessId}/restore`, data)
+export const uploadKbRaw = (businessId, data) => post(`/kb/${businessId}/upload-raw`, data)
+
+// Agent operations
+export const ingestKb = (businessId, data) => post(`/kb/${businessId}/ingest`, data)
+export const queryKb = (businessId, data) => post(`/kb/${businessId}/query`, data)
+export const lintKb = (businessId) => post(`/kb/${businessId}/lint`)
+
+// LEGACY (kept for backwards-compat with anything still importing these — will be removed)
 export const getKbDocs = (params) => get('/kb', params)
 export const getKbDoc = (path) => get(`/kb/${path}`)
 export const saveKbDoc = (path, data) => post(`/kb/${path}`, data)
