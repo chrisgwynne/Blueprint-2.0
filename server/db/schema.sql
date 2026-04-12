@@ -227,6 +227,8 @@ CREATE INDEX IF NOT EXISTS idx_metrics_business_name_recorded ON metrics(busines
 CREATE INDEX IF NOT EXISTS idx_audit_business_entity_created ON audit_log(business_id, entity_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_business ON analysis_runs(business_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_business_id ON agent_runs(business_id);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_date ON cost_daily(date);
 
 -- ─── Blueprint Agent Protocol (BAP) ─────────────────────────────────────────
 

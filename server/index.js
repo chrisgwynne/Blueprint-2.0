@@ -215,7 +215,7 @@ const mountRoutes = async () => {
       const dbPath = process.env.DATABASE_PATH || './data/blueprint.db';
       let dbSizeMB = 0;
       try {
-        const { statSync } = require('fs');
+        const { statSync } = await import('fs');
         dbSizeMB = Math.round(statSync(dbPath).size / 1048576 * 10) / 10;
       } catch {}
 

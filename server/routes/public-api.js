@@ -167,9 +167,9 @@ router.get('/businesses/:id/tasks', (req, res) => {
   res.json({ tasks: rows.map((r) => ({ ...r, action_payload: safeJSON(r.action_payload, {}), outcome_data: safeJSON(r.outcome_data, null) })) });
 });
 
-router.post('/businesses/:id/tasks', requireScope('write'), (req, res) => {
+router.post('/businesses/:id/tasks', requireScope('write'), async (req, res) => {
   try {
-    const { createTask } = require('../tasks/task-queue.js');
+    const { createTask } = await import('../tasks/task-queue.js');
     const { title, description, action_type, priority = 'p2', confidence, estimated_impact } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required.' });
     const task = createTask({

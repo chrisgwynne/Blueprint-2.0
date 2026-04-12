@@ -9,6 +9,12 @@ let schedulerStarted = false;
  * Sync a single connector by loading its implementation and running fetch.
  */
 async function syncConnector(connector) {
+  const syncId = crypto.randomUUID();
+  const syncStart = Date.now();
+  try {
+    db.prepare(`INSERT INTO connector_syncs (id, connector_id, status, created_at) VALUES (?, ?, 'running', CURRENT_TIMESTAMP)`).run(syncId, connector.id);
+  } catch {}
+
   try {
     const { default: connectorImpl } = await import(`../connectors/${connector.type}/index.js`);
 
@@ -125,8 +131,20 @@ async function syncConnector(connector) {
       });
     } catch {}
 
+    // Update connector_syncs on success
+    try {
+      db.prepare(`UPDATE connector_syncs SET status = 'complete', duration_ms = ? WHERE id = ?`)
+        .run(Date.now() - syncStart, syncId);
+    } catch {}
+
     return { ok: true, newSignals };
   } catch (err) {
+    // Update connector_syncs on failure
+    try {
+      db.prepare(`UPDATE connector_syncs SET status = 'failed', error = ?, duration_ms = ? WHERE id = ?`)
+        .run(err.message.substring(0, 500), Date.now() - syncStart, syncId);
+    } catch {}
+
     db.prepare(`
       UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?
     `).run(err.message.substring(0, 500), connector.id);
