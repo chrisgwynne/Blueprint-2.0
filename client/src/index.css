@@ -384,3 +384,177 @@ select.bp-input {
 /* ─── Hide Scrollbar ─────────────────────────────────────────────── */
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ═══════════════════════════════════════════════════════════════════
+   MOBILE — responsive breakpoints
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Remove tap highlight on mobile */
+* { -webkit-tap-highlight-color: transparent; }
+
+/* Prevent iOS zoom on input focus — keep font-size >= 16px */
+@media (max-width: 768px) {
+  input, select, textarea { font-size: 16px !important; }
+}
+
+/* Smooth scrolling */
+html { scroll-behavior: smooth; }
+
+/* Mobile overlay sidebar */
+.mobile-sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 999;
+  animation: fade-in 0.15s ease-out;
+}
+
+.mobile-hamburger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: var(--bp-text-2);
+  padding: 8px;
+  cursor: pointer;
+}
+
+@media (max-width: 768px) {
+  /* Show hamburger */
+  .mobile-hamburger { display: flex; }
+
+  /* Sidebar: hidden off-screen, slides in as overlay */
+  .sidebar-root {
+    position: fixed !important;
+    left: -100% !important;
+    top: 0 !important;
+    height: 100vh !important;
+    width: 280px !important;
+    z-index: 1000 !important;
+    transition: left 200ms ease !important;
+  }
+  .sidebar-root.mobile-open {
+    left: 0 !important;
+  }
+  .mobile-sidebar-overlay.active {
+    display: block;
+  }
+
+  /* Main content: full width, no left margin */
+  .main-content-area {
+    margin-left: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Metric cards: 2-column grid */
+  .metric-cards-row {
+    grid-template-columns: repeat(2, 1fr) !important;
+    gap: 8px !important;
+  }
+
+  /* Charts: shorter */
+  .recharts-responsive-container { max-height: 180px; }
+
+  /* Tables: horizontal scroll wrapper */
+  .table-scroll-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Cards: tighter padding */
+  .bp-card { padding: 12px !important; }
+
+  /* Full-width approve/reject buttons on mobile */
+  .mobile-action-btn {
+    width: 100% !important;
+    min-height: 52px !important;
+    font-size: 15px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    border-radius: 6px !important;
+  }
+  .mobile-action-btn-approve {
+    background: var(--bp-green) !important;
+    color: #000 !important;
+    font-weight: 700 !important;
+  }
+  .mobile-action-btn-reject {
+    background: transparent !important;
+    border: 1px solid var(--bp-red) !important;
+    color: var(--bp-red) !important;
+    font-weight: 600 !important;
+  }
+
+  /* Hide non-essential desktop elements */
+  .desktop-only { display: none !important; }
+
+  /* Kanban: switch to vertical list on mobile */
+  .kanban-board {
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+  .kanban-col {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+}
+
+/* Small mobile (<480px) */
+@media (max-width: 480px) {
+  .metric-cards-row {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .bp-card { padding: 10px !important; }
+  h1 { font-size: 18px !important; }
+}
+
+/* Touch targets — always 44px min */
+@media (pointer: coarse) {
+  button, a, [role="button"], .clickable {
+    min-height: 44px;
+  }
+  .bp-pill {
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+  }
+}
+
+/* Bottom sheet (mobile task detail) */
+.bottom-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 1001;
+  animation: fade-in 0.15s ease-out;
+}
+.bottom-sheet {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 85vh;
+  background: var(--bp-surface);
+  border-radius: 16px 16px 0 0;
+  overflow-y: auto;
+  z-index: 1002;
+  animation: slide-up 0.25s ease-out;
+  padding: 16px 20px 32px;
+  -webkit-overflow-scrolling: touch;
+}
+.bottom-sheet-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--bp-border-2);
+  border-radius: 2px;
+  margin: 0 auto 16px;
+}
+
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}

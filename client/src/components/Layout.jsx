@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertCircle,
@@ -6,6 +6,7 @@ import {
   RefreshCw,
   Bell,
   X,
+  Menu,
 } from 'lucide-react'
 import Sidebar from './Sidebar.jsx'
 import useStore from '../lib/store.js'
@@ -108,7 +109,7 @@ function NotificationArea() {
 // ============================================
 // Top Bar
 // ============================================
-function TopBar() {
+function TopBar({ onHamburger }) {
   const location = useLocation()
   const dashboard = useStore((s) => s.dashboard)
   const openSignalCount = useStore((s) => s.openSignalCount)
@@ -145,15 +146,19 @@ function TopBar() {
         zIndex: 20,
       }}
     >
-      {/* Left: page title */}
-      <div style={{
-        fontFamily: 'var(--bp-font-display)',
-        fontWeight: 600,
-        fontSize: 15,
-        color: 'var(--bp-text)',
-        minWidth: 140,
-      }}>
-        {pageTitle}
+      {/* Left: hamburger (mobile) + page title */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 140 }}>
+        <button className="mobile-hamburger" onClick={onHamburger}>
+          <Menu size={20} />
+        </button>
+        <span style={{
+          fontFamily: 'var(--bp-font-display)',
+          fontWeight: 600,
+          fontSize: 15,
+          color: 'var(--bp-text)',
+        }}>
+          {pageTitle}
+        </span>
       </div>
 
       {/* Centre: health score */}
@@ -248,11 +253,24 @@ function TopBar() {
 // ============================================
 function Layout() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const location = useLocation()
+
+  // Close mobile sidebar on navigation
+  useEffect(() => { setMobileSidebarOpen(false) }, [location.pathname])
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--bp-base)', overflow: 'hidden' }}>
-      <Sidebar />
+      {/* Mobile sidebar overlay */}
       <div
+        className={`mobile-sidebar-overlay ${mobileSidebarOpen ? 'active' : ''}`}
+        onClick={() => setMobileSidebarOpen(false)}
+      />
+      <div className={`sidebar-root ${mobileSidebarOpen ? 'mobile-open' : ''}`}>
+        <Sidebar />
+      </div>
+      <div
+        className="main-content-area"
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -262,7 +280,7 @@ function Layout() {
           marginLeft: sidebarCollapsed ? 56 : 220,
         }}
       >
-        <TopBar />
+        <TopBar onHamburger={() => setMobileSidebarOpen(true)} />
         <main
           className="dot-grid"
           style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden' }}

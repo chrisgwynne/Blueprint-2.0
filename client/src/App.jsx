@@ -11,6 +11,7 @@ import ConnectorDataPage from './pages/ConnectorDataPage.jsx'
 import KB from './pages/KB.jsx'
 import Settings from './pages/Settings.jsx'
 import LoginPage from './pages/LoginPage.jsx'
+import Onboarding from './pages/Onboarding.jsx'
 import useStore from './lib/store.js'
 import { getMe, getBusinesses } from './lib/api.js'
 
@@ -66,6 +67,22 @@ function ProtectedRoute({ children }) {
 
   if (!user) {
     return <Navigate to="/login" replace />
+  }
+
+  // Show onboarding if no businesses exist
+  const businesses = useStore((s) => s.businesses)
+  const [onboardingDone, setOnboardingDone] = useState(false)
+  if (!onboardingDone && Array.isArray(businesses) && businesses.length === 0) {
+    return (
+      <Onboarding onComplete={() => {
+        setOnboardingDone(true)
+        // Refresh businesses list
+        getBusinesses().then((bs) => {
+          useStore.getState().setBusinesses(bs ?? [])
+          if (bs?.length > 0) useStore.getState().setCurrentBusiness(bs[0])
+        }).catch(() => {})
+      }} />
+    )
   }
 
   return children

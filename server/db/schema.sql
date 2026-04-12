@@ -277,6 +277,22 @@ CREATE TABLE IF NOT EXISTS bap_webhook_deliveries (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ─── Public API Keys ─────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS api_keys (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  scopes JSON DEFAULT '["read"]',
+  rate_limit INTEGER DEFAULT 1000,
+  last_used DATETIME,
+  expires_at DATETIME,
+  total_calls INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);

@@ -167,6 +167,7 @@ const mountRoutes = async () => {
   const { default: connectorDataRoutes } = await import('./routes/connector-data.js');
   const { default: llmRoutes } = await import('./routes/llm.js');
   const { default: bapRoutes } = await import('./routes/bap.js');
+  const { default: publicApiRoutes } = await import('./routes/public-api.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
   app.use('/api/auth', authRoutes);
@@ -183,9 +184,34 @@ const mountRoutes = async () => {
   app.use('/api/connector-data', connectorDataRoutes);
   app.use('/api/llm', llmRoutes);
   app.use('/api/bap/v1', bapRoutes);
+  app.use('/api/v1', publicApiRoutes);
+
+  // API key management (session auth — used by Settings UI)
+  const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
+  const { createApiKeyRecord } = await import('./routes/public-api.js');
+
+  app.get('/api/admin/api-keys', _isAuth, (_req, res) => {
+    const keys = db.prepare('SELECT id, name, key_prefix, scopes, rate_limit, last_used, total_calls, expires_at, created_at FROM api_keys ORDER BY created_at DESC').all();
+    res.json({ keys: keys.map((k) => ({ ...k, scopes: JSON.parse(k.scopes ?? '[]') })) });
+  });
+
+  app.post('/api/admin/api-keys', _isAuth, async (req, res) => {
+    try {
+      const { name, scopes = ['read'], rate_limit = 1000, expires_at } = req.body;
+      if (!name) return res.status(400).json({ error: 'name is required.' });
+      const result = await createApiKeyRecord(name, scopes, rate_limit, expires_at ?? null);
+      res.status(201).json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/admin/api-keys/:id', _isAuth, (req, res) => {
+    db.prepare('DELETE FROM api_keys WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  });
 
   // System maintenance endpoint
-  const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
   app.post('/api/system/db-init', _isAuth, async (req, res) => {
     try {
       const { execSync } = await import('child_process');

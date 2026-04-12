@@ -3,7 +3,7 @@ import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { createTask, listTasks, approveTask, rejectTask, updateTaskStatus } from '../tasks/task-queue.js';
 import { createTaskEvent, getTaskEvents } from '../tasks/task-events.js';
-import { executeTask, isExecutable } from '../tasks/executor.js';
+import { executeTask, isExecutable, rollbackTask } from '../tasks/executor.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -252,6 +252,25 @@ router.post('/:id/comment', (req, res) => {
   } catch (err) {
     console.error('[tasks] Comment error:', err);
     return res.status(500).json({ error: 'Failed to add comment.' });
+  }
+});
+
+/**
+ * POST /api/tasks/:id/rollback
+ * Roll back a completed write-back task (Shopify product create, etc.)
+ */
+router.post('/:id/rollback', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const task = db.prepare('SELECT id, status, rollback_data, action_type FROM tasks WHERE id = ?').get(id);
+    if (!task) return res.status(404).json({ error: 'Task not found.' });
+    if (!task.rollback_data) return res.status(422).json({ error: 'No rollback data available for this task.' });
+
+    const result = await rollbackTask(id);
+    return res.json({ ok: true, ...result });
+  } catch (err) {
+    console.error('[tasks] Rollback error:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 

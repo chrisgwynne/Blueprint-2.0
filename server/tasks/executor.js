@@ -25,6 +25,13 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'github_pr',
   'investigation',
   'content_draft',
+  'shopify_product_create',
+  'shopify_product_update',
+  'shopify_description_update',
+  'shopify_page_create',
+  'shopify_page_update',
+  'shopify_blog_post_create',
+  'shopify_meta_update',
 ]);
 
 export function isExecutable(actionType) {
@@ -37,6 +44,7 @@ export function isExecutable(actionType) {
  */
 function connectorTypeForAction(actionType) {
   if (actionType === 'github_issue' || actionType === 'github_pr') return 'github';
+  if (actionType?.startsWith('shopify_')) return 'shopify';
   return null;
 }
 
@@ -196,6 +204,202 @@ function executeContentDraft(task) {
   };
 }
 
+// ─── Shopify handlers ─────────────────────────────────────────────────────────
+
+async function getShopify(task) {
+  const { credentials, config } = loadConnector(task.business_id, 'shopify');
+  const { default: shopify } = await import('../connectors/shopify/index.js');
+  return { shopify, credentials, config };
+}
+
+async function executeShopifyProductCreate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+
+  const result = await shopify.createProduct(credentials, config, {
+    title: payload.title ?? task.title,
+    body_html: payload.description ?? payload.body_html ?? task.description ?? '',
+    product_type: payload.product_type ?? null,
+    tags: Array.isArray(payload.tags) ? payload.tags.join(', ') : payload.tags ?? '',
+    variants: payload.variants ?? [{ price: payload.price ?? '0.00' }],
+  });
+
+  const product = result.product;
+  if (!product?.id) throw new Error('Shopify did not return a product.');
+
+  // Rollback data: delete the created product
+  db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
+    .run(JSON.stringify({ action: 'delete_product', product_id: product.id }), task.id);
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify product created (draft): "${product.title}"`,
+    outcome_data: {
+      product_id: product.id,
+      admin_url: `https://${shop}/admin/products/${product.id}`,
+      status: 'draft',
+    },
+  };
+}
+
+async function executeShopifyProductUpdate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const productId = payload.product_id;
+  if (!productId) throw new Error('product_id is required in action_payload.');
+
+  // Save current state for rollback
+  const current = await shopify.fetchProduct(credentials, config, productId);
+  const rollback = {
+    action: 'restore_product',
+    product_id: productId,
+    previous_state: {},
+  };
+
+  const updates = {};
+  if (payload.new_description !== undefined || payload.body_html !== undefined) {
+    updates.body_html = payload.new_description ?? payload.body_html;
+    rollback.previous_state.body_html = current.body_html;
+  }
+  if (payload.title !== undefined) {
+    updates.title = payload.title;
+    rollback.previous_state.title = current.title;
+  }
+  if (payload.tags !== undefined) {
+    updates.tags = Array.isArray(payload.tags) ? payload.tags.join(', ') : payload.tags;
+    rollback.previous_state.tags = current.tags;
+  }
+  if (payload.updates && typeof payload.updates === 'object') {
+    Object.assign(updates, payload.updates);
+    for (const k of Object.keys(payload.updates)) {
+      rollback.previous_state[k] = current[k] ?? null;
+    }
+  }
+
+  await shopify.updateProduct(credentials, config, productId, updates);
+  db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
+    .run(JSON.stringify(rollback), task.id);
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify product updated: "${current.title}"`,
+    outcome_data: {
+      product_id: productId,
+      admin_url: `https://${shop}/admin/products/${productId}`,
+      changes: Object.keys(updates),
+    },
+  };
+}
+
+async function executeShopifyPageCreate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+
+  const result = await shopify.createPage(credentials, config, {
+    title: payload.title ?? task.title,
+    body_html: payload.body_html ?? task.description ?? '',
+    handle: payload.handle ?? null,
+    author: 'Blueprint',
+  });
+
+  const page = result.page;
+  if (!page?.id) throw new Error('Shopify did not return a page.');
+
+  db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
+    .run(JSON.stringify({ action: 'delete_page', page_id: page.id }), task.id);
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify page created (draft): "${page.title}"`,
+    outcome_data: {
+      page_id: page.id,
+      admin_url: `https://${shop}/admin/pages/${page.id}`,
+      status: 'draft',
+    },
+  };
+}
+
+async function executeShopifyPageUpdate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const pageId = payload.page_id;
+  if (!pageId) throw new Error('page_id is required in action_payload.');
+
+  const updates = {};
+  if (payload.body_html !== undefined) updates.body_html = payload.body_html;
+  if (payload.title !== undefined) updates.title = payload.title;
+  if (payload.updates) Object.assign(updates, payload.updates);
+
+  await shopify.updatePage(credentials, config, pageId, updates);
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify page updated (ID: ${pageId})`,
+    outcome_data: {
+      page_id: pageId,
+      admin_url: `https://${shop}/admin/pages/${pageId}`,
+      changes: Object.keys(updates),
+    },
+  };
+}
+
+async function executeShopifyBlogPostCreate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const blogId = payload.blog_id;
+  if (!blogId) throw new Error('blog_id is required in action_payload.');
+
+  const result = await shopify.createBlogPost(credentials, config, blogId, {
+    title: payload.title ?? task.title,
+    body_html: payload.body_html ?? task.description ?? '',
+    author: payload.author ?? 'Blueprint',
+    tags: payload.tags ?? '',
+  });
+
+  const article = result.article;
+  return {
+    outcome: `Shopify blog post created (draft): "${article?.title ?? task.title}"`,
+    outcome_data: {
+      article_id: article?.id,
+      blog_id: blogId,
+      status: 'draft',
+    },
+  };
+}
+
+// ─── Rollback system ──────────────────────────────────────────────────────────
+
+/**
+ * Roll back a completed write-back task.
+ * Uses the rollback_data stored at execution time.
+ */
+export async function rollbackTask(taskId) {
+  const taskRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!taskRow) throw new Error(`Task ${taskId} not found.`);
+  if (!taskRow.rollback_data) throw new Error('No rollback data available for this task.');
+
+  const rollback = JSON.parse(taskRow.rollback_data);
+  if (!rollback.action) throw new Error('Invalid rollback data.');
+
+  if (rollback.action === 'delete_product' && rollback.product_id) {
+    const { shopify, credentials, config } = await getShopify(taskRow);
+    await shopify.deleteProduct(credentials, config, rollback.product_id);
+    updateTaskStatus(taskId, 'failed', 'system:rollback', { outcome: 'Rolled back: product deleted' });
+    createTaskEvent(taskId, 'rolled_back', 'system:rollback', `Product ${rollback.product_id} deleted (rollback)`, {});
+    return { outcome: `Product ${rollback.product_id} deleted` };
+  }
+
+  if (rollback.action === 'restore_product' && rollback.product_id) {
+    const { shopify, credentials, config } = await getShopify(taskRow);
+    await shopify.updateProduct(credentials, config, rollback.product_id, rollback.previous_state);
+    updateTaskStatus(taskId, 'failed', 'system:rollback', { outcome: 'Rolled back: product restored' });
+    createTaskEvent(taskId, 'rolled_back', 'system:rollback', `Product ${rollback.product_id} restored to previous state`, {});
+    return { outcome: `Product ${rollback.product_id} restored` };
+  }
+
+  throw new Error(`Unknown rollback action: ${rollback.action}`);
+}
+
 // ─── Main entrypoint ──────────────────────────────────────────────────────────
 
 /**
@@ -243,10 +447,17 @@ export async function executeTask(taskId) {
   let result;
   try {
     switch (task.action_type) {
-      case 'github_issue':  result = await executeGithubIssue(task); break;
-      case 'github_pr':     result = await executeGithubPR(task);    break;
-      case 'investigation': result = executeInvestigation(task);      break;
-      case 'content_draft': result = executeContentDraft(task);       break;
+      case 'github_issue':             result = await executeGithubIssue(task); break;
+      case 'github_pr':                result = await executeGithubPR(task);    break;
+      case 'investigation':            result = executeInvestigation(task);      break;
+      case 'content_draft':            result = executeContentDraft(task);       break;
+      case 'shopify_product_create':   result = await executeShopifyProductCreate(task); break;
+      case 'shopify_product_update':
+      case 'shopify_description_update':
+      case 'shopify_meta_update':      result = await executeShopifyProductUpdate(task); break;
+      case 'shopify_page_create':      result = await executeShopifyPageCreate(task); break;
+      case 'shopify_page_update':      result = await executeShopifyPageUpdate(task); break;
+      case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }

@@ -306,6 +306,83 @@ const connector = {
     return metrics;
   },
 
+  // ─── WRITE METHODS (gated behind task approval) ───────────────────────────
+
+  async createProduct(credentials, config, productData) {
+    const res = await shopifyFetch(credentials, '/products.json', {
+      product: { ...productData, status: 'draft', published: false },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify createProduct failed: ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
+  },
+
+  async updateProduct(credentials, config, productId, updates) {
+    const url = `/products/${productId}.json`;
+    const res = await shopifyFetch(credentials, url, { product: { id: productId, ...updates } });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify updateProduct failed: ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
+  },
+
+  async updateProductDescription(credentials, config, productId, bodyHtml) {
+    return this.updateProduct(credentials, config, productId, { body_html: bodyHtml });
+  },
+
+  async fetchProduct(credentials, config, productId) {
+    const res = await shopifyFetch(credentials, `/products/${productId}.json`);
+    if (!res.ok) throw new Error(`Shopify fetchProduct ${productId} failed (${res.status})`);
+    const data = await res.json();
+    return data.product;
+  },
+
+  async createPage(credentials, config, pageData) {
+    const res = await shopifyFetch(credentials, '/pages.json', {
+      page: { ...pageData, published: false },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify createPage failed: ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
+  },
+
+  async updatePage(credentials, config, pageId, updates) {
+    const res = await shopifyFetch(credentials, `/pages/${pageId}.json`, {
+      page: { id: pageId, ...updates },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify updatePage failed: ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
+  },
+
+  async createBlogPost(credentials, config, blogId, postData) {
+    const res = await shopifyFetch(credentials, `/blogs/${blogId}/articles.json`, {
+      article: { ...postData, published: false },
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify createBlogPost failed: ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
+  },
+
+  async deleteProduct(credentials, config, productId) {
+    const url = `https://${credentials.shopDomain}/admin/api/${API_VERSION}/products/${productId}.json`;
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'X-Shopify-Access-Token': credentials.accessToken },
+    });
+    if (!res.ok) throw new Error(`Shopify deleteProduct ${productId} failed (${res.status})`);
+    return { deleted: true };
+  },
+
   async getAuthUrl() { throw new Error('Shopify uses API key authentication, not OAuth.'); },
   async exchangeCode() { throw new Error('Shopify uses API key authentication, not OAuth.'); },
   async refreshToken() { throw new Error('Shopify uses API key authentication, not OAuth.'); },
