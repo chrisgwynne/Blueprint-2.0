@@ -227,3 +227,56 @@ CREATE INDEX IF NOT EXISTS idx_metrics_business_name_recorded ON metrics(busines
 CREATE INDEX IF NOT EXISTS idx_audit_business_entity_created ON audit_log(business_id, entity_type, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_business ON analysis_runs(business_id, started_at);
+
+-- ─── Blueprint Agent Protocol (BAP) ─────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS bap_agents (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  owner TEXT,
+  api_key_hash TEXT NOT NULL,
+  api_key_prefix TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  permissions JSON DEFAULT '[]',
+  business_access JSON DEFAULT '[]',
+  default_trust_tier TEXT DEFAULT 'yellow',
+  webhook_url TEXT,
+  webhook_secret TEXT,
+  webhook_events JSON DEFAULT '[]',
+  last_seen DATETIME,
+  total_calls INTEGER DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bap_audit (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES bap_agents(id),
+  method TEXT NOT NULL,
+  endpoint TEXT NOT NULL,
+  business_id TEXT,
+  status_code INTEGER,
+  request_body JSON,
+  response_summary TEXT,
+  duration_ms INTEGER,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS bap_webhook_deliveries (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES bap_agents(id),
+  event_type TEXT NOT NULL,
+  payload JSON NOT NULL,
+  delivery_status TEXT DEFAULT 'pending',
+  attempts INTEGER DEFAULT 0,
+  last_attempt DATETIME,
+  next_retry DATETIME,
+  response_code INTEGER,
+  response_body TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
+CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);
