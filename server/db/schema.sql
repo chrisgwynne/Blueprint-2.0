@@ -310,6 +310,22 @@ CREATE TABLE IF NOT EXISTS cost_daily (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_daily_unique
   ON cost_daily(date, agent_id, business_id, provider);
 
+-- ─── Outcome attribution ────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS task_outcomes (
+  id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(id),
+  check_date DATETIME NOT NULL,
+  weeks_after INTEGER NOT NULL,
+  metric_value REAL,
+  baseline_value REAL,
+  change_pct REAL,
+  verdict TEXT,
+  verdict_detail TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_task_outcomes_task ON task_outcomes(task_id);
+
 CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);

@@ -94,6 +94,11 @@ export function createTask(taskData) {
   const created = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id));
   audit(business_id, 'task', id, 'create', proposed_by, null, created);
 
+  // Auto-populate target_metric for outcome tracking
+  try {
+    import('./outcomes.js').then((m) => m.setTaskTargetMetric(id, business_id, action_type)).catch(() => {});
+  } catch {}
+
   return created;
 }
 

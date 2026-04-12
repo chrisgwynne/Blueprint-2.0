@@ -295,6 +295,17 @@ export function startScheduler() {
     }
   });
 
+  // Weekly outcome attribution checks — Monday 9am
+  cron.schedule('0 9 * * 1', async () => {
+    try {
+      const { runOutcomeChecks } = await import('../tasks/outcomes.js');
+      const checked = runOutcomeChecks();
+      if (checked > 0) console.log(`[scheduler] Outcome checks: ${checked} tasks evaluated.`);
+    } catch (err) {
+      console.error('[scheduler] Outcome checks failed:', err.message);
+    }
+  });
+
   // Weekly KB lint — every Monday at 8am
   cron.schedule('0 8 * * 1', async () => {
     console.log('[scheduler] Running weekly KB lint pass...');
