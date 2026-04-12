@@ -1,52 +1,34 @@
 # Heartbeat — Reporter
 
-## Scheduled runs
+## Weekly Monday briefing (07:00)
 
-### Weekly briefing — Friday 08:00
-1. Collect structured summaries from all active agents (their run outputs from the past 7 days)
-2. Pull key metrics directly from connected sources for cross-check
-3. Identify the week's 3 biggest wins (metrics improved, tasks completed, signals resolved)
-4. Identify the week's 3 biggest concerns (declining metrics, open signals, unresolved issues)
-5. Determine the top 3 priorities for next week (from Conductor's strategy + pending task queue)
-6. Write the weekly briefing in standard format (see below)
-7. Publish to dashboard and notification channels
+Data to gather:
+1. All connector metrics: this week vs last week
+2. All signals created this week (by severity)
+3. Tasks completed this week + their outcomes
+4. Agent activity summary (runs, costs, proposals)
+5. KB activity (pages created, contradictions flagged)
+6. Cost summary for the week
 
-## Briefing format (always this structure)
+Structure:
+1. Health score: overall business health (0-100) with direction
+2. The week in numbers: 6 key metrics with % change
+3. What went well: 2-3 genuine positives with evidence
+4. What needs attention: top 3 issues ranked by impact
+5. What your agents did: tasks completed, outcomes where known
+6. Coming week priorities: exactly 3, no more
+7. Cost summary: LLM spend this week
 
-```
-WEEKLY BRIEFING — [Date]
-━━━━━━━━━━━━━━━━━━━━━━
+Delivery: Telegram (formatted for mobile) + dashboard notification + KB page filed under reports/weekly-{date}.md
 
-THIS WEEK IN THREE SENTENCES
-[One paragraph. The state of the business. Honest, brief.]
+## Monthly report (1st of month, 08:00)
 
-WINS
-1. [Win + source + number]
-2. [Win + source + number]
-3. [Win + source + number]
+Deeper analysis:
+- Month vs previous month
+- Trend lines for key metrics
+- Agent performance review (acceptance rate, outcome rate)
+- KB health (pages, confidence, contradictions)
+- Cost breakdown by agent
+- Strategic observations
 
-CONCERNS
-1. [Concern + source + impact]
-2. [Concern + source + impact]
-3. [Concern + source + impact]
-
-NEXT WEEK: TOP PRIORITIES
-1. [Priority + owner/agent]
-2. [Priority + owner/agent]
-3. [Priority + owner/agent]
-
-BY THE NUMBERS
-Revenue:          £X,XXX  [+/-X% vs last week]
-Organic sessions: X,XXX   [+/-X% vs last week]
-Conversion rate:  X.X%    [+/-X pts vs last week]
-PageSpeed mobile: XX/100  [+/-X vs last week]
-Open signals:     X       [X critical, X warning]
-Tasks pending:    X       [X proposed, X approved]
-━━━━━━━━━━━━━━━━━━━━━━
-Generated: [timestamp] | Agents: [list of agents that contributed]
-```
-
-## When agent data is unavailable
-If an agent didn't run this week or a connector is down, I note it explicitly:
-"Revenue data unavailable — Shopify connector offline (Sentinel flagged 2 days ago)."
-I do not omit sections silently. A gap in the briefing is information.
+File under reports/monthly-{date}.md
