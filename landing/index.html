@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Blueprint — Your business, on autopilot</title>
+<meta name="description" content="A personal business operating system powered by AI agents. Connect your tools, detect signals, and let agents take action — with your approval.">
+<meta property="og:title" content="Blueprint">
+<meta property="og:description" content="A personal business operating system powered by AI agents.">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#080b12;--surface:#0f1319;--border:rgba(255,255,255,0.06);
+  --text:#e2e8f0;--text2:#94a3b8;--text3:#64748b;
+  --blue:#3b82f6;--green:#00c9a7;--amber:#f59e0b;--red:#ff5252;--purple:#9d7aff;
+  --mono:'DM Mono',monospace;--display:Syne,sans-serif;
+}
+html{scroll-behavior:smooth;-webkit-tap-highlight-color:transparent}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);line-height:1.6;overflow-x:hidden}
+a{color:var(--blue);text-decoration:none}
+.container{max-width:1100px;margin:0 auto;padding:0 24px}
+
+/* Blueprint grid background */
+.grid-bg{
+  background:
+    radial-gradient(ellipse 60% 40% at 50% 0%,rgba(59,130,246,0.06),transparent 70%),
+    linear-gradient(rgba(255,255,255,0.02) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,0.02) 1px,transparent 1px);
+  background-size:100% 100%,24px 24px,24px 24px;
+}
+
+/* Corner brackets */
+.bracket{position:relative;border:1px solid var(--border);border-radius:8px}
+.bracket::before,.bracket::after{content:'';position:absolute;width:20px;height:20px}
+.bracket::before{top:-1px;left:-1px;border-top:2px solid var(--blue);border-left:2px solid var(--blue)}
+.bracket::after{bottom:-1px;right:-1px;border-bottom:2px solid var(--blue);border-right:2px solid var(--blue)}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 28px;border-radius:6px;font-family:var(--mono);font-size:14px;font-weight:500;border:none;cursor:pointer;transition:all 0.15s}
+.btn-primary{background:var(--blue);color:#fff}.btn-primary:hover{background:#2563eb}
+.btn-ghost{background:transparent;color:var(--text2);border:1px solid var(--border)}.btn-ghost:hover{border-color:var(--blue);color:var(--text)}
+
+/* Sections */
+section{padding:100px 0}
+section:nth-child(even){background:var(--surface)}
+h2{font-family:var(--display);font-weight:800;font-size:clamp(24px,4vw,36px);color:var(--text);margin-bottom:16px}
+.subtitle{font-size:15px;color:var(--text2);max-width:600px;margin-bottom:40px;line-height:1.7}
+
+/* Hero */
+.hero{padding:120px 0 80px;text-align:center}
+.hero h1{font-family:var(--display);font-weight:800;font-size:clamp(36px,6vw,56px);letter-spacing:-0.02em;margin-bottom:16px}
+.hero .tagline{font-size:clamp(14px,2vw,18px);color:var(--text2);max-width:520px;margin:0 auto 40px;line-height:1.7}
+.hero-buttons{display:flex;gap:12px;justify-content:center;margin-bottom:60px;flex-wrap:wrap}
+.hero-screenshot{max-width:100%;border-radius:12px;margin:0 auto;display:block}
+
+/* Loop animation */
+.loop{display:flex;gap:0;justify-content:center;flex-wrap:wrap;margin:40px 0}
+.loop-step{padding:12px 20px;text-align:center;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--text3);transition:all 0.4s;position:relative}
+.loop-step.active{color:var(--blue);transform:scale(1.1)}
+.loop-step::after{content:'→';position:absolute;right:-8px;top:50%;transform:translateY(-50%);color:var(--border);font-size:14px}
+.loop-step:last-child::after{display:none}
+
+/* Feature cards */
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px}
+.feature-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:32px;position:relative}
+.feature-card::before,.feature-card::after{content:'';position:absolute;width:12px;height:12px}
+.feature-card::before{top:-1px;left:-1px;border-top:1px solid rgba(59,130,246,0.35);border-left:1px solid rgba(59,130,246,0.35)}
+.feature-card::after{bottom:-1px;right:-1px;border-bottom:1px solid rgba(59,130,246,0.35);border-right:1px solid rgba(59,130,246,0.35)}
+.feature-card h3{font-family:var(--display);font-weight:700;font-size:16px;margin-bottom:8px}
+.feature-card p{font-size:13px;color:var(--text2);line-height:1.6}
+
+/* Connector grid */
+.connector-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.connector-pill{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--text2);text-align:center;transition:border-color 0.2s}
+.connector-pill:hover{border-color:var(--blue)}
+
+/* Who section */
+.who-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+.who-card{padding:20px;border-left:2px solid var(--blue);background:rgba(59,130,246,0.03)}
+.who-card p{font-size:13px;color:var(--text2)}
+
+/* Deploy */
+.deploy{text-align:center;padding:80px 0}
+.deploy pre{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:24px 32px;display:inline-block;text-align:left;font-size:13px;color:var(--green);margin:24px 0 32px;max-width:100%;overflow-x:auto}
+.deploy-buttons{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+
+/* Footer */
+footer{padding:40px 0;text-align:center;border-top:1px solid var(--border)}
+footer p{font-size:12px;color:var(--text3)}
+footer a{color:var(--text3);margin:0 12px}
+footer a:hover{color:var(--blue)}
+
+/* Scroll animations */
+.reveal{opacity:0;transform:translateY(30px);transition:all 0.6s ease-out}
+.reveal.visible{opacity:1;transform:translateY(0)}
+
+/* Mobile */
+@media(max-width:768px){
+  section{padding:60px 0}
+  .hero{padding:80px 0 40px}
+  .loop-step{padding:8px 12px;font-size:9px}
+  .loop-step::after{display:none}
+  .loop{gap:8px}
+  .features{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body class="grid-bg">
+
+<!-- HERO -->
+<section class="hero">
+<div class="container">
+  <h1>Blueprint</h1>
+  <p class="tagline">Your business, on autopilot.<br>Connect your tools. Let AI agents watch for problems, surface opportunities, and take action — with your approval.</p>
+  <div class="hero-buttons">
+    <a href="https://github.com/chrisgwynne/blueprint" class="btn btn-primary">Deploy in 2 minutes →</a>
+    <a href="https://github.com/chrisgwynne/blueprint" class="btn btn-ghost">View on GitHub</a>
+  </div>
+  <div class="bracket" style="max-width:900px;margin:0 auto;padding:4px;background:var(--surface)">
+    <div style="background:var(--bg);border-radius:6px;padding:40px;text-align:center;color:var(--text3);font-size:13px">
+      Dashboard screenshot placeholder — replace with real screenshot
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- PROBLEM -->
+<section>
+<div class="container">
+  <div class="features reveal">
+    <div class="feature-card">
+      <h3>Too many dashboards</h3>
+      <p>GA4, Shopify, GSC, Stripe, GitHub — you can't watch all of them. Data sits in silos. Problems hide between tools.</p>
+    </div>
+    <div class="feature-card">
+      <h3>Signals get missed</h3>
+      <p>Rankings drop. Traffic falls. A competitor launches. Nobody notices for weeks. By the time you do, the damage compounds.</p>
+    </div>
+    <div class="feature-card">
+      <h3>No time to act</h3>
+      <p>You see the problem. You know what to do. But there are 47 other things. The fix never happens. It compounds.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- THE LOOP -->
+<section>
+<div class="container" style="text-align:center">
+  <h2 class="reveal">The Blueprint Loop</h2>
+  <p class="subtitle reveal" style="margin:0 auto 40px">Data flows in. Signals fire. Agents propose. You approve. Actions execute. Outcomes are tracked. Knowledge compounds.</p>
+  <div class="loop reveal">
+    <div class="loop-step" id="step-0">Connectors</div>
+    <div class="loop-step" id="step-1">Signals</div>
+    <div class="loop-step" id="step-2">Agents</div>
+    <div class="loop-step" id="step-3">Tasks</div>
+    <div class="loop-step" id="step-4">Execution</div>
+    <div class="loop-step" id="step-5">Outcomes</div>
+  </div>
+</div>
+</section>
+
+<!-- CONNECTORS -->
+<section>
+<div class="container">
+  <h2 class="reveal">14 connectors. One dashboard.</h2>
+  <p class="subtitle reveal">Every data source. One signal feed. One approval queue.</p>
+  <div class="connector-grid reveal">
+    <div class="connector-pill">Google Analytics 4</div>
+    <div class="connector-pill">Search Console</div>
+    <div class="connector-pill">PageSpeed</div>
+    <div class="connector-pill">Google Business Profile</div>
+    <div class="connector-pill">Google Ads</div>
+    <div class="connector-pill">Shopify</div>
+    <div class="connector-pill">Stripe</div>
+    <div class="connector-pill">GitHub</div>
+    <div class="connector-pill">Brevo</div>
+    <div class="connector-pill">Todoist</div>
+    <div class="connector-pill">UptimeRobot</div>
+    <div class="connector-pill">WordPress</div>
+    <div class="connector-pill">Kirby</div>
+    <div class="connector-pill">Stannp</div>
+  </div>
+</div>
+</section>
+
+<!-- AGENTS -->
+<section>
+<div class="container">
+  <h2 class="reveal">AI agents that know your business</h2>
+  <p class="subtitle reveal">Each agent has a name, a role, and soul files — editable markdown documents that define their personality, values, and how they work. Run any LLM: Claude, GPT-4, Gemini, or Ollama locally.</p>
+  <div class="features reveal">
+    <div class="feature-card">
+      <h3>Nothing happens without your say-so</h3>
+      <p>Agents propose. You approve. Via the dashboard or a Telegram message. Green-tier tasks can auto-approve. Every action has a paper trail and a rollback button.</p>
+    </div>
+    <div class="feature-card">
+      <h3>A brain that compounds</h3>
+      <p>A git-backed knowledge base that grows smarter with every agent run, every signal, every insight. Based on the Karpathy LLM wiki pattern. Works with Obsidian vaults.</p>
+    </div>
+    <div class="feature-card">
+      <h3>Any agent can connect</h3>
+      <p>The Blueprint Agent Protocol lets any external agent — on any machine, any stack — participate as a peer. Register, read signals, propose tasks, write to the KB.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<!-- FOR WHO -->
+<section>
+<div class="container">
+  <h2 class="reveal">Built for</h2>
+  <div class="who-grid reveal">
+    <div class="who-card"><p><strong>Solo founders</strong> running multiple projects who can't watch everything manually</p></div>
+    <div class="who-card"><p><strong>Digital agencies</strong> managing client sites across GA4, GSC, Shopify, and more</p></div>
+    <div class="who-card"><p><strong>E-commerce operators</strong> who need revenue signals and content automation</p></div>
+    <div class="who-card"><p><strong>Anyone</strong> who wants their business watched 24/7 by agents they control</p></div>
+  </div>
+</div>
+</section>
+
+<!-- SELF-HOSTED -->
+<section style="text-align:center">
+<div class="container">
+  <h2 class="reveal">Your data stays yours</h2>
+  <p class="subtitle reveal" style="margin:0 auto 24px">No SaaS subscription. No data leaving your server. Deploy on your machine, Hetzner, Coolify, or a Raspberry Pi. Credentials encrypted at rest. Full audit trail. MIT licensed.</p>
+</div>
+</section>
+
+<!-- DEPLOY -->
+<section class="deploy grid-bg">
+<div class="container">
+  <h2 class="reveal">Deploy Blueprint in 2 minutes</h2>
+  <pre class="reveal"><code>git clone https://github.com/chrisgwynne/blueprint
+cd blueprint && cp .env.example .env
+docker compose up -d</code></pre>
+  <div class="deploy-buttons reveal">
+    <a href="https://github.com/chrisgwynne/blueprint" class="btn btn-primary">View on GitHub</a>
+    <a href="https://github.com/chrisgwynne/blueprint#quick-start" class="btn btn-ghost">Read the docs</a>
+  </div>
+</div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <p>Blueprint — MIT License</p>
+  <p style="margin-top:8px">
+    <a href="https://github.com/chrisgwynne/blueprint">GitHub</a>
+    <a href="https://github.com/chrisgwynne/blueprint/issues">Issues</a>
+  </p>
+</footer>
+
+<script>
+// Loop animation
+let current = 0;
+const steps = document.querySelectorAll('.loop-step');
+setInterval(() => {
+  steps.forEach((s, i) => s.classList.toggle('active', i === current));
+  current = (current + 1) % steps.length;
+}, 1200);
+
+// Scroll reveal
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) e.target.classList.add('visible'); });
+}, { threshold: 0.1 });
+document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+</script>
+</body>
+</html>

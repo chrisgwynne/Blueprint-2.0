@@ -1,111 +1,139 @@
-# Blueprint
+<div align="center">
+  <h1>Blueprint</h1>
+  <p><strong>A personal business operating system powered by AI agents</strong></p>
 
-> A personal business operating system. Connect your data sources, detect signals, and let AI agents take action — with a full audit trail of everything.
+  <p>
+    <a href="#quick-start">Quick Start</a> ·
+    <a href="#connectors">Connectors</a> ·
+    <a href="#agents">Agents</a> ·
+    <a href="#knowledge-base">Knowledge Base</a> ·
+    <a href="#external-agents-bap">BAP Protocol</a>
+  </p>
 
-## What it does
+  <p>
+    <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
+    <img src="https://img.shields.io/badge/node-20%2B-green" alt="Node">
+    <img src="https://img.shields.io/badge/docker-ready-blue" alt="Docker">
+    <img src="https://img.shields.io/badge/connectors-14-orange" alt="Connectors">
+    <img src="https://img.shields.io/badge/signal%20rules-61-yellow" alt="Signals">
+  </p>
+</div>
 
-Blueprint connects to your business tools (Shopify, Google Analytics, Search Console, Stripe, GitHub, and more), detects signals in your data, and uses AI agents to propose and execute improvements — with your approval at every step.
+---
 
-- **14 connectors** — GA4, GSC, PageSpeed, GBP, Shopify, Stripe, GitHub, Brevo, Todoist, UptimeRobot, WordPress, Kirby, Google Ads, Stannp
-- **61 signal rules** — anomaly detection, opportunity surfacing, risk alerts across every connector
-- **AI agents** — specialist agents (SEO, copywriting, strategy, performance) with soul files that define their identity and working style
-- **Compounding knowledge base** — Karpathy LLM wiki pattern, file-based, git-backed, works with Obsidian vaults
-- **Task execution engine** — approved tasks auto-execute (create GitHub issues, update Shopify products, write KB pages)
-- **Full audit trail** — every agent action, every task, every approval logged
-- **External agent protocol (BAP)** — connect any agent on any machine via HTTP
-- **Telegram notifications** — signals, task approvals, and agent briefings with inline buttons
+## What is Blueprint?
 
-## Quick start
+Blueprint connects to your business tools, detects signals in your data, and uses AI agents to propose and execute improvements — with your approval at every step.
 
-### Requirements
+**The loop:**
 
-- Node.js 20+ or Bun 1.0+
-- Docker + Docker Compose (recommended)
-- Claude Code CLI installed and authenticated (or Anthropic API key, or Ollama for local LLMs)
+1. **Connectors** pull data from your tools every few hours
+2. **Signal rules** detect anomalies, drops, and opportunities
+3. **AI agents** analyse the data and propose specific tasks
+4. **You approve** tasks via dashboard or Telegram
+5. **Blueprint executes** — creates GitHub issues, updates Shopify products, writes content
+6. **Outcome tracking** checks whether the change actually worked, 2 and 4 weeks later
+7. A **compounding knowledge base** grows smarter with every cycle
 
-### Docker (recommended)
+Everything is logged. Every action has a paper trail. You can roll back any change.
+
+## Quick Start
+
+**Docker (recommended — runs in 2 minutes):**
 
 ```bash
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
 cp .env.example .env
-# Edit .env — set ENCRYPTION_KEY, SESSION_SECRET, ADMIN_PASSWORD at minimum
+# Edit .env — add ANTHROPIC_API_KEY at minimum
 docker compose up -d
 ```
 
-Open http://localhost:3000
+Open **http://localhost:4000** — the onboarding wizard guides you through the rest.
 
-### Local development
+**Local development:**
 
 ```bash
 git clone https://github.com/chrisgwynne/blueprint
 cd blueprint
-
-# Install dependencies
-cd server && bun install
-cd ../client && bun install
-
-# Set up environment
-cd ..
-cp .env.example .env
-# Edit .env — set ENCRYPTION_KEY, SESSION_SECRET, ADMIN_PASSWORD
-
-# Initialise database
-cd server && bun run db/init.js
-
-# Start API server
-bun run index.js          # API on :4000
-
-# In another terminal — start frontend dev server
-cd client && bun run dev  # UI on :5173
+bash scripts/setup.sh
+# Add ANTHROPIC_API_KEY to .env
+cd server && bun index.js
 ```
 
-## First steps after install
+## Connectors
 
-1. Log in with the credentials from your `.env` (default: admin / changeme)
-2. The onboarding wizard guides you through creating your first business
-3. Connect PageSpeed first (no auth needed — just your URL)
-4. Connect Google (GA4 + GSC via OAuth) for search and traffic data
-5. Enable agents — Conductor is always on, add SEO Sentinel and Quill for content
-6. Watch signals appear within minutes of the first connector sync
+14 connectors out of the box:
 
-## Connecting Google (GA4 + GSC + GBP)
+| Category | Connectors |
+|----------|-----------|
+| **Search & SEO** | Google Analytics 4, Google Search Console, PageSpeed, Google Business Profile, Google Ads |
+| **Commerce** | Shopify, Stripe |
+| **Email** | Brevo |
+| **Productivity** | Todoist |
+| **Infrastructure** | UptimeRobot |
+| **Code** | GitHub |
+| **CMS** | WordPress, Kirby |
+| **Marketing** | Stannp |
 
-1. [Google Cloud Console](https://console.cloud.google.com) → New project → Enable APIs:
-   - Google Search Console API
-   - Google Analytics Data API
-   - My Business Account Management API (for GBP)
-2. OAuth consent screen → External → Add your Google account as test user
-3. Credentials → OAuth 2.0 Client ID → Web application
-4. Authorised redirect URI: `http://localhost:4000/api/oauth/google/callback`
-5. Add Client ID + Secret to `.env`
+Building your own connector takes about 2 hours — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Connecting Telegram
+## Agents
 
-1. Message [@BotFather](https://t.me/botfather) → `/newbot`
-2. Copy token to `TELEGRAM_BOT_TOKEN` in `.env`
-3. Start a chat with your bot, send any message
-4. Get chat ID: `https://api.telegram.org/bot<TOKEN>/getUpdates`
-5. Copy chat ID to `TELEGRAM_CHAT_ID` in `.env`
+12 specialist agents, each with an identity, values, and operating principles defined in editable markdown soul files:
 
-Task approval requests arrive as Telegram messages with inline Approve/Reject buttons.
+| Agent | Role |
+|-------|------|
+| **Conductor** | Strategy & orchestration — the central brain |
+| **SEO Sentinel** | Search rankings, keywords, Core Web Vitals |
+| **Quill** | Copywriting and content strategy |
+| **Trend Spotter** | Growth opportunities and market patterns |
+| **Reporter** | Weekly briefings and monthly reports |
+| **Merchant** | Shopify and ecommerce operations |
+| **Velocity** | Performance and speed |
+| **Ledger** | Revenue intelligence |
+| **Sentinel** | Infrastructure monitoring |
+| **Researcher** | Competitive intelligence |
+| **Dev** | GitHub PRs and issues |
+| **Outreach** | Campaign intelligence |
 
-## External agents (BAP)
+Agents use any LLM: Claude, GPT-4, Gemini, or local models via Ollama.
 
-Any agent that can make HTTP requests can connect to Blueprint:
+## Knowledge Base
+
+A compounding knowledge base following the [Karpathy LLM wiki pattern](https://karpathy.ai) — a persistent, file-based, git-backed wiki that grows smarter with every agent run, every signal, and every insight.
+
+- **Three layers**: raw sources (immutable) → wiki pages (LLM-maintained) → schema (co-evolved)
+- **Wikilinks**: `[[cross-references]]` with backlink tracking
+- **Contradiction detection**: flags conflicts instead of silently overwriting
+- **Obsidian compatible**: point Blueprint at an existing vault
+
+## Write-Back Actions
+
+Approved tasks don't just create reports — they execute real changes:
+
+- **GitHub**: create issues, open draft PRs
+- **Shopify**: create products (draft), update descriptions, manage tags, edit collections
+- **Knowledge Base**: write research pages, file query results
+
+Every write-back creates rollback data. Every action can be undone.
+
+## External Agents (BAP)
+
+Any agent that speaks HTTP can connect via the Blueprint Agent Protocol:
 
 ```bash
 # Register
 curl -X POST http://localhost:4000/api/bap/v1/register \
   -H "Content-Type: application/json" \
-  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose","kb:read"],"business_access":["*"]}'
+  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose"],"business_access":["*"]}'
 
-# Use the returned API key
-curl http://localhost:4000/api/bap/v1/businesses/YOUR_BIZ_ID/health \
+# Get business health
+curl http://localhost:4000/api/bap/v1/businesses/BIZ_ID/health \
   -H "BAP-Key: bap_your_key_here"
 ```
 
-See [server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for the full protocol documentation with Node.js and Python SDK examples.
+See [AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for Node.js and Python SDKs.
 
 ## Architecture
 
@@ -113,50 +141,36 @@ See [server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for the full protocol
 |---|---|
 | Backend | Bun + Express + SQLite (better-sqlite3, WAL mode) |
 | Frontend | React 18 + Vite 5 + Tailwind CSS |
-| LLM | Claude Code CLI (default), Anthropic API, OpenAI, Google Gemini, Ollama, LM Studio |
+| LLM | Claude Code CLI (default), Anthropic API, OpenAI, Gemini, Ollama, LM Studio |
 | KB | File-based markdown, isomorphic-git, Obsidian-compatible |
 | Deploy | Docker Compose, single container |
 
-## Connectors
+## Self-Hosting
 
-| Connector | Auth | Category | Signal rules |
-|---|---|---|---|
-| Google Analytics 4 | OAuth2 | Analytics | 5 |
-| Google Search Console | OAuth2 | SEO | 5 |
-| PageSpeed Insights | API key (optional) | Performance | 6 |
-| Google Business Profile | OAuth2 | Local | 8 |
-| Shopify | API key | Ecommerce | 4 |
-| Stripe | API key | Payments | 4 |
-| GitHub | PAT | Code | 4 |
-| Brevo | API key | Email | 3 |
-| Todoist | OAuth2 | Productivity | 3 |
-| UptimeRobot | API key | Infrastructure | 4 |
-| WordPress | App password | CMS | 4 |
-| Kirby | Basic auth | CMS | 3 |
-| Google Ads | OAuth2 | Advertising | 5 |
-| Stannp | API key | Direct mail | 3 |
+Blueprint is designed for self-hosted deployment:
 
-## Agents
+- **Docker Compose** — `docker compose up -d`
+- **Coolify** — one-click deploy from this repo
+- **Bare metal** — `bash scripts/setup.sh`
+- **Raspberry Pi** — use Ollama-only mode (no API costs)
 
-| Agent | Role | Default status |
+## Requirements
+
+| | Minimum | Recommended |
 |---|---|---|
-| Conductor | Strategy & orchestration — the central brain | Active |
-| SEO Sentinel | Search intelligence — rankings, keywords, CWV | Active (paused) |
-| Quill | Content & copy strategy | Active (paused) |
-| Trend Spotter | Growth opportunities & market patterns | Active (paused) |
-| Merchant | Ecommerce operations (Shopify focus) | Template |
-| Velocity | Performance & speed | Template |
-| Ledger | Revenue & financial signals | Template |
-| Researcher | Competitive intelligence | Template |
-| Reporter | Weekly/monthly summaries | Template |
-| Dev | Technical tasks & GitHub integration | Template |
-| Outreach | Marketing & communications | Template |
-| Sentinel | Infrastructure monitoring | Template |
+| Node.js | 20.0 | 22.0 LTS |
+| RAM | 512MB | 2GB |
+| Disk | 1GB | 10GB |
+| LLM | Ollama (free) | Claude Sonnet |
 
-## Environment variables
+## Environment Variables
 
 See [.env.example](.env.example) for full documentation of all variables.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and connector building guide.
+
 ## License
 
-MIT
+[MIT](LICENSE) — use it, modify it, ship it.

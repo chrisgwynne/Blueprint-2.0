@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install server dependencies
+        run: cd server && bun install
+
+      - name: Install client dependencies
+        run: cd client && bun install
+
+      - name: Build client
+        run: cd client && bun run build
+
+      - name: Check for secrets in code
+        run: |
+          if grep -r "sk-ant-api" . --include="*.js" --include="*.jsx" \
+             --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git; then
+            echo "ERROR: Real API key found in code"
+            exit 1
+          fi
+          echo "No secrets found"
