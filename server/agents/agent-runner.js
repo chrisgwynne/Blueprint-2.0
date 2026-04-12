@@ -592,6 +592,16 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     // 16. Brief conductor (non-conductor runs only)
     briefConductor(agentId, parsed, businessId);
 
+    // 16b. Dispatch BAP webhook for agent.run.complete
+    try {
+      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
+      dispatchWebhookEvent('agent.run.complete', {
+        run_id: runId, agent_id: agentId, business_id: businessId,
+        status: 'complete', tasks_proposed: createdTasks.length,
+        signals_detected: signalsDetected, cost_usd: costUsd,
+      });
+    } catch {}
+
     // 17. Write significant findings to the KB (non-fatal — never blocks the run)
     if (createdTasks.length > 0 || (parsed.reasoning && parsed.reasoning.length > 200)) {
       try {

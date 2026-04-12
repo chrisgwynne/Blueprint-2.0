@@ -72,6 +72,22 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
 
     newSignalIds.push(signalId);
     console.log(`[signal-engine] New signal created: ${signalId} (rule: ${rule.id}, severity: ${rule.severity})`);
+
+    // Dispatch BAP webhook events
+    try {
+      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
+      dispatchWebhookEvent('signal.created', {
+        signal_id: signalId, business_id: businessId, type: rule.type,
+        severity: rule.severity, title: result.title, confidence: result.confidence,
+        connector: connectorId, rule_id: rule.id,
+      });
+      if (rule.severity === 'critical') {
+        dispatchWebhookEvent('signal.critical', {
+          signal_id: signalId, business_id: businessId, type: rule.type,
+          severity: 'critical', title: result.title, confidence: result.confidence,
+        });
+      }
+    } catch {}
   }
 
   return newSignalIds;

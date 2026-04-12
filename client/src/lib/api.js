@@ -173,6 +173,15 @@ export const ingestKb = (businessId, data) => post(`/kb/${businessId}/ingest`, d
 export const queryKb = (businessId, data) => post(`/kb/${businessId}/query`, data)
 export const lintKb = (businessId) => post(`/kb/${businessId}/lint`)
 
+// ============================================
+// BAP — External Agents management (admin UI)
+// ============================================
+
+export const getBapAgents = () => get('/bap/v1/agents-admin')   // custom admin route (below)
+export const revokeBapAgent = (agentId) => post(`/bap/v1/agents-admin/${agentId}/revoke`)
+export const getBapAudit = (agentId, params) => get(`/bap/v1/agents-admin/${agentId}/audit`, params)
+export const getBapDeliveries = (agentId, params) => get(`/bap/v1/agents-admin/${agentId}/deliveries`, params)
+
 // LEGACY (kept for backwards-compat with anything still importing these — will be removed)
 export const getKbDocs = (params) => get('/kb', params)
 export const getKbDoc = (path) => get(`/kb/${path}`)

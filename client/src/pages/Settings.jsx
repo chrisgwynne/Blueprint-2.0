@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw } from 'lucide-react'
+import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit } from '../lib/api.js'
+import { formatDistanceToNow } from 'date-fns'
 
 const TABS = [
   { id: 'business',  label: 'Business Profile' },
@@ -10,6 +11,7 @@ const TABS = [
   { id: 'llm',       label: 'LLM Providers' },
   { id: 'kb',        label: 'Knowledge Base' },
   { id: 'agents',    label: 'Agent Defaults' },
+  { id: 'integrations', label: 'External Agents' },
   { id: 'data',      label: 'Data' },
   { id: 'system',    label: 'System' },
   { id: 'about',     label: 'About' },
@@ -1078,6 +1080,148 @@ function KBTab() {
 // ============================================
 // Settings Page
 // ============================================
+// Tab: External Agents (BAP)
+// ============================================
+function IntegrationsTab() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [agents, setAgents] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [selectedAgent, setSelectedAgent] = useState(null)
+  const [auditLog, setAuditLog] = useState([])
+
+  useEffect(() => {
+    getBapAgents()
+      .then((data) => setAgents(data?.agents ?? []))
+      .catch(() => setAgents([]))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleRevoke(agentId) {
+    if (!confirm('Revoke this agent? Its API key will immediately stop working.')) return
+    try {
+      await revokeBapAgent(agentId)
+      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, status: 'revoked' } : a))
+      addNotification({ type: 'success', message: 'Agent revoked' })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  async function viewLog(agentId) {
+    setSelectedAgent(agentId)
+    try {
+      const data = await getBapAudit(agentId, { limit: 50 })
+      setAuditLog(data?.calls ?? [])
+    } catch {
+      setAuditLog([])
+    }
+  }
+
+  if (loading) {
+    return <div className="text-xs text-blueprint-muted">Loading external agents…</div>
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section
+        title="External Agents (BAP)"
+        description="Agents connected via the Blueprint Agent Protocol. Any agent that speaks HTTP can register and participate."
+      >
+        <p className="text-xs text-blueprint-muted mb-3">
+          To register a new agent, POST to <code className="text-blueprint-muted/80">/api/bap/v1/register</code>. See the AGENT-GUIDE.md in server/bap/ for details.
+        </p>
+
+        {agents.length === 0 ? (
+          <div className="text-center py-8 text-blueprint-muted text-xs">
+            No external agents registered yet.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {agents.map((agent) => (
+              <div key={agent.id} className="bp-card p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Bot size={14} className="text-blueprint-blue flex-shrink-0" />
+                    <span className="text-sm font-semibold text-slate-100">{agent.name}</span>
+                    <span className={clsx(
+                      'text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider',
+                      agent.status === 'active' ? 'bg-green-500/20 text-green-400' :
+                      agent.status === 'revoked' ? 'bg-red-500/20 text-red-400' :
+                      'bg-yellow-500/20 text-yellow-400'
+                    )}>
+                      {agent.status}
+                    </span>
+                  </div>
+                  {agent.status === 'active' && (
+                    <button
+                      onClick={() => handleRevoke(agent.id)}
+                      className="text-[10px] text-red-400 hover:text-red-300"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                </div>
+
+                {agent.description && (
+                  <p className="text-xs text-blueprint-muted mb-2">{agent.description}</p>
+                )}
+
+                <div className="grid grid-cols-2 gap-2 text-[10px] text-blueprint-muted">
+                  <div>API Key: <span className="text-slate-300 font-mono">{agent.api_key_prefix}••••</span></div>
+                  <div>Total calls: <span className="text-slate-300">{agent.total_calls?.toLocaleString()}</span></div>
+                  <div>Last seen: <span className="text-slate-300">{agent.last_seen ? formatDistanceToNow(new Date(agent.last_seen), { addSuffix: true }) : 'never'}</span></div>
+                  <div>Webhook: <span className="text-slate-300">{agent.webhook_url ? '✅ configured' : '—'}</span></div>
+                  <div className="col-span-2">
+                    Permissions: <span className="text-slate-300">
+                      {(agent.permissions ?? []).join(', ') || '(none)'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex gap-2 mt-3">
+                  <button
+                    onClick={() => viewLog(agent.id)}
+                    className="text-[10px] text-blueprint-blue hover:text-blue-300"
+                  >
+                    View call log
+                  </button>
+                </div>
+
+                {/* Inline call log */}
+                {selectedAgent === agent.id && auditLog.length > 0 && (
+                  <div className="mt-3 border-t border-blueprint-border pt-3">
+                    <div className="text-[10px] text-blueprint-muted uppercase tracking-wider mb-2">Recent API Calls</div>
+                    <div className="max-h-48 overflow-y-auto space-y-1">
+                      {auditLog.map((call) => (
+                        <div key={call.id} className="flex items-center gap-2 text-[10px] font-mono">
+                          <span className={clsx(
+                            'w-8',
+                            call.status_code < 300 ? 'text-green-400' :
+                            call.status_code < 400 ? 'text-yellow-400' : 'text-red-400'
+                          )}>
+                            {call.status_code}
+                          </span>
+                          <span className="text-blueprint-muted w-8">{call.method}</span>
+                          <span className="text-slate-300 flex-1 truncate">{call.endpoint}</span>
+                          <span className="text-blueprint-muted">{call.duration_ms}ms</span>
+                          <span className="text-blueprint-muted">
+                            {formatDistanceToNow(new Date(call.created_at), { addSuffix: true })}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </div>
+  )
+}
+
+// ============================================
 function Settings() {
   const [activeTab, setActiveTab] = useState('business')
 
@@ -1087,6 +1231,7 @@ function Settings() {
     llm:           <LLMTab />,
     kb:            <KBTab />,
     agents:        <AgentDefaultsTab />,
+    integrations:  <IntegrationsTab />,
     data:          <DataTab />,
     system:        <SystemTab />,
     about:         <AboutTab />,

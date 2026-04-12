@@ -1,5 +1,17 @@
 import db, { generateId, audit } from '../db/db.js';
 
+// Lazy import for webhook dispatch (avoids circular dependency at startup)
+let _dispatch = null;
+function fireWebhook(event, data) {
+  if (!_dispatch) {
+    import('../bap/webhook-dispatcher.js')
+      .then((m) => { _dispatch = m.dispatchWebhookEvent; _dispatch(event, data); })
+      .catch(() => {});
+  } else {
+    try { _dispatch(event, data); } catch {}
+  }
+}
+
 const VALID_TRANSITIONS = {
   proposed: ['approved', 'rejected'],
   approved: ['executing', 'rejected'],
@@ -156,6 +168,24 @@ export function updateTaskStatus(id, newStatus, actor, metadata = {}) {
     metadata
   );
 
+  // Dispatch BAP webhook for terminal statuses
+  if (newStatus === 'complete' || newStatus === 'verified') {
+    fireWebhook('task.complete', {
+      task_id: id, business_id: existing.business_id,
+      title: existing.title, outcome: metadata.outcome ?? null,
+    });
+  } else if (newStatus === 'failed') {
+    fireWebhook('task.failed', {
+      task_id: id, business_id: existing.business_id,
+      title: existing.title, outcome: metadata.outcome ?? null,
+    });
+  } else if (newStatus === 'rejected') {
+    fireWebhook('task.rejected', {
+      task_id: id, business_id: existing.business_id,
+      title: existing.title, rejection_reason: metadata.reason ?? null,
+    });
+  }
+
   return after;
 }
 
@@ -184,6 +214,13 @@ export function approveTask(id, approvedBy) {
   const before = parseRow(existing);
   let after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id));
   audit(existing.business_id, 'task', id, 'approve', approvedBy, before, after);
+
+  // Dispatch BAP webhook
+  fireWebhook('task.approved', {
+    task_id: id, business_id: existing.business_id,
+    title: existing.title, approved_by: approvedBy,
+    action_type: existing.action_type,
+  });
 
   // Auto-execute green tasks in auto approval mode
   if (existing.trust_tier === 'green' && existing.approval_mode === 'auto') {

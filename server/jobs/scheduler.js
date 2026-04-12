@@ -115,12 +115,32 @@ async function syncConnector(connector) {
     `).run(connector.id);
 
     console.log(`[scheduler] Synced connector '${connector.name}' (${connector.type}). New signals: ${newSignals.length}`);
+
+    // BAP webhook: connector.sync.complete
+    try {
+      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
+      dispatchWebhookEvent('connector.sync.complete', {
+        connector_id: connector.id, connector_type: connector.type,
+        business_id: connector.business_id, signals_created: newSignals.length,
+      });
+    } catch {}
+
     return { ok: true, newSignals };
   } catch (err) {
     db.prepare(`
       UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?
     `).run(err.message.substring(0, 500), connector.id);
     console.error(`[scheduler] Sync failed for connector '${connector.name}':`, err.message);
+
+    // BAP webhook: connector.error
+    try {
+      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
+      dispatchWebhookEvent('connector.error', {
+        connector_id: connector.id, connector_type: connector.type,
+        business_id: connector.business_id, error: err.message,
+      });
+    } catch {}
+
     return { ok: false, error: err.message };
   }
 }
@@ -276,6 +296,19 @@ export function startScheduler() {
       }
     } catch (err) {
       console.error('[scheduler] Weekly KB lint failed:', err);
+    }
+  });
+
+  // Every 5 minutes: retry failed BAP webhook deliveries
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { retryPendingDeliveries } = await import('../bap/webhook-dispatcher.js');
+      const retried = await retryPendingDeliveries();
+      if (retried > 0) {
+        console.log(`[scheduler] Retried ${retried} BAP webhook deliveries.`);
+      }
+    } catch (err) {
+      console.error('[scheduler] BAP webhook retry failed:', err.message);
     }
   });
 

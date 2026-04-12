@@ -166,6 +166,7 @@ const mountRoutes = async () => {
   const { default: oauthRoutes } = await import('./routes/oauth.js');
   const { default: connectorDataRoutes } = await import('./routes/connector-data.js');
   const { default: llmRoutes } = await import('./routes/llm.js');
+  const { default: bapRoutes } = await import('./routes/bap.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
   app.use('/api/auth', authRoutes);
@@ -181,6 +182,7 @@ const mountRoutes = async () => {
   app.use('/api/notifications', notificationsRoutes);
   app.use('/api/connector-data', connectorDataRoutes);
   app.use('/api/llm', llmRoutes);
+  app.use('/api/bap/v1', bapRoutes);
 
   // System maintenance endpoint
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
