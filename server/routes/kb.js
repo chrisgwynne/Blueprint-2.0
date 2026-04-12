@@ -376,4 +376,130 @@ router.post('/:businessId/lint', async (req, res) => {
   }
 });
 
+// ─── Review queue ────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/kb/:businessId/review-queue
+ * Pages written by agents that need human review.
+ */
+router.get('/:businessId/review-queue', async (req, res) => {
+  try {
+    const { engine } = await getEngine(req.params.businessId);
+    const files = await engine.listFiles();
+    const pending = [];
+
+    for (const f of files) {
+      try {
+        const file = await engine.readFile(f);
+        if (file.frontmatter?.review_status === 'pending_review') {
+          pending.push({
+            path: f,
+            title: file.frontmatter.title ?? f,
+            written_by: file.frontmatter.written_by ?? 'unknown',
+            written_at: file.frontmatter.written_at ?? null,
+            confidence: file.frontmatter.confidence ?? null,
+          });
+        }
+      } catch {}
+    }
+
+    pending.sort((a, b) => (b.written_at ?? '').localeCompare(a.written_at ?? ''));
+    return res.json({ pending, count: pending.length });
+  } catch (err) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/kb/:businessId/review/:path(*)/approve
+ */
+router.post('/:businessId/review/*/approve', async (req, res) => {
+  try {
+    const { engine } = await getEngine(req.params.businessId);
+    const filePath = req.params[0];
+    const file = await engine.readFile(filePath);
+    await engine.writeFile(filePath, file.content, {
+      ...file.frontmatter,
+      review_status: 'human_verified',
+      verified_by: req.session?.userId ?? 'human',
+      verified_at: new Date().toISOString().split('T')[0],
+    }, `review: verified ${filePath}`);
+    return res.json({ ok: true, path: filePath, review_status: 'human_verified' });
+  } catch (err) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/kb/:businessId/review/:path(*)/flag
+ * Body: { reason }
+ */
+router.post('/:businessId/review/*/flag', async (req, res) => {
+  try {
+    const { engine } = await getEngine(req.params.businessId);
+    const filePath = req.params[0];
+    const file = await engine.readFile(filePath);
+    await engine.writeFile(filePath, file.content, {
+      ...file.frontmatter,
+      review_status: 'flagged',
+      flag_reason: req.body.reason ?? 'Flagged for review',
+      flagged_by: req.session?.userId ?? 'human',
+      flagged_at: new Date().toISOString().split('T')[0],
+    }, `review: flagged ${filePath}`);
+    return res.json({ ok: true, path: filePath, review_status: 'flagged' });
+  } catch (err) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/kb/:businessId/health
+ * KB health summary.
+ */
+router.get('/:businessId/health', async (req, res) => {
+  try {
+    const { engine } = await getEngine(req.params.businessId);
+    const files = await engine.listFiles();
+    const lint = await engine.lint();
+
+    let agentWritten = 0, humanVerified = 0, pendingReview = 0, flagged = 0;
+    let totalConfidence = 0, confidenceCount = 0;
+
+    for (const f of files) {
+      try {
+        const file = await engine.readFile(f);
+        const fm = file.frontmatter ?? {};
+        if (fm.written_by === 'agent' || fm.written_by === 'llm') agentWritten++;
+        if (fm.review_status === 'human_verified') humanVerified++;
+        else if (fm.review_status === 'pending_review') pendingReview++;
+        else if (fm.review_status === 'flagged') flagged++;
+        if (fm.confidence != null) {
+          totalConfidence += fm.confidence;
+          confidenceCount++;
+        }
+      } catch {}
+    }
+
+    const avgConfidence = confidenceCount > 0 ? Math.round((totalConfidence / confidenceCount) * 100) / 100 : null;
+    const healthScore = Math.max(0, Math.min(100,
+      100 - (lint.dead_links.length * 2) - (lint.orphans.length * 3) - (flagged * 10) - (pendingReview > 10 ? 10 : 0)
+    ));
+
+    return res.json({
+      total_pages: files.length,
+      agent_written: agentWritten,
+      human_verified: humanVerified,
+      pending_review: pendingReview,
+      flagged,
+      contradictions_open: lint.contradictions.length,
+      orphan_pages: lint.orphans.length,
+      dead_links: lint.dead_links.length,
+      avg_confidence: avgConfidence,
+      health_score: healthScore,
+    });
+  } catch (err) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+});
+
 export default router;

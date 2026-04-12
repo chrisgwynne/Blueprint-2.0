@@ -61,6 +61,19 @@ export class KBAgent {
     this.model = model;
   }
 
+  /**
+   * Write a file with agent review metadata automatically injected.
+   */
+  async _agentWrite(path, content, frontmatter, commitMsg, confidence = 0.8) {
+    return this.kb.writeFile(path, content, {
+      ...frontmatter,
+      written_by: 'agent',
+      written_at: todayISO(),
+      review_status: 'pending_review',
+      confidence,
+    }, commitMsg);
+  }
+
   // ── Ingest ──────────────────────────────────────────────────────────────────
 
   /**
@@ -156,8 +169,8 @@ Respond ONLY with valid JSON in this exact shape (no markdown fences, no prose):
     const sourceSlug = slugify(sourceTitle);
     const sourcePagePath = `sources/${sourceSlug}.md`;
 
-    // Write the source-summary page
-    await this.kb.writeFile(
+    // Write the source-summary page (with agent review metadata)
+    await this._agentWrite(
       sourcePagePath,
       `${parsed.summary ?? '(no summary)'}\n\n*Original source: \`${rawPath}\`*\n\n## Key Entities\n${(parsed.key_entities ?? []).map((e) => `- ${e}`).join('\n') || '_(none)_'}\n\n## Key Concepts\n${(parsed.key_concepts ?? []).map((c) => `- ${c}`).join('\n') || '_(none)_'}`,
       {
