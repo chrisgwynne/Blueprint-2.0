@@ -48,8 +48,13 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
     const args = [
       '--print',
       '--output-format', 'json',
-      '--dangerously-skip-permissions',
     ];
+
+    // --dangerously-skip-permissions is refused when running as root for security.
+    // In non-interactive --print mode there are no permission prompts anyway,
+    // so we only pass it when not running as root.
+    const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+    if (!isRoot) args.push('--dangerously-skip-permissions');
 
     if (model) args.push('--model', model);
     if (sysTmp) args.push('--system-prompt-file', sysFile);

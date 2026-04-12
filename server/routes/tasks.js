@@ -3,6 +3,7 @@ import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { createTask, listTasks, approveTask, rejectTask, updateTaskStatus } from '../tasks/task-queue.js';
 import { createTaskEvent, getTaskEvents } from '../tasks/task-events.js';
+import { executeTask, isExecutable } from '../tasks/executor.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -114,6 +115,12 @@ router.post('/', (req, res) => {
 
 /**
  * PATCH /api/tasks/:id/approve
+ *
+ * Approves the task. If the task's action_type is executable (github_issue,
+ * github_pr, investigation, content_draft), the executor is fired in the
+ * background — the HTTP response returns immediately with status='approved',
+ * and the executor transitions the task through executing → complete/failed.
+ * The frontend can poll task detail or task events to see the result.
  */
 router.patch('/:id/approve', (req, res) => {
   try {
@@ -121,6 +128,15 @@ router.patch('/:id/approve', (req, res) => {
     const approver = req.session.userId;
     const task = approveTask(id, approver);
     createTaskEvent(id, 'approved', approver, 'Task approved', {});
+
+    // Fire-and-forget execution for executable action types
+    if (task && isExecutable(task.action_type)) {
+      // Don't await — let the HTTP response return immediately
+      executeTask(task.id).catch((err) => {
+        console.error(`[tasks] Background execution of ${task.id} crashed:`, err);
+      });
+    }
+
     return res.json(parseRow(task));
   } catch (err) {
     if (err.message.includes('not found')) return res.status(404).json({ error: err.message });

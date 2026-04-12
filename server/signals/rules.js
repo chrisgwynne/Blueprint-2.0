@@ -1058,6 +1058,337 @@ export const rules = [
     },
   },
 
+  // ─── GOOGLE BUSINESS PROFILE ────────────────────────────────────────────────
+
+  {
+    id: 'gbp_rating_drop',
+    connectorType: 'gbp',
+    type: 'rating_drop',
+    severity: 'alert',
+    name: 'GBP Rating Drop',
+    evaluate(current, previous) {
+      const curr = current?.['gbp.avg_rating'] ?? current?.avg_rating;
+      const prev = previous?.['gbp.avg_rating'] ?? previous?.avg_rating;
+      if (curr == null || prev == null) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = prev - curr;
+      if (drop < 0.2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: Math.min(0.95, drop * 2),
+        data: { from: prev, to: curr, drop: Math.round(drop * 100) / 100 },
+        title: `Average rating fell from ${prev.toFixed(2)} to ${curr.toFixed(2)}`,
+        description: 'Customer rating has dropped meaningfully. Review recent low-star reviews and respond.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_negative_review',
+    connectorType: 'gbp',
+    type: 'negative_review',
+    severity: 'alert',
+    name: 'New Negative Review',
+    evaluate(current, previous) {
+      const currNeg = (current?.reviews_1star ?? 0) + (current?.reviews_2star ?? 0);
+      const prevNeg = (previous?.reviews_1star ?? 0) + (previous?.reviews_2star ?? 0);
+      const newNeg = currNeg - prevNeg;
+      if (newNeg <= 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { new_count: newNeg, total: currNeg },
+        title: `${newNeg} new 1-2 star review${newNeg > 1 ? 's' : ''}`,
+        description: 'A new negative review was posted. Respond quickly and consider offering remediation.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_review_unanswered',
+    connectorType: 'gbp',
+    type: 'review_unanswered',
+    severity: 'warning',
+    name: 'Unanswered Reviews',
+    evaluate(current) {
+      const count = current?.unanswered_reviews ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count },
+        title: `${count} review${count > 1 ? 's' : ''} awaiting response`,
+        description: 'Responding to reviews (especially negative ones) signals an engaged business and improves trust.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_views_drop',
+    connectorType: 'gbp',
+    type: 'views_drop',
+    severity: 'warning',
+    name: 'GBP Views Drop',
+    evaluate(current, previous) {
+      const curr = current?.views_total ?? 0;
+      const prev = previous?.views_total ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: Math.min(0.9, dropPct),
+        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
+        title: `Profile views down ${Math.round(dropPct * 100)}%`,
+        description: 'Maps + Search views are dropping. Check listing accuracy, photos, and recent posts.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_calls_drop',
+    connectorType: 'gbp',
+    type: 'calls_drop',
+    severity: 'warning',
+    name: 'Phone Calls Drop',
+    evaluate(current, previous) {
+      const curr = current?.actions_phone ?? 0;
+      const prev = previous?.actions_phone ?? 0;
+      if (prev < 5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.25) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { from: prev, to: curr },
+        title: `Phone calls from GBP fell ${Math.round(dropPct * 100)}%`,
+        description: 'Call volume from your business profile has dropped. Verify phone number is correct and visible.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_search_drop',
+    connectorType: 'gbp',
+    type: 'search_drop',
+    severity: 'warning',
+    name: 'GBP Search Queries Drop',
+    evaluate(current, previous) {
+      const curr = current?.queries_total ?? 0;
+      const prev = previous?.queries_total ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: Math.min(0.9, dropPct),
+        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
+        title: `Search queries finding your business down ${Math.round(dropPct * 100)}%`,
+        description: 'Fewer searches are surfacing your business. Review categories, services, and posting cadence.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_no_recent_posts',
+    connectorType: 'gbp',
+    type: 'posting_lapse',
+    severity: 'info',
+    name: 'No Recent GBP Posts',
+    evaluate(current) {
+      const days = current?.days_since_post ?? 999;
+      if (days <= 14) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { days_since_post: days },
+        title: `No GBP posts in ${days} days`,
+        description: 'Regular posts (offers, events, news) keep your profile active and improve visibility.',
+      };
+    },
+  },
+
+  {
+    id: 'gbp_unanswered_questions',
+    connectorType: 'gbp',
+    type: 'unanswered_questions',
+    severity: 'info',
+    name: 'Unanswered GBP Questions',
+    evaluate(current) {
+      const count = current?.unanswered_qa ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count },
+        title: `${count} unanswered question${count > 1 ? 's' : ''} on your GBP listing`,
+        description: 'Customers and prospects are waiting for answers. Reply to claim authoritative voice.',
+      };
+    },
+  },
+
+  // ─── STRIPE ─────────────────────────────────────────────────────────────────
+
+  {
+    id: 'stripe_mrr_drop',
+    connectorType: 'stripe',
+    type: 'mrr_drop',
+    severity: 'alert',
+    name: 'Stripe MRR Drop',
+    evaluate(current, previous) {
+      const curr = current?.mrr ?? 0;
+      const prev = previous?.mrr ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.05) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
+        title: `MRR fell ${Math.round(dropPct * 100)}% (£${prev.toFixed(2)} → £${curr.toFixed(2)})`,
+        description: 'Monthly recurring revenue is shrinking. Check for cancellations, downgrades, and failed payments.',
+      };
+    },
+  },
+
+  {
+    id: 'stripe_failed_payments',
+    connectorType: 'stripe',
+    type: 'failed_payments',
+    severity: 'alert',
+    name: 'Stripe Failed Payments',
+    evaluate(current) {
+      const count = current?.failed_payments_30d ?? 0;
+      if (count <= 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count },
+        title: `${count} failed payments in the last 30 days`,
+        description: 'Payment failures hurt revenue and retention. Set up smart retries and dunning emails.',
+      };
+    },
+  },
+
+  {
+    id: 'stripe_refund_spike',
+    connectorType: 'stripe',
+    type: 'refund_spike',
+    severity: 'warning',
+    name: 'Stripe Refund Spike',
+    evaluate(current) {
+      const rate = current?.refund_rate ?? 0;
+      if (rate <= 5) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { rate: Math.round(rate * 10) / 10 },
+        title: `Refund rate at ${rate.toFixed(1)}% (above 5% threshold)`,
+        description: 'Refunds are climbing. Investigate product issues, fulfilment, or customer-experience problems.',
+      };
+    },
+  },
+
+  {
+    id: 'stripe_revenue_drop',
+    connectorType: 'stripe',
+    type: 'revenue_drop',
+    severity: 'warning',
+    name: 'Stripe Revenue Drop',
+    evaluate(current, previous) {
+      const curr = current?.revenue_30d ?? 0;
+      const prev = previous?.revenue_30d ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const dropPct = (prev - curr) / prev;
+      if (dropPct < 0.1) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.85,
+        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
+        title: `30-day revenue down ${Math.round(dropPct * 100)}%`,
+        description: 'Stripe gross revenue is declining vs the previous period. Drill into channel and product mix.',
+      };
+    },
+  },
+
+  // ─── GITHUB ─────────────────────────────────────────────────────────────────
+
+  {
+    id: 'github_open_prs_growing',
+    connectorType: 'github',
+    type: 'pr_backlog',
+    severity: 'info',
+    name: 'GitHub PR Backlog Growing',
+    evaluate(current) {
+      const count = current?.open_prs_total ?? 0;
+      if (count <= 10) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.8,
+        data: { count },
+        title: `${count} open pull requests`,
+        description: 'PR backlog is growing. Prioritise reviews to unblock contributors and ship faster.',
+      };
+    },
+  },
+
+  {
+    id: 'github_stale_prs',
+    connectorType: 'github',
+    type: 'stale_prs',
+    severity: 'warning',
+    name: 'Stale Pull Requests',
+    evaluate(current) {
+      const count = current?.stale_prs_count ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 0.9,
+        data: { count },
+        title: `${count} pull request${count > 1 ? 's' : ''} open >14 days`,
+        description: 'Stale PRs collect merge conflicts and lose context. Review or close.',
+      };
+    },
+  },
+
+  {
+    id: 'github_failing_checks',
+    connectorType: 'github',
+    type: 'ci_failing',
+    severity: 'alert',
+    name: 'Failing CI Checks',
+    evaluate(current) {
+      const count = current?.failing_checks_count ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count },
+        title: `CI failing on ${count} repo${count > 1 ? 's' : ''}`,
+        description: 'Default branch builds are failing. Fix before merging more changes.',
+      };
+    },
+  },
+
+  {
+    id: 'github_blueprint_pr_pending',
+    connectorType: 'github',
+    type: 'blueprint_pr',
+    severity: 'info',
+    name: 'Blueprint PR Pending Review',
+    evaluate(current) {
+      const count = current?.blueprint_prs_open ?? 0;
+      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const titles = (current?.blueprint_prs_data ?? []).map(p => p.title);
+      return {
+        triggered: true,
+        confidence: 1.0,
+        data: { count, titles },
+        title: `${count} Blueprint-created PR${count > 1 ? 's' : ''} awaiting review`,
+        description: titles.slice(0, 5).map(t => `• ${t}`).join('\n'),
+      };
+    },
+  },
+
   // ─── GOOGLE ADS ─────────────────────────────────────────────────────────────
 
   {

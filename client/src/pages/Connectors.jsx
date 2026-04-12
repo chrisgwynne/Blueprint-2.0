@@ -4,6 +4,8 @@ import { formatDistanceToNow } from 'date-fns'
 import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
+  Activity, CheckSquare, Mail, Send, Globe, FileText, TrendingUp,
+  CreditCard, GitBranch, MapPin,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
@@ -470,11 +472,248 @@ function ShopifySetup({ businessId, existing, onSaved, onClose }) {
 // ─── Add Connector Modal ──────────────────────────────────────────────────────
 
 const CONNECTOR_TYPES = [
-  { id: 'pagespeed', label: 'PageSpeed',       icon: Zap,        available: true  },
-  { id: 'gsc',       label: 'Search Console',  icon: Search,     available: true  },
-  { id: 'ga4',       label: 'Analytics 4',     icon: BarChart2,  available: true  },
-  { id: 'shopify',   label: 'Shopify',          icon: ShoppingBag,available: true  },
+  // Bespoke setup flows
+  { id: 'pagespeed',   label: 'PageSpeed',          icon: Zap,         available: true, custom: true },
+  { id: 'gsc',         label: 'Search Console',     icon: Search,      available: true, custom: true },
+  { id: 'ga4',         label: 'Analytics 4',        icon: BarChart2,   available: true, custom: true },
+  { id: 'shopify',     label: 'Shopify',            icon: ShoppingBag, available: true, custom: true },
+
+  // Generic apikey / basic-auth setup (driven by configFields)
+  { id: 'uptimerobot', label: 'UptimeRobot',        icon: Activity,    available: true,
+    name: 'UptimeRobot',
+    configFields: [
+      { id: 'apiKey', label: 'API Key', type: 'password', required: true,
+        hint: 'UptimeRobot Dashboard → My Settings → API Settings (use a Read-Only key).' },
+    ],
+  },
+  { id: 'brevo',       label: 'Brevo',              icon: Mail,        available: true,
+    name: 'Brevo',
+    configFields: [
+      { id: 'apiKey', label: 'API Key', type: 'password', required: true,
+        hint: 'Brevo Dashboard → Settings → SMTP & API → API Keys.' },
+    ],
+  },
+  { id: 'stannp',      label: 'Stannp',             icon: Send,        available: true,
+    name: 'Stannp',
+    configFields: [
+      { id: 'apiKey', label: 'API Key', type: 'password', required: true,
+        hint: 'Stannp Dashboard → Settings → API.' },
+      { id: 'region', label: 'Region',  type: 'select',   required: true,
+        options: [{ value: 'gb', label: 'GB' }, { value: 'us', label: 'US' }],
+        default: 'gb' },
+    ],
+  },
+  { id: 'wordpress',   label: 'WordPress',          icon: Globe,       available: true,
+    name: 'WordPress',
+    configFields: [
+      { id: 'siteUrl',     label: 'Site URL',             type: 'url',      required: true,
+        hint: 'e.g. https://yoursite.com (no trailing slash).' },
+      { id: 'username',    label: 'WordPress Username',   type: 'text',     required: true },
+      { id: 'appPassword', label: 'Application Password', type: 'password', required: true,
+        hint: 'WP Admin → Users → Profile → Application Passwords.' },
+    ],
+  },
+  { id: 'kirby',       label: 'Kirby CMS',          icon: FileText,    available: true,
+    name: 'Kirby CMS',
+    configFields: [
+      { id: 'siteUrl',     label: 'Kirby Site URL',          type: 'url',      required: true },
+      { id: 'username',    label: 'Panel Username',          type: 'text',     required: true },
+      { id: 'password',    label: 'Panel Password',          type: 'password', required: true },
+      { id: 'contentPath', label: 'Content Path (optional)', type: 'text',     required: false,
+        hint: 'Absolute path to /content if Blueprint shares a filesystem with Kirby.' },
+    ],
+  },
+  { id: 'stripe',      label: 'Stripe',             icon: CreditCard,  available: true,
+    name: 'Stripe',
+    configFields: [
+      { id: 'apiKey',   label: 'Stripe Secret Key', type: 'password', required: true,
+        hint: 'Use a Restricted Key with read-only access. Dashboard → Developers → API Keys.' },
+      { id: 'currency', label: 'Currency',          type: 'select',   required: true,
+        options: [
+          { value: 'gbp', label: 'GBP' },
+          { value: 'usd', label: 'USD' },
+          { value: 'eur', label: 'EUR' },
+        ],
+        default: 'gbp' },
+    ],
+  },
+  { id: 'github',      label: 'GitHub',             icon: GitBranch,   available: true,
+    name: 'GitHub',
+    configFields: [
+      { id: 'token', label: 'Personal Access Token', type: 'password', required: true,
+        hint: 'GitHub → Settings → Developer settings → Personal access tokens (classic). Scope: repo.' },
+      { id: 'owner', label: 'Username or Org',       type: 'text',     required: true },
+      { id: 'repos', label: 'Repositories (optional)', type: 'text',   required: false,
+        hint: 'Comma-separated repo names. Empty = top 10 most recently updated.' },
+    ],
+  },
+
+  // OAuth-based connectors — full-page redirect to /api/oauth/{type}
+  { id: 'todoist',    label: 'Todoist',     icon: CheckSquare, available: true, oauth: '/api/oauth/todoist',    name: 'Todoist' },
+  { id: 'gbp',        label: 'Google Business Profile', icon: MapPin, available: true, oauth: '/api/oauth/gbp', name: 'Google Business Profile' },
+  { id: 'google-ads', label: 'Google Ads',  icon: TrendingUp, available: true, oauth: '/api/oauth/google-ads',  name: 'Google Ads' },
 ]
+
+// ─── Generic config-fields setup (apikey / basic-auth connectors) ──────────────
+
+function GenericConnectorSetup({ businessId, type, existing, onSaved, onClose }) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [values, setValues] = useState(() => {
+    const initial = {}
+    for (const f of type.configFields) {
+      initial[f.id] = (existing?.config?.[f.id] ?? existing?.credentials?.[f.id] ?? f.default ?? '')
+    }
+    return initial
+  })
+  const [saving, setSaving] = useState(false)
+
+  const allRequiredPresent = type.configFields
+    .filter((f) => f.required)
+    .every((f) => {
+      // For password fields, allow empty when editing (means "keep existing")
+      if (existing && f.type === 'password') return true
+      return values[f.id] && String(values[f.id]).trim().length > 0
+    })
+
+  // Determine which fields belong in credentials vs config
+  // Convention: passwords + tokens + apiKey go in credentials; everything else in config.
+  const credentialFieldIds = type.configFields
+    .filter((f) => f.type === 'password' || /^(apiKey|token|appPassword|password)$/i.test(f.id))
+    .map((f) => f.id)
+
+  function partition(values) {
+    const credentials = {}
+    const config = {}
+    for (const f of type.configFields) {
+      const v = values[f.id]
+      if (v == null || v === '') continue
+      if (credentialFieldIds.includes(f.id)) {
+        credentials[f.id] = v
+      } else {
+        // Some non-secret fields (siteUrl, username, owner, region, currency) live in BOTH
+        // credentials and config so the connector code can read them from credentials
+        // (for basic-auth pairs) AND the UI can show them as config.
+        if (['siteUrl', 'username', 'owner', 'region', 'currency', 'accountId', 'locationId', 'customerId', 'managerAccountId'].includes(f.id)) {
+          credentials[f.id] = v
+        }
+        config[f.id] = v
+      }
+    }
+    return { credentials, config }
+  }
+
+  async function handleSave() {
+    if (!allRequiredPresent) return
+    setSaving(true)
+    try {
+      const { credentials, config } = partition(values)
+      if (existing) {
+        // Drop empty password fields so we don't overwrite existing creds
+        const cleanCreds = { ...credentials }
+        for (const f of type.configFields) {
+          if (f.type === 'password' && !values[f.id]) delete cleanCreds[f.id]
+        }
+        const updated = await updateConnector(existing.id, {
+          config,
+          ...(Object.keys(cleanCreds).length > 0 ? { credentials: cleanCreds } : {}),
+        })
+        onSaved(updated)
+        addNotification({ type: 'success', message: `${type.label} connector updated` })
+      } else {
+        const created = await addConnector({
+          type: type.id,
+          business_id: businessId,
+          name: type.name ?? type.label,
+          config,
+          credentials,
+        })
+        onSaved(created)
+        addNotification({ type: 'success', message: `${type.label} connector added` })
+      }
+      onClose()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {type.configFields.map((f) => (
+        <div key={f.id}>
+          <label className="block text-xs text-blueprint-muted mb-1">
+            {f.label}
+            {!f.required && <span className="text-blueprint-muted/60"> (optional)</span>}
+            {existing && f.type === 'password' && <span className="text-blueprint-muted/60"> (leave blank to keep existing)</span>}
+          </label>
+          {f.type === 'select' ? (
+            <select
+              value={values[f.id] || ''}
+              onChange={(e) => setValues((prev) => ({ ...prev, [f.id]: e.target.value }))}
+              className="bp-select w-full"
+            >
+              {f.options?.map((opt) => {
+                const optValue = typeof opt === 'object' ? opt.value : opt
+                const optLabel = typeof opt === 'object' ? opt.label : opt
+                return <option key={optValue} value={optValue}>{optLabel}</option>
+              })}
+            </select>
+          ) : (
+            <input
+              value={values[f.id] || ''}
+              onChange={(e) => setValues((prev) => ({ ...prev, [f.id]: e.target.value }))}
+              className="bp-input"
+              type={f.type === 'password' ? 'password' : f.type === 'url' ? 'url' : 'text'}
+              placeholder={f.hint?.split('.')[0] ?? ''}
+            />
+          )}
+          {f.hint && <p className="text-[10px] text-blueprint-muted mt-1">{f.hint}</p>}
+        </div>
+      ))}
+
+      <div className="flex gap-2">
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+        <button
+          onClick={handleSave}
+          disabled={saving || !allRequiredPresent}
+          className="bp-btn bp-btn-primary text-xs flex-1 justify-center"
+        >
+          {saving ? 'Saving…' : existing ? 'Update' : 'Save Connector'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ─── OAuth-redirect setup (Todoist, GBP, Google Ads) ─────────────────────────
+
+function OAuthConnectorSetup({ businessId, type, existing, onClose }) {
+  const url = `${type.oauth}?businessId=${encodeURIComponent(businessId)}`
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-blueprint-muted">
+        Click below to connect your {type.label} account. You will be redirected to {type.label}
+        to grant Blueprint read access. Once authorised you will be brought back here.
+      </p>
+      {existing && (
+        <div className="text-[10px] text-blueprint-muted bg-blueprint-base/50 border border-blueprint-border rounded p-2">
+          Already connected. Re-running this flow will refresh the credentials.
+        </div>
+      )}
+      <div className="flex gap-2">
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+        <a
+          href={url}
+          className="bp-btn bp-btn-primary text-xs flex-1 justify-center"
+          style={{ textDecoration: 'none' }}
+        >
+          <ExternalLink size={11} /> Connect {type.label}
+        </a>
+      </div>
+    </div>
+  )
+}
 
 function AddConnectorModal({ onClose, onSaved, businessId, connectors }) {
   const [selectedType, setSelectedType] = useState(null)
@@ -498,6 +737,34 @@ function AddConnectorModal({ onClose, onSaved, businessId, connectors }) {
     if (selectedType === 'shopify') {
       return <ShopifySetup businessId={businessId} existing={existingByType.shopify} onSaved={onSaved} onClose={onClose} />
     }
+
+    // Generic / OAuth-driven setups for the rest of the catalog
+    const typeMeta = CONNECTOR_TYPES.find((t) => t.id === selectedType)
+    if (!typeMeta) return null
+
+    if (typeMeta.oauth) {
+      return (
+        <OAuthConnectorSetup
+          type={typeMeta}
+          businessId={businessId}
+          existing={existingByType[typeMeta.id]}
+          onClose={onClose}
+        />
+      )
+    }
+
+    if (Array.isArray(typeMeta.configFields) && typeMeta.configFields.length > 0) {
+      return (
+        <GenericConnectorSetup
+          type={typeMeta}
+          businessId={businessId}
+          existing={existingByType[typeMeta.id]}
+          onSaved={onSaved}
+          onClose={onClose}
+        />
+      )
+    }
+
     return null
   }
 

@@ -7,6 +7,7 @@ import { resolve, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import db, { generateId, audit } from '../db/db.js';
 import { createTask } from '../tasks/task-queue.js';
+import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
@@ -361,7 +362,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
   };
 
-  // 4. Check cost cap
+  // 4. Check cost cap (0 = unlimited, common convention)
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayCost = db.prepare(`
@@ -370,7 +371,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
   `).get(agentId, todayStart.toISOString())?.total ?? 0;
 
   const costCap = llmConfig.cost_cap_daily_usd ?? 2.0;
-  if (todayCost >= costCap) {
+  if (costCap > 0 && todayCost >= costCap) {
     console.warn(`[agent-runner] Agent '${agentId}' has hit daily cost cap ($${costCap}). Skipping.`);
     return { runId: null, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'cost_cap' };
   }
@@ -499,6 +500,25 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
         });
 
         createdTasks.push(task);
+
+        // Record creation event so /api/tasks/:id/history has a timeline
+        try {
+          createTaskEvent(
+            task.id,
+            'created',
+            agentId,
+            `Task created by ${agentId} agent (${trigger}${triggerId ? ':' + triggerId : ''}): "${task.title}"`,
+            {
+              run_id: runId,
+              trigger,
+              trigger_id: triggerId,
+              signal_id: task.signal_id,
+              source: 'agent',
+            }
+          );
+        } catch (evErr) {
+          console.warn('[agent-runner] task_events insert failed (non-fatal):', evErr.message);
+        }
 
         if (shouldAutoApprove(task)) {
           try { approveTask(task.id, `agent:${agentId}`); } catch {}

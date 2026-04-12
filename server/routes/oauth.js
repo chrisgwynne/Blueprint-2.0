@@ -245,6 +245,108 @@ router.get('/todoist/callback', async (req, res) => {
 });
 
 /**
+ * GET /api/oauth/gbp
+ * Initiates Google Business Profile OAuth flow.
+ */
+router.get('/gbp', (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GBP_REDIRECT_URI ||
+    process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/gbp/callback') ||
+    'http://localhost:4000/api/oauth/gbp/callback';
+  if (!clientId) return res.status(500).json({ error: 'GOOGLE_CLIENT_ID is not configured.' });
+
+  const state = Buffer.from(JSON.stringify({ businessId, type: 'gbp' })).toString('base64url');
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: 'https://www.googleapis.com/auth/business.manage',
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return res.redirect(`${AUTH_BASE}?${params.toString()}`);
+});
+
+/**
+ * GET /api/oauth/gbp/callback
+ */
+router.get('/gbp/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error)}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GBP_REDIRECT_URI ||
+    process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/gbp/callback') ||
+    'http://localhost:4000/api/oauth/gbp/callback';
+
+  try {
+    const tokenRes = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.text();
+      console.error('[oauth] GBP token exchange failed:', err.substring(0, 300));
+      return res.redirect(`${clientUrl}/connectors?error=token_exchange_failed`);
+    }
+
+    const tokens = await tokenRes.json();
+    const credentials = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || null,
+      expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+      scope: tokens.scope,
+    };
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'gbp'"
+    ).get(businessId);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'gbp', 'Google Business Profile', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+
+    return res.redirect(`${clientUrl}/connectors?connected=gbp`);
+  } catch (err) {
+    console.error('[oauth] GBP callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+/**
  * GET /api/oauth/google-ads
  * Initiates Google Ads OAuth flow (uses Google OAuth with adwords scope).
  */
