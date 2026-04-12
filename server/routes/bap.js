@@ -111,6 +111,44 @@ router.post('/register', bapRateLimit('register'), async (req, res) => {
   }
 });
 
+// ─── DISCOVERY (no auth — public info about this instance) ──────────────────
+
+router.get('/discover', (_req, res) => {
+  try {
+    const discoveryPublic = JSON.parse(
+      db.prepare("SELECT value FROM settings WHERE key = 'bap_discovery_public'").get()?.value ?? 'true'
+    );
+    // If discovery is disabled and no auth, return 404
+    if (!discoveryPublic) return res.status(404).json({ error: 'Discovery disabled.' });
+
+    const instanceName = JSON.parse(
+      db.prepare("SELECT value FROM settings WHERE key = 'instance_name'").get()?.value ?? '"Blueprint"'
+    );
+    const connectors = db.prepare(
+      "SELECT DISTINCT type FROM connectors WHERE status = 'connected'"
+    ).all().map(r => r.type);
+    const agents = db.prepare('SELECT id, name, status FROM agents').all();
+    const businesses = db.prepare('SELECT id, name, slug, type FROM businesses').all();
+
+    return res.json({
+      blueprint_version: '1.0.0',
+      instance_name: instanceName,
+      businesses: businesses.map(b => ({ id: b.id, name: b.name, slug: b.slug, type: b.type })),
+      connectors_available: connectors,
+      agents_active: agents.filter(a => a.status === 'active').map(a => a.id),
+      bap_version: '1.0',
+      register_endpoint: '/api/bap/v1/register',
+      capabilities: {
+        kb_enabled: true,
+        write_back_enabled: true,
+        webhook_supported: true,
+      },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════
 // All routes below require BAP-Key auth
 // ═══════════════════════════════════════════════════════════════════════════

@@ -192,6 +192,19 @@ const mountRoutes = async () => {
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
   const { createApiKeyRecord } = await import('./routes/public-api.js');
 
+  // ─── Instance settings (no auth — used by frontend on load) ────────────
+  app.get('/api/settings/instance', (_req, res) => {
+    const get = (k, d) => {
+      const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(k);
+      return row ? JSON.parse(row.value) : d;
+    };
+    res.json({
+      name: get('instance_name', 'Blueprint'),
+      accent_color: get('instance_accent_color', '#3b82f6'),
+      discovery_public: get('bap_discovery_public', true),
+    });
+  });
+
   // ─── System Health Endpoint ─────────────────────────────────────────────
   app.get('/api/system/health', _isAuth, (req, res) => {
     try {
