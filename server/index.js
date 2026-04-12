@@ -168,6 +168,7 @@ const mountRoutes = async () => {
   const { default: llmRoutes } = await import('./routes/llm.js');
   const { default: bapRoutes } = await import('./routes/bap.js');
   const { default: publicApiRoutes } = await import('./routes/public-api.js');
+  const { default: exportRoutes } = await import('./routes/export.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
   app.use('/api/auth', authRoutes);
@@ -185,6 +186,7 @@ const mountRoutes = async () => {
   app.use('/api/llm', llmRoutes);
   app.use('/api/bap/v1', bapRoutes);
   app.use('/api/v1', publicApiRoutes);
+  app.use('/api/export', exportRoutes);
 
   // API key management (session auth — used by Settings UI)
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
