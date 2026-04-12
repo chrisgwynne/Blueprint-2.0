@@ -326,6 +326,25 @@ CREATE TABLE IF NOT EXISTS task_outcomes (
 );
 CREATE INDEX IF NOT EXISTS idx_task_outcomes_task ON task_outcomes(task_id);
 
+-- ─── Job queue ──────────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS job_queue (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  payload JSON NOT NULL,
+  priority INTEGER DEFAULT 5,
+  business_id TEXT,
+  status TEXT DEFAULT 'pending',
+  run_after DATETIME DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  attempts INTEGER DEFAULT 0,
+  max_attempts INTEGER DEFAULT 3,
+  error TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status, type, run_after);
+
 CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);

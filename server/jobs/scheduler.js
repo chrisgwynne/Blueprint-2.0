@@ -358,6 +358,31 @@ export function startScheduler() {
     }
   });
 
+  // Weekly git maintenance — Sunday 3am
+  cron.schedule('0 3 * * 0', async () => {
+    try {
+      const { existsSync, statSync } = await import('fs');
+      const { resolve, join } = await import('path');
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+
+      const KB_ROOT = process.env.KB_PATH || resolve(process.cwd(), '../kb');
+      const businesses = db.prepare('SELECT slug FROM businesses').all();
+      for (const biz of businesses) {
+        const kbPath = join(KB_ROOT, biz.slug);
+        if (!existsSync(join(kbPath, '.git'))) continue;
+        try {
+          await execAsync('git gc --auto --quiet', { cwd: kbPath, timeout: 30_000 });
+          const size = statSync(join(kbPath, '.git')).size / 1048576;
+          console.log(`[scheduler] KB git gc: ${biz.slug} (.git = ${size.toFixed(1)}MB)`);
+        } catch {}
+      }
+    } catch (err) {
+      console.error('[scheduler] Git maintenance failed:', err.message);
+    }
+  });
+
   console.log('[scheduler] All jobs scheduled. Ready.');
 }
 
