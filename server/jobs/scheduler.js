@@ -223,6 +223,41 @@ export function startScheduler() {
     }
   });
 
+  // Every hour: check for stale connectors
+  cron.schedule('30 * * * *', async () => {
+    try {
+      const thresholds = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
+      const connectors = db.prepare(`
+        SELECT c.id, c.type, c.status, c.last_sync, c.business_id, b.name as business_name
+        FROM connectors c JOIN businesses b ON c.business_id = b.id
+        WHERE c.status = 'connected' AND c.last_sync IS NOT NULL
+      `).all();
+      for (const c of connectors) {
+        const hours = (Date.now() - new Date(c.last_sync).getTime()) / 3600000;
+        const threshold = thresholds[c.type] ?? 24;
+        if (hours > threshold) {
+          db.prepare("UPDATE connectors SET status = 'stale' WHERE id = ? AND status = 'connected'").run(c.id);
+          // Only create signal if none already open for this connector
+          const exists = db.prepare("SELECT id FROM signals WHERE connector_id = ? AND rule_id = 'connector_stale' AND status = 'open'").get(c.id);
+          if (!exists) {
+            const { generateId: gid } = await import('../db/db.js');
+            db.prepare(`
+              INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
+              VALUES (?, ?, ?, 'connector_stale', 'risk', ?, ?, ?, '{}', 'open', 1.0, CURRENT_TIMESTAMP)
+            `).run(
+              gid(), c.business_id, c.id,
+              hours > threshold * 2 ? 'alert' : 'warning',
+              `${c.type.toUpperCase()} connector is stale`,
+              `No sync in ${Math.round(hours)} hours for ${c.business_name}. Last synced: ${c.last_sync}`
+            );
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[scheduler] Stale connector check failed:', err.message);
+    }
+  });
+
   // Every hour: run conductor for all businesses
   cron.schedule('0 * * * *', async () => {
     console.log('[scheduler] Running hourly conductor pass...');

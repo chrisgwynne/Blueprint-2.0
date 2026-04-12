@@ -327,6 +327,13 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
   const runId = generateId();
   const startedAt = new Date().toISOString();
 
+  // 0. Check global kill switch
+  const globallyPaused = db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get();
+  if (globallyPaused && JSON.parse(globallyPaused.value ?? 'false') === true) {
+    console.warn(`[agent-runner] Agents globally paused — skipping '${agentId}'.`);
+    return { runId: null, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'globally_paused' };
+  }
+
   // 1. Load agent from DB
   const agentRow = db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId);
   if (!agentRow) throw new Error(`Agent '${agentId}' not found in database.`);
@@ -362,7 +369,21 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
   };
 
-  // 4. Check cost cap (0 = unlimited, common convention)
+  // 3b. Check global monthly budget
+  const monthlyBudget = JSON.parse(
+    db.prepare("SELECT value FROM settings WHERE key = 'cost_monthly_budget_usd'").get()?.value ?? '20'
+  );
+  if (monthlyBudget > 0) {
+    const monthSpent = db.prepare(
+      "SELECT COALESCE(SUM(cost_usd), 0) as total FROM cost_daily WHERE date >= date('now', 'start of month')"
+    ).get()?.total ?? 0;
+    if (monthSpent >= monthlyBudget) {
+      console.warn(`[agent-runner] Monthly budget exhausted ($${monthSpent.toFixed(2)}/$${monthlyBudget}). Skipping '${agentId}'.`);
+      return { runId: null, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'monthly_budget' };
+    }
+  }
+
+  // 4. Check per-agent daily cost cap (0 = unlimited)
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   const todayCost = db.prepare(`
@@ -564,6 +585,21 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     } catch (statsErr) {
       console.warn('[agent-runner] Failed to update agent stats (non-fatal):', statsErr.message);
     }
+
+    // 13b. Track cost in cost_daily table
+    try {
+      db.prepare(`
+        INSERT INTO cost_daily (id, date, agent_id, business_id, provider,
+          prompt_tokens, completion_tokens, cost_usd, run_count)
+        VALUES (lower(hex(randomblob(16))), date('now'), ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(date, agent_id, business_id, provider) DO UPDATE SET
+          prompt_tokens = prompt_tokens + excluded.prompt_tokens,
+          completion_tokens = completion_tokens + excluded.completion_tokens,
+          cost_usd = cost_usd + excluded.cost_usd,
+          run_count = run_count + 1
+      `).run(agentId, businessId, providerId,
+        llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
+    } catch {}
 
     // 14. Update memory with learnings
     const learnings = Array.isArray(parsed.learnings) ? parsed.learnings : [];

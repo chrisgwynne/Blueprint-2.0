@@ -190,6 +190,114 @@ const mountRoutes = async () => {
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
   const { createApiKeyRecord } = await import('./routes/public-api.js');
 
+  // ─── System Health Endpoint ─────────────────────────────────────────────
+  app.get('/api/system/health', _isAuth, (req, res) => {
+    try {
+      const startTime = process.uptime();
+
+      // DB health
+      const tableCount = db.prepare("SELECT COUNT(*) as n FROM sqlite_master WHERE type='table'").get()?.n ?? 0;
+      const dbPath = process.env.DATABASE_PATH || './data/blueprint.db';
+      let dbSizeMB = 0;
+      try {
+        const { statSync } = require('fs');
+        dbSizeMB = Math.round(statSync(dbPath).size / 1048576 * 10) / 10;
+      } catch {}
+
+      // Connectors
+      const connectors = db.prepare(`
+        SELECT c.id, c.type, c.status, c.last_sync, c.last_error, b.name as business
+        FROM connectors c JOIN businesses b ON c.business_id = b.id
+      `).all().map(c => {
+        const hoursSince = c.last_sync ? (Date.now() - new Date(c.last_sync).getTime()) / 3600000 : null;
+        const thresholds = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
+        const threshold = thresholds[c.type] ?? 24;
+        return {
+          id: c.id, type: c.type, business: c.business,
+          status: c.status === 'connected' && hoursSince > threshold ? 'stale' : c.status,
+          last_sync: c.last_sync, hours_since_sync: hoursSince ? Math.round(hoursSince * 10) / 10 : null,
+          stale_threshold_hours: threshold, last_error: c.last_error,
+        };
+      });
+
+      // Agents
+      const conductorRow = db.prepare("SELECT last_run FROM agents WHERE id = 'conductor'").get();
+      const failCount24h = db.prepare(
+        "SELECT COUNT(*) as n FROM agent_runs WHERE status = 'failed' AND started_at > datetime('now', '-24 hours')"
+      ).get()?.n ?? 0;
+      const runCount24h = db.prepare(
+        "SELECT COUNT(*) as n FROM agent_runs WHERE started_at > datetime('now', '-24 hours')"
+      ).get()?.n ?? 0;
+      const consecutiveFails = db.prepare(
+        "SELECT status FROM agent_runs WHERE agent_id = 'conductor' ORDER BY started_at DESC LIMIT 5"
+      ).all();
+      const conductorConsecFails = consecutiveFails.findIndex(r => r.status !== 'failed');
+
+      // Costs
+      const todayCost = db.prepare("SELECT COALESCE(SUM(cost_usd),0) as t FROM cost_daily WHERE date = date('now')").get()?.t ?? 0;
+      const monthCost = db.prepare("SELECT COALESCE(SUM(cost_usd),0) as t FROM cost_daily WHERE date >= date('now','start of month')").get()?.t ?? 0;
+      const budget = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'cost_monthly_budget_usd'").get()?.value ?? '20');
+      const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+      const dayOfMonth = new Date().getDate();
+      const forecastEnd = dayOfMonth > 0 ? (monthCost / dayOfMonth) * daysInMonth : 0;
+
+      // Paused?
+      const paused = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get()?.value ?? 'false');
+
+      // Overall status
+      const hasError = connectors.some(c => c.status === 'error');
+      const hasStale = connectors.some(c => c.status === 'stale');
+      const conductorFailing = conductorConsecFails >= 3 || (conductorConsecFails === -1 && consecutiveFails.length >= 3);
+      const budgetCritical = budget > 0 && (monthCost / budget) >= 0.9;
+
+      let status = 'healthy';
+      if (hasError || conductorFailing || budgetCritical) status = 'critical';
+      else if (hasStale || failCount24h > 0 || paused) status = 'degraded';
+
+      res.json({
+        status,
+        timestamp: new Date().toISOString(),
+        version: '1.0.0',
+        uptime_seconds: Math.round(startTime),
+        agents_paused: paused,
+        database: { status: 'ok', size_mb: dbSizeMB, tables: tableCount },
+        connectors,
+        agents: {
+          conductor_last_run: conductorRow?.last_run ?? null,
+          conductor_consecutive_failures: conductorFailing ? (conductorConsecFails === -1 ? consecutiveFails.length : conductorConsecFails) : 0,
+          conductor_status: conductorFailing ? 'failing' : 'ok',
+          total_runs_24h: runCount24h,
+          total_failures_24h: failCount24h,
+        },
+        costs: {
+          today_usd: Math.round(todayCost * 100) / 100,
+          this_month_usd: Math.round(monthCost * 100) / 100,
+          monthly_budget_usd: budget,
+          budget_used_pct: budget > 0 ? Math.round((monthCost / budget) * 100) : 0,
+          forecast_month_end_usd: Math.round(forecastEnd * 100) / 100,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({ status: 'error', error: err.message });
+    }
+  });
+
+  // ─── Kill switch endpoints ──────────────────────────────────────────────
+  app.post('/api/settings/agents/pause', _isAuth, (req, res) => {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('agents_globally_paused', 'true', CURRENT_TIMESTAMP)").run();
+    try {
+      import('./bap/webhook-dispatcher.js').then(m =>
+        m.dispatchWebhookEvent('system.agents_paused', { paused: true })
+      );
+    } catch {}
+    res.json({ ok: true, agents_paused: true });
+  });
+
+  app.post('/api/settings/agents/resume', _isAuth, (req, res) => {
+    db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES ('agents_globally_paused', 'false', CURRENT_TIMESTAMP)").run();
+    res.json({ ok: true, agents_paused: false });
+  });
+
   app.get('/api/admin/api-keys', _isAuth, (_req, res) => {
     const keys = db.prepare('SELECT id, name, key_prefix, scopes, rate_limit, last_used, total_calls, expires_at, created_at FROM api_keys ORDER BY created_at DESC').all();
     res.json({ keys: keys.map((k) => ({ ...k, scopes: JSON.parse(k.scopes ?? '[]') })) });

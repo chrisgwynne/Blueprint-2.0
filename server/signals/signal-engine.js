@@ -1,6 +1,43 @@
 import db, { generateId } from '../db/db.js';
 import { getRulesForConnector } from './rules.js';
 
+// ─── Signal cool-down (per rule) ─────────────────────────────────────────────
+// Prevents the same signal from re-firing too soon after resolution.
+
+const COOLDOWN_HOURS = {
+  default: 24,
+  monitor_down: 1,
+  monitor_seems_down: 1,
+  connector_stale: 6,
+  agent_consecutive_failures: 12,
+  gbp_negative_review: 48,
+  ranking_drop_keyword: 48,
+  traffic_drop_7day: 72,
+  shopify_no_orders: 12,
+};
+
+function shouldFireSignal(ruleId, connectorId, businessId) {
+  const cooldown = COOLDOWN_HOURS[ruleId] ?? COOLDOWN_HOURS.default;
+
+  // Already open?
+  const alreadyOpen = db.prepare(`
+    SELECT id FROM signals
+    WHERE rule_id = ? AND connector_id = ? AND business_id = ? AND status = 'open'
+  `).get(ruleId, connectorId, businessId);
+  if (alreadyOpen) return false;
+
+  // Recently resolved (in cool-down)?
+  const recentResolved = db.prepare(`
+    SELECT id FROM signals
+    WHERE rule_id = ? AND connector_id = ? AND business_id = ?
+    AND status = 'resolved'
+    AND resolved_at > datetime('now', '-' || ? || ' hours')
+  `).get(ruleId, connectorId, businessId, cooldown);
+  if (recentResolved) return false;
+
+  return true;
+}
+
 /**
  * Run all applicable signal rules against new connector data.
  *
@@ -26,27 +63,20 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
 
     if (!result.triggered) continue;
 
-    // Check if an open signal with same rule_id already exists for this business
-    const existing = db.prepare(`
-      SELECT id FROM signals
-      WHERE business_id = ? AND rule_id = ? AND status IN ('open', 'acknowledged')
-      ORDER BY created_at DESC LIMIT 1
-    `).get(businessId, rule.id);
-
-    if (existing) {
-      // Update the existing signal's data and confidence (upsert pattern)
-      db.prepare(`
-        UPDATE signals
-        SET data = ?, confidence = ?, title = ?, description = ?, created_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).run(
-        JSON.stringify(result.data),
-        result.confidence,
-        result.title,
-        result.description,
-        existing.id
-      );
-      console.log(`[signal-engine] Updated existing signal ${existing.id} for rule '${rule.id}'`);
+    // Cool-down + dedup check — don't re-fire same rule too soon
+    if (!shouldFireSignal(rule.id, connectorId, businessId)) {
+      // If there's an open signal, update its data silently
+      const existing = db.prepare(`
+        SELECT id FROM signals
+        WHERE business_id = ? AND rule_id = ? AND status IN ('open', 'acknowledged')
+        ORDER BY created_at DESC LIMIT 1
+      `).get(businessId, rule.id);
+      if (existing) {
+        db.prepare(`
+          UPDATE signals SET data = ?, confidence = ?, title = ?, description = ?, created_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(JSON.stringify(result.data), result.confidence, result.title, result.description, existing.id);
+      }
       continue;
     }
 

@@ -293,6 +293,23 @@ CREATE TABLE IF NOT EXISTS api_keys (
 );
 
 CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
+
+-- ─── Cost tracking ──────────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS cost_daily (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  agent_id TEXT,
+  business_id TEXT,
+  provider TEXT,
+  prompt_tokens INTEGER DEFAULT 0,
+  completion_tokens INTEGER DEFAULT 0,
+  cost_usd REAL DEFAULT 0,
+  run_count INTEGER DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_daily_unique
+  ON cost_daily(date, agent_id, business_id, provider);
+
 CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);
