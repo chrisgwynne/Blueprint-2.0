@@ -32,6 +32,8 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'shopify_page_update',
   'shopify_blog_post_create',
   'shopify_meta_update',
+  'shopify_collection_update',
+  'shopify_tag_update',
 ]);
 
 export function isExecutable(actionType) {
@@ -367,6 +369,45 @@ async function executeShopifyBlogPostCreate(task) {
   };
 }
 
+async function executeShopifyCollectionUpdate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const collectionId = payload.collection_id;
+  if (!collectionId) throw new Error('collection_id is required in action_payload.');
+
+  await shopify.updateCollectionDescription(credentials, config, collectionId, payload.new_description ?? '');
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify collection updated (ID: ${collectionId})`,
+    outcome_data: {
+      collection_id: collectionId,
+      admin_url: `https://${shop}/admin/collections/${collectionId}`,
+    },
+  };
+}
+
+async function executeShopifyTagUpdate(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const productId = payload.product_id;
+  if (!productId) throw new Error('product_id is required in action_payload.');
+
+  await shopify.updateProductTags(
+    credentials, config, productId,
+    payload.add_tags ?? [], payload.remove_tags ?? []
+  );
+
+  return {
+    outcome: `Product tags updated for product ${productId}`,
+    outcome_data: {
+      product_id: productId,
+      added: payload.add_tags ?? [],
+      removed: payload.remove_tags ?? [],
+    },
+  };
+}
+
 // ─── Rollback system ──────────────────────────────────────────────────────────
 
 /**
@@ -458,6 +499,8 @@ export async function executeTask(taskId) {
       case 'shopify_page_create':      result = await executeShopifyPageCreate(task); break;
       case 'shopify_page_update':      result = await executeShopifyPageUpdate(task); break;
       case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task); break;
+      case 'shopify_collection_update': result = await executeShopifyCollectionUpdate(task); break;
+      case 'shopify_tag_update':        result = await executeShopifyTagUpdate(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }

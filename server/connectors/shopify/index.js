@@ -373,6 +373,35 @@ const connector = {
     return res.json();
   },
 
+  // ─── COLLECTIONS ───────────────────────────────────────────────────────────
+
+  async fetchCollections(credentials) {
+    const res = await shopifyFetch(credentials, '/custom_collections.json?limit=50');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.custom_collections ?? [];
+  },
+
+  async updateCollectionDescription(credentials, config, collectionId, bodyHtml) {
+    const res = await shopifyFetch(credentials, `/custom_collections/${collectionId}.json`, {
+      custom_collection: { id: collectionId, body_html: bodyHtml },
+    });
+    if (!res.ok) throw new Error(`Shopify updateCollection ${collectionId} failed (${res.status})`);
+    return res.json();
+  },
+
+  // ─── PRODUCT TAGS ────────────────────────────────────────────────────────
+
+  async updateProductTags(credentials, config, productId, addTags = [], removeTags = []) {
+    const product = await this.fetchProduct(credentials, config, productId);
+    const currentTags = (product.tags ?? '').split(', ').filter(Boolean);
+    const newTags = [
+      ...currentTags.filter((t) => !removeTags.includes(t)),
+      ...addTags.filter((t) => !currentTags.includes(t)),
+    ];
+    return this.updateProduct(credentials, config, productId, { tags: newTags.join(', ') });
+  },
+
   async deleteProduct(credentials, config, productId) {
     const url = `https://${credentials.shopDomain}/admin/api/${API_VERSION}/products/${productId}.json`;
     const res = await fetch(url, {
