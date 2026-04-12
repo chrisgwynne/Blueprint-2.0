@@ -15,7 +15,8 @@ function fireWebhook(event, data) {
 const VALID_TRANSITIONS = {
   proposed: ['approved', 'rejected'],
   approved: ['executing', 'rejected'],
-  executing: ['complete', 'failed'],
+  executing: ['complete', 'failed', 'draft_ready'],
+  draft_ready: ['complete', 'failed'],  // human reviews the draft, then marks complete or rejects
   complete: ['verified'],
   failed: ['proposed'], // allow retry
   rejected: [],

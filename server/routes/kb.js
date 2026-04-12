@@ -376,6 +376,52 @@ router.post('/:businessId/lint', async (req, res) => {
   }
 });
 
+// ─── Recent changes ──────────────────────────────────────────────────────────
+
+/**
+ * GET /api/kb/:businessId/recent-changes?limit=20
+ * Recent git commits across all KB files.
+ */
+router.get('/:businessId/recent-changes', async (req, res) => {
+  try {
+    const { engine } = await getEngine(req.params.businessId);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+
+    // Use isomorphic-git log on the whole repo (no filepath filter = all files)
+    const git = (await import('isomorphic-git')).default;
+    const fs = (await import('fs')).default;
+
+    let commits = [];
+    try {
+      commits = await git.log({ fs, dir: engine.root, depth: limit });
+    } catch {}
+
+    const changes = commits.map((c) => {
+      const msg = c.commit.message.trim();
+      let type = 'human';
+      if (msg.startsWith('ingest:')) type = 'ingest';
+      else if (msg.startsWith('signal:')) type = 'signal';
+      else if (msg.startsWith('agent')) type = 'agent';
+      else if (msg.startsWith('query:')) type = 'query';
+      else if (msg.startsWith('lint:') || msg.startsWith('log:')) type = 'lint';
+      else if (msg.startsWith('init:')) type = 'init';
+      else if (msg.startsWith('update:')) type = 'human';
+
+      return {
+        hash: c.oid.slice(0, 7),
+        message: msg,
+        author: c.commit.author.name,
+        date: new Date(c.commit.author.timestamp * 1000).toISOString(),
+        type,
+      };
+    });
+
+    return res.json({ changes });
+  } catch (err) {
+    return res.status(err.status ?? 500).json({ error: err.message });
+  }
+});
+
 // ─── Review queue ────────────────────────────────────────────────────────────
 
 /**

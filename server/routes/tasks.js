@@ -259,6 +259,75 @@ router.post('/:id/comment', (req, res) => {
  * POST /api/tasks/:id/rollback
  * Roll back a completed write-back task (Shopify product create, etc.)
  */
+/**
+ * POST /api/tasks/bulk/approve
+ * Body: { task_ids: [...], note? }
+ * Bulk-approve proposed tasks (excludes red tier — must be approved individually).
+ */
+router.post('/bulk/approve', async (req, res) => {
+  try {
+    const { task_ids, note } = req.body;
+    if (!Array.isArray(task_ids) || task_ids.length === 0) {
+      return res.status(400).json({ error: 'task_ids array is required.' });
+    }
+    const approver = req.session.userId;
+    let approved = 0, skipped = 0;
+    const errors = [];
+
+    for (const id of task_ids.slice(0, 50)) {
+      try {
+        const task = db.prepare('SELECT id, status, trust_tier FROM tasks WHERE id = ?').get(id);
+        if (!task) { errors.push({ id, error: 'not found' }); continue; }
+        if (task.status !== 'proposed') { skipped++; continue; }
+        if (task.trust_tier === 'red') { skipped++; errors.push({ id, error: 'red tier — approve individually' }); continue; }
+
+        approveTask(id, approver);
+        createTaskEvent(id, 'approved', approver, note ?? 'Bulk approved', {});
+        if (isExecutable(db.prepare('SELECT action_type FROM tasks WHERE id = ?').get(id)?.action_type)) {
+          executeTask(id).catch(() => {});
+        }
+        approved++;
+      } catch (err) {
+        errors.push({ id, error: err.message });
+      }
+    }
+
+    return res.json({ approved, skipped, errors });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/tasks/bulk/reject
+ * Body: { task_ids: [...], reason? }
+ */
+router.post('/bulk/reject', (req, res) => {
+  try {
+    const { task_ids, reason } = req.body;
+    if (!Array.isArray(task_ids) || task_ids.length === 0) {
+      return res.status(400).json({ error: 'task_ids array is required.' });
+    }
+    const actor = req.session.userId;
+    let rejected = 0;
+    const errors = [];
+
+    for (const id of task_ids.slice(0, 50)) {
+      try {
+        rejectTask(id, actor, reason ?? 'Bulk rejected');
+        createTaskEvent(id, 'rejected', actor, reason ?? 'Bulk rejected', {});
+        rejected++;
+      } catch (err) {
+        errors.push({ id, error: err.message });
+      }
+    }
+
+    return res.json({ rejected, errors });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/:id/rollback', async (req, res) => {
   try {
     const { id } = req.params;
