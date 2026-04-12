@@ -222,3 +222,46 @@ export const addTaskComment = (taskId, content) => post(`/tasks/${taskId}/commen
 // ============================================
 
 export const getMetrics = (businessId, params) => get(`/metrics/${businessId}`, params)
+
+// ============================================
+// System Health (Feature 1)
+// ============================================
+
+export const getSystemHealth = () => get('/system/health/full')
+
+// ============================================
+// Signal Clusters (Feature 2)
+// ============================================
+
+export const getSignalClusters = (businessId, params) => get(`/signals/${businessId}/clusters`, params)
+export const updateSignalCluster = (id, data) => patch(`/signals/clusters/${id}`, data)
+export const runClusteringNow = (businessId) => post(`/signals/${businessId}/cluster`)
+
+// ============================================
+// Chat (Feature 3)
+// ============================================
+
+export const getConversations = (businessId) => get(`/chat/${businessId}/conversations`)
+export const getConversation = (businessId, id) => get(`/chat/${businessId}/conversations/${id}`)
+export const createConversation = (businessId, data) => post(`/chat/${businessId}/conversations`, data)
+export const archiveConversation = (businessId, id) => del(`/chat/${businessId}/conversations/${id}`)
+export const sendChatMessage = (businessId, conversationId, content) =>
+  post(`/chat/${businessId}/conversations/${conversationId}/messages`, { content })
+export const getChatMessages = (businessId, conversationId) =>
+  get(`/chat/${businessId}/conversations/${conversationId}/messages`)
+
+// ============================================
+// Outcomes (Feature 4)
+// ============================================
+
+export const getOutcomes = (businessId, params) => get(`/outcomes/${businessId}`, params)
+export const getAgentOutcomePerformance = (businessId) => get(`/outcomes/${businessId}/agents`)
+export const getOutcomeTimeline = (businessId, params) => get(`/outcomes/${businessId}/timeline`, params)
+
+// ============================================
+// Email (Feature 5)
+// ============================================
+
+export const getEmailSettings = () => get('/notifications/email/settings')
+export const saveEmailSettings = (data) => post('/notifications/email/settings', data)
+export const sendTestEmail = (data) => post('/notifications/email/test', data)

@@ -169,6 +169,9 @@ const mountRoutes = async () => {
   const { default: bapRoutes } = await import('./routes/bap.js');
   const { default: publicApiRoutes } = await import('./routes/public-api.js');
   const { default: exportRoutes } = await import('./routes/export.js');
+  const { default: systemHealthRoutes } = await import('./routes/system-health.js');
+  const { default: outcomesRoutes } = await import('./routes/outcomes.js');
+  const { default: chatRoutes } = await import('./routes/chat.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
   app.use('/api/auth', authRoutes);
@@ -187,6 +190,9 @@ const mountRoutes = async () => {
   app.use('/api/bap/v1', bapRoutes);
   app.use('/api/v1', publicApiRoutes);
   app.use('/api/export', exportRoutes);
+  app.use('/api/system', systemHealthRoutes);
+  app.use('/api/outcomes', outcomesRoutes);
+  app.use('/api/chat', chatRoutes);
 
   // API key management (session auth — used by Settings UI)
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
@@ -206,7 +212,7 @@ const mountRoutes = async () => {
   });
 
   // ─── System Health Endpoint ─────────────────────────────────────────────
-  app.get('/api/system/health', _isAuth, (req, res) => {
+  app.get('/api/system/health', _isAuth, async (req, res) => {
     try {
       const startTime = process.uptime();
 

@@ -55,6 +55,101 @@ router.get('/analyse/:businessId/status/:runId', (req, res) => {
 });
 
 /**
+ * PATCH /api/signals/clusters/:id
+ * Body: { status: 'dismissed' | 'resolved' | 'open' }
+ */
+router.patch('/clusters/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body ?? {};
+    if (!['dismissed', 'resolved', 'open'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status.' });
+    }
+    const cluster = db.prepare('SELECT * FROM signal_clusters WHERE id = ?').get(id);
+    if (!cluster) return res.status(404).json({ error: 'Cluster not found.' });
+
+    const sigIds = JSON.parse(cluster.signal_ids ?? '[]');
+    db.prepare(`
+      UPDATE signal_clusters SET status = ?, updated_at = CURRENT_TIMESTAMP,
+      resolved_at = CASE WHEN ? = 'resolved' THEN CURRENT_TIMESTAMP ELSE resolved_at END
+      WHERE id = ?
+    `).run(status, status, id);
+
+    // Resolving/dismissing a cluster acknowledges its signals too
+    if (status === 'resolved' || status === 'dismissed') {
+      for (const sigId of sigIds) {
+        db.prepare(
+          `UPDATE signals SET status = 'acknowledged' WHERE id = ? AND status = 'open'`
+        ).run(sigId);
+      }
+    }
+    res.json({ ok: true, id, status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/signals/:businessId/cluster
+ * Trigger clustering manually.
+ */
+router.post('/:businessId/cluster', async (req, res) => {
+  try {
+    const { runClustering } = await import('../signals/cluster-engine.js');
+    const created = await runClustering(req.params.businessId);
+    res.json({ ok: true, clusters_created: created.length, cluster_ids: created });
+  } catch (err) {
+    console.error('[signals] cluster trigger error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/signals/:businessId/clusters
+ */
+router.get('/:businessId/clusters', (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const status = req.query.status || 'open';
+    const limit = Math.min(50, parseInt(req.query.limit, 10) || 10);
+
+    const clusters = db.prepare(`
+      SELECT * FROM signal_clusters
+      WHERE business_id = ? AND status = ?
+      ORDER BY created_at DESC LIMIT ?
+    `).all(businessId, status, limit);
+
+    const enriched = clusters.map((c) => {
+      const sigIds = JSON.parse(c.signal_ids ?? '[]');
+      const signals = sigIds.length > 0 ? db.prepare(`
+        SELECT s.id, s.title, s.severity, c2.type as connector
+        FROM signals s
+        LEFT JOIN connectors c2 ON c2.id = s.connector_id
+        WHERE s.id IN (${sigIds.map(() => '?').join(',')})
+      `).all(...sigIds) : [];
+      return {
+        id: c.id,
+        title: c.title,
+        summary: c.summary,
+        likely_cause: c.likely_cause,
+        recommendation: c.recommendation,
+        severity: c.severity,
+        confidence: c.confidence,
+        status: c.status,
+        signal_count: signals.length,
+        signals,
+        created_at: c.created_at,
+      };
+    });
+
+    res.json({ clusters: enriched });
+  } catch (err) {
+    console.error('[signals] clusters list error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/signals/insights/:businessId
  * Returns signals created by AI analysis
  */

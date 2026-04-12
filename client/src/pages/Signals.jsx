@@ -11,7 +11,9 @@ import {
   getSignals, updateSignal, createTask,
   triggerAnalysis, getAnalysisStatus,
   getSignalSummary, createTaskFromSignal,
+  getSignalClusters, updateSignalCluster, runClusteringNow,
 } from '../lib/api.js'
+import { Link as LinkIcon } from 'lucide-react'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,7 @@ const SNOOZE_OPTIONS = [
 
 const TABS = [
   { key: 'all',         label: 'All',          Icon: Activity   },
+  { key: 'clusters',    label: 'Clusters',     Icon: LinkIcon   },
   { key: 'ai',          label: 'AI Insights',  Icon: Brain      },
   { key: 'anomaly',     label: 'Anomalies',    Icon: AlertTriangle },
   { key: 'opportunity', label: 'Opportunities',Icon: Lightbulb  },
@@ -417,6 +420,18 @@ function SignalCard({ signal, onUpdate }) {
             </span>
           )}
 
+          {signal.cluster_id && (
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', gap: 3,
+              fontFamily: 'var(--bp-font-mono)', fontSize: 9, padding: '1px 6px',
+              borderRadius: 2, background: 'rgba(77,166,255,0.1)',
+              color: 'var(--bp-blue)', border: '1px solid rgba(77,166,255,0.2)',
+              textTransform: 'uppercase', letterSpacing: '0.06em',
+            }}>
+              <LinkIcon size={8} /> Clustered
+            </span>
+          )}
+
           {data.connectors_involved?.length > 0 && data.connectors_involved.map(c => (
             <span key={c} style={{
               fontFamily: 'var(--bp-font-mono)', fontSize: 9, padding: '1px 6px',
@@ -589,6 +604,101 @@ function SignalCard({ signal, onUpdate }) {
   )
 }
 
+// ─── Cluster Card ─────────────────────────────────────────────────────────────
+function ClusterCard({ cluster, onDismiss, onUpdate }) {
+  const [acting, setActing] = useState(false)
+  const sev = SEVERITY_CONFIG[cluster.severity] ?? SEVERITY_CONFIG.warning
+  const age = formatDistanceToNow(new Date(cluster.created_at), { addSuffix: true })
+
+  async function handleDismiss() {
+    setActing(true)
+    try {
+      await updateSignalCluster(cluster.id, { status: 'dismissed' })
+      onUpdate?.()
+    } catch (err) { console.error(err) }
+    finally { setActing(false) }
+  }
+
+  async function handleResolve() {
+    setActing(true)
+    try {
+      await updateSignalCluster(cluster.id, { status: 'resolved' })
+      onUpdate?.()
+    } catch (err) { console.error(err) }
+    finally { setActing(false) }
+  }
+
+  return (
+    <div style={{
+      background: 'var(--bp-surface)',
+      border: '1px solid var(--bp-border)',
+      borderLeft: `3px solid ${sev.border}`,
+      borderRadius: 6,
+      marginBottom: 10,
+      padding: '16px 18px',
+      position: 'relative',
+    }}>
+      {/* corner bracket */}
+      <div style={{ position: 'absolute', top: 0, left: 0, width: 14, height: 14, borderTop: `1px solid ${sev.border}`, borderLeft: `1px solid ${sev.border}`, opacity: 0.5 }} />
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+        <LinkIcon size={12} style={{ color: sev.border }} />
+        <span className={clsx('bp-pill', sev.pill)} style={{ padding: '1px 6px', fontSize: 9 }}>{sev.label}</span>
+        <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
+          {cluster.signal_count} signals · confidence: {Math.round((cluster.confidence ?? 0) * 100)}%
+        </span>
+        <span style={{ marginLeft: 'auto', fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
+          detected {age}
+        </span>
+      </div>
+
+      <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 15, color: 'var(--bp-text)', marginBottom: 6, letterSpacing: '0.01em', textTransform: 'uppercase' }}>
+        {cluster.title}
+      </div>
+
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.6, marginBottom: 12 }}>
+        {cluster.summary}
+      </div>
+
+      {cluster.likely_cause && (
+        <div style={{ marginBottom: 8 }}>
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Likely cause: </span>
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>{cluster.likely_cause}</span>
+        </div>
+      )}
+
+      {cluster.recommendation && (
+        <div style={{ marginBottom: 12 }}>
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Recommendation: </span>
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>{cluster.recommendation}</span>
+        </div>
+      )}
+
+      {cluster.signals?.length > 0 && (
+        <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--bp-surface-2)', borderRadius: 4 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 5 }}>
+            Signals in cluster
+          </div>
+          {cluster.signals.map((s) => (
+            <div key={s.id} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', padding: '2px 0' }}>
+              • {s.title} {s.connector && <span style={{ color: 'var(--bp-text-3)' }}>({s.connector.toUpperCase()})</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={handleResolve} disabled={acting} className="bp-btn bp-btn-ghost" style={{ fontSize: 10, color: 'var(--bp-green)', borderColor: 'rgba(0,201,167,0.25)' }}>
+          <Check size={11} /> Resolve
+        </button>
+        <button onClick={handleDismiss} disabled={acting} className="bp-btn bp-btn-ghost" style={{ fontSize: 10 }}>
+          <X size={11} /> Dismiss
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 function Signals() {
@@ -596,6 +706,7 @@ function Signals() {
   const addNotification  = useStore((s) => s.addNotification)
 
   const [signals,    setSignals]    = useState([])
+  const [clusters,   setClusters]   = useState([])
   const [summary,    setSummary]    = useState(null)
   const [loading,    setLoading]    = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -631,11 +742,20 @@ function Signals() {
     } catch { /* ignore */ }
   }, [currentBusiness])
 
+  const fetchClusters = useCallback(async () => {
+    if (!currentBusiness) return
+    try {
+      const res = await getSignalClusters(currentBusiness.id, { status: 'open', limit: 10 })
+      setClusters(Array.isArray(res?.clusters) ? res.clusters : [])
+    } catch { setClusters([]) }
+  }, [currentBusiness])
+
   useEffect(() => {
     setLoading(true)
     fetchSignals()
     fetchSummary()
-  }, [fetchSignals, fetchSummary])
+    fetchClusters()
+  }, [fetchSignals, fetchSummary, fetchClusters])
 
   // ── AI Analysis polling ─────────────────────────────────────────────────────
 
@@ -693,6 +813,7 @@ function Signals() {
 
   const tabCounts = {
     all:         signals.length,
+    clusters:    clusters.length,
     ai:          signals.filter(s => s.rule_id === 'ai_analysis').length,
     anomaly:     signals.filter(s => s.type === 'anomaly' || s.type === 'risk').length,
     opportunity: signals.filter(s => s.type === 'opportunity' || s.type === 'quick_win').length,
@@ -841,8 +962,31 @@ function Signals() {
         )}
       </div>
 
+      {/* Clusters section — shown on 'all' and 'clusters' tabs */}
+      {(activeTab === 'all' || activeTab === 'clusters') && clusters.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{
+            fontFamily: 'var(--bp-font-mono)', fontSize: 10,
+            letterSpacing: '0.12em', textTransform: 'uppercase',
+            color: 'var(--bp-text-3)', marginBottom: 10,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <LinkIcon size={11} /> Signal Clusters
+          </div>
+          {clusters.map((c) => (
+            <ClusterCard key={c.id} cluster={c} onUpdate={() => { fetchClusters(); fetchSignals() }} />
+          ))}
+        </div>
+      )}
+
+      {activeTab === 'clusters' && clusters.length === 0 ? (
+        <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+          No open clusters. Conductor groups related signals on each hourly run.
+        </div>
+      ) : null}
+
       {/* Signal list */}
-      {loading ? (
+      {activeTab === 'clusters' ? null : loading ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="bp-skeleton" style={{ height: 120, borderRadius: 6 }} />

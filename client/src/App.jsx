@@ -9,6 +9,9 @@ import AgentDetail from './pages/AgentDetail.jsx'
 import Connectors from './pages/Connectors.jsx'
 import ConnectorDataPage from './pages/ConnectorDataPage.jsx'
 import KB from './pages/KB.jsx'
+import SystemHealth from './pages/SystemHealth.jsx'
+import Chat from './pages/Chat.jsx'
+import Outcomes from './pages/Outcomes.jsx'
 import Settings from './pages/Settings.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import Onboarding from './pages/Onboarding.jsx'
@@ -113,6 +116,10 @@ function App() {
         <Route path="connectors/:connectorId/data" element={<ConnectorDataPage />} />
         <Route path="kb" element={<KB />} />
         <Route path="kb/*" element={<KB />} />
+        <Route path="health" element={<SystemHealth />} />
+        <Route path="chat" element={<Chat />} />
+        <Route path="chat/:conversationId" element={<Chat />} />
+        <Route path="outcomes" element={<Outcomes />} />
         <Route path="settings" element={<Settings />} />
       </Route>
 

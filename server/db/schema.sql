@@ -228,7 +228,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_business_entity_created ON audit_log(busine
 CREATE INDEX IF NOT EXISTS idx_task_events_task_id ON task_events(task_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_analysis_runs_business ON analysis_runs(business_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_business_id ON agent_runs(business_id);
-CREATE INDEX IF NOT EXISTS idx_cost_daily_date ON cost_daily(date);
+-- idx_cost_daily_date moved below cost_daily CREATE TABLE definition
 
 -- ─── Blueprint Agent Protocol (BAP) ─────────────────────────────────────────
 
@@ -311,6 +311,63 @@ CREATE TABLE IF NOT EXISTS cost_daily (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_daily_unique
   ON cost_daily(date, agent_id, business_id, provider);
+CREATE INDEX IF NOT EXISTS idx_cost_daily_date ON cost_daily(date);
+
+-- ─── Signal clusters (Feature 2) ────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS signal_clusters (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  title TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  likely_cause TEXT,
+  recommendation TEXT,
+  severity TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  status TEXT DEFAULT 'open',
+  signal_ids JSON NOT NULL,
+  created_by TEXT DEFAULT 'conductor',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  resolved_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_signal_clusters_business_status ON signal_clusters(business_id, status);
+
+-- ─── Chat (Feature 3) ───────────────────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS chat_conversations (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  title TEXT,
+  type TEXT DEFAULT 'human',
+  created_by TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  archived_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id),
+  business_id TEXT NOT NULL,
+  sender_type TEXT NOT NULL,
+  sender_id TEXT NOT NULL,
+  sender_name TEXT NOT NULL,
+  content TEXT NOT NULL,
+  mentions JSON DEFAULT '[]',
+  attachments JSON DEFAULT '[]',
+  metadata JSON DEFAULT '{}',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation ON chat_messages(conversation_id, created_at);
+
+CREATE TABLE IF NOT EXISTS chat_reactions (
+  id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL REFERENCES chat_messages(id),
+  reactor_id TEXT NOT NULL,
+  reaction TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 -- ─── Outcome attribution ────────────────────────────────────────────────────
 

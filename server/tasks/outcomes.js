@@ -88,6 +88,47 @@ export function checkTaskOutcome(taskId, weeksAfter) {
     );
   } catch {}
 
+  // Auto-file outcome to KB (non-fatal)
+  (async () => {
+    try {
+      const { getKBForBusiness } = await import('../kb/kb-config.js');
+      const kbResult = await getKBForBusiness(task.business_id);
+      if (!kbResult?.engine) return;
+      const today = new Date().toISOString().split('T')[0];
+      const slug = `task-${taskId.slice(0, 8)}-${weeksAfter}w`;
+      const body = `# Outcome: ${task.title}
+
+**Verdict:** ${verdict}
+**Change:** ${changePct >= 0 ? '+' : ''}${changePct.toFixed(1)}%
+**Metric:** ${task.target_metric}
+**Check:** ${weeksAfter} weeks after completion
+**Baseline:** ${baseline.toFixed(2)}
+**Current:** ${now.toFixed(2)}
+**Agent:** ${task.proposed_by}
+
+${detail}
+`;
+      await kbResult.engine.writeFile(
+        `outcomes/${slug}.md`,
+        body,
+        {
+          title: `Outcome: ${task.title}`,
+          tags: ['outcome', verdict],
+          created: today,
+          updated: today,
+          written_by: 'system',
+          review_status: 'auto_approved',
+          task_id: taskId,
+          weeks_after: weeksAfter,
+        },
+        `outcome: ${String(task.title).slice(0, 50)}`
+      );
+    } catch (err) {
+      // Non-fatal
+      if (typeof console !== 'undefined') console.warn('[outcomes] KB file failed:', err.message);
+    }
+  })();
+
   return { verdict, changePct, detail };
 }
 
