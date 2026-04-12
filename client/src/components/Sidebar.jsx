@@ -29,9 +29,10 @@ import {
   CreditCard,
   GitBranch,
 } from 'lucide-react'
+import { MessageSquare, Target } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { logout, createBusiness, getBusinesses, getConnectors } from '../lib/api.js'
+import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth } from '../lib/api.js'
 
 const CONNECTOR_ICONS = {
   gsc:           Search,
@@ -48,6 +49,7 @@ const CONNECTOR_ICONS = {
   wordpress:     Globe,
   kirby:         FileText,
   'google-ads':  TrendingUp,
+  'meta-ads':    Target,
   default:       Database,
 }
 
@@ -66,6 +68,7 @@ const CONNECTOR_LABELS = {
   wordpress:     'WordPress',
   kirby:         'Kirby',
   'google-ads':  'Google Ads',
+  'meta-ads':    'Meta Ads',
   default:       'Data',
 }
 
@@ -73,13 +76,16 @@ const NAV_ITEMS = [
   { label: 'Dashboard',     to: '/',           icon: LayoutDashboard, end: true },
   { label: 'Signals',       to: '/signals',    icon: Radio,           badge: 'openSignalCount' },
   { label: 'Tasks',         to: '/tasks',      icon: CheckSquare,     badge: 'pendingTaskCount' },
+  { label: 'Chat',          to: '/chat',       icon: MessageSquare },
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },
+  { label: 'Outcomes',      to: '/outcomes',   icon: Target },
   { label: 'Knowledge Base',to: '/kb',         icon: BookOpen },
+  { label: 'System Health', to: '/health',     icon: Activity,        healthDot: true },
   { label: 'Settings',      to: '/settings',   icon: Settings },
 ]
 
-function NavItem({ item, collapsed }) {
+function NavItem({ item, collapsed, healthStatus }) {
   const openSignalCount  = useStore((s) => s.openSignalCount)
   const pendingTaskCount = useStore((s) => s.pendingTaskCount)
 
@@ -87,6 +93,13 @@ function NavItem({ item, collapsed }) {
     item.badge === 'openSignalCount'  ? openSignalCount  :
     item.badge === 'pendingTaskCount' ? pendingTaskCount :
     0
+
+  const showHealthDot = item.healthDot && healthStatus
+  const healthColor =
+    healthStatus === 'healthy'  ? 'var(--bp-green)' :
+    healthStatus === 'degraded' ? 'var(--bp-amber)' :
+    healthStatus === 'critical' ? 'var(--bp-red)'   :
+    null
 
   return (
     <NavLink
@@ -135,6 +148,15 @@ function NavItem({ item, collapsed }) {
               {badgeCount > 99 ? '99+' : badgeCount}
             </span>
           )}
+          {!collapsed && showHealthDot && healthColor && (
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%',
+              background: healthColor,
+              display: 'inline-block',
+              animation: healthStatus !== 'healthy' ? `bp-pulse ${healthStatus === 'critical' ? '1s' : '2s'} infinite` : 'none',
+              boxShadow: `0 0 6px ${healthColor}80`,
+            }} />
+          )}
           {collapsed && badgeCount > 0 && (
             <span style={{
               position: 'absolute',
@@ -142,6 +164,16 @@ function NavItem({ item, collapsed }) {
               width: 5, height: 5,
               borderRadius: '50%',
               background: 'var(--bp-blue)',
+            }} />
+          )}
+          {collapsed && showHealthDot && healthColor && (
+            <span style={{
+              position: 'absolute',
+              bottom: 5, right: 5,
+              width: 5, height: 5,
+              borderRadius: '50%',
+              background: healthColor,
+              animation: healthStatus !== 'healthy' ? `bp-pulse ${healthStatus === 'critical' ? '1s' : '2s'} infinite` : 'none',
             }} />
           )}
           {/* Tooltip when collapsed */}
@@ -454,6 +486,21 @@ function Sidebar() {
   const setUser        = useStore((s) => s.setUser)
   const navigate       = useNavigate()
 
+  const [healthStatus, setHealthStatus] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      try {
+        const result = await getSystemHealth()
+        if (!cancelled && result?.overall) setHealthStatus(result.overall)
+      } catch {}
+    }
+    poll()
+    const interval = setInterval(poll, 60000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [])
+
   async function handleLogout() {
     try { await logout() } catch { /* ignore */ }
     setUser(null)
@@ -568,7 +615,7 @@ function Sidebar() {
         overflowY: 'auto',
       }}>
         {NAV_ITEMS.map((item) => (
-          <NavItem key={item.to} item={item} collapsed={collapsed} />
+          <NavItem key={item.to} item={item} collapsed={collapsed} healthStatus={healthStatus} />
         ))}
       </nav>
 

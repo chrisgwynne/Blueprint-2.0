@@ -12,6 +12,23 @@ const TEMPLATES_DIR = join(AGENTS_DIR, 'templates');
 function initSchema() {
   const schema = readFileSync(join(__dirname, 'schema.sql'), 'utf8');
   db.exec(schema);
+
+  // Additive migrations — tolerate "duplicate column" errors for re-runs
+  const migrations = [
+    // Outcome attribution (Feature 4)
+    "ALTER TABLE tasks ADD COLUMN target_metric TEXT",
+    "ALTER TABLE tasks ADD COLUMN target_metric_baseline REAL",
+    // Signal clustering (Feature 2)
+    "ALTER TABLE signals ADD COLUMN cluster_id TEXT REFERENCES signal_clusters(id)",
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); }
+    catch (err) {
+      if (!/duplicate column|already exists/i.test(err.message)) {
+        console.warn('[db:init] migration warning:', err.message);
+      }
+    }
+  }
   console.log('[db:init] Schema applied successfully.');
 }
 

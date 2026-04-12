@@ -177,6 +177,29 @@ Avg CPC: £${v(latestByName, 'google-ads.avg_cpc')} | Avg CTR: ${v(latestByName,
 Impression share: ${(parseFloat(v(latestByName, 'google-ads.impression_share', 0)) * 100).toFixed(1)}%`;
   }
 
+  if (type === 'meta-ads') {
+    const metaCampaigns = latestByName['meta-ads.campaigns_data']?.metric_data;
+    let campaignCount = 0;
+    try {
+      const parsed = typeof metaCampaigns === 'string' ? JSON.parse(metaCampaigns) : metaCampaigns;
+      if (Array.isArray(parsed)) campaignCount = parsed.length;
+    } catch {}
+    const ctr = parseFloat(v(latestByName, 'meta-ads.ctr', 0));
+    return `### META ADS (last 30 days)
+Spend: £${v(latestByName, 'meta-ads.spend_30d')}
+Revenue from ads: £${v(latestByName, 'meta-ads.revenue_30d')}
+ROAS: ${v(latestByName, 'meta-ads.roas')}x
+Purchases: ${v(latestByName, 'meta-ads.purchases_30d')}
+Impressions: ${Number(v(latestByName, 'meta-ads.impressions_30d', 0)).toLocaleString()}
+Reach: ${Number(v(latestByName, 'meta-ads.reach_30d', 0)).toLocaleString()}
+CTR: ${(ctr * 100).toFixed(2)}%
+CPM: £${v(latestByName, 'meta-ads.cpm')}
+CPC: £${v(latestByName, 'meta-ads.cpc')}
+Frequency: ${v(latestByName, 'meta-ads.frequency')}
+vs previous 30d: ROAS ${v(latestByName, 'meta-ads.prev_roas')}x, CPM £${v(latestByName, 'meta-ads.prev_cpm')}
+Active campaigns: ${campaignCount}`;
+  }
+
   if (type === 'gsc') {
     return `### GOOGLE SEARCH CONSOLE
 Total clicks: ${v(latestByName, 'gsc.total_clicks')}

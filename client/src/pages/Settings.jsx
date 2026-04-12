@@ -394,7 +394,125 @@ function NotificationsTab() {
           ))}
         </div>
       </Section>
+
+      <EmailReportsSection />
     </div>
+  )
+}
+
+// ─── Email reports (Feature 5) ────────────────────────────────────────────────
+function EmailReportsSection() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [provider, setProvider] = useState('smtp')
+  const [recipient, setRecipient] = useState('')
+  const [config, setConfig] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [sendingTest, setSendingTest] = useState(false)
+
+  useEffect(() => {
+    import('../lib/api.js').then(({ getEmailSettings }) =>
+      getEmailSettings().then((data) => {
+        if (data) {
+          setProvider(data.provider ?? 'smtp')
+          setRecipient(data.recipient ?? '')
+          setConfig(data.config ?? {})
+        }
+      }).catch(() => {}).finally(() => setLoading(false))
+    )
+  }, [])
+
+  function updateConfig(key, value) {
+    setConfig((c) => ({ ...c, [key]: value }))
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      const { saveEmailSettings } = await import('../lib/api.js')
+      await saveEmailSettings({ provider, recipient, config })
+      addNotification({ type: 'success', message: 'Email settings saved' })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally { setSaving(false) }
+  }
+
+  async function handleTest() {
+    setSendingTest(true)
+    try {
+      const { sendTestEmail } = await import('../lib/api.js')
+      await sendTestEmail({ to: recipient })
+      addNotification({ type: 'success', message: `Test email sent to ${recipient}` })
+    } catch (err) {
+      addNotification({ type: 'error', message: `Test failed: ${err.message}` })
+    } finally { setSendingTest(false) }
+  }
+
+  if (loading) return null
+
+  return (
+    <Section title="Email Reports" description="Receive weekly briefings by email. Runs automatically each Monday.">
+      <Field label="Send to" hint="Recipient email address">
+        <input
+          type="email"
+          value={recipient}
+          onChange={(e) => setRecipient(e.target.value)}
+          className="bp-input"
+          placeholder="you@example.com"
+        />
+      </Field>
+      <Field label="Email provider">
+        <select
+          value={provider}
+          onChange={(e) => setProvider(e.target.value)}
+          className="bp-input"
+        >
+          <option value="smtp">SMTP</option>
+          <option value="resend">Resend</option>
+          <option value="postmark">Postmark</option>
+          <option value="brevo">Brevo</option>
+        </select>
+      </Field>
+
+      {provider === 'smtp' && (
+        <>
+          <Field label="Host"><input value={config.host ?? ''} onChange={(e) => updateConfig('host', e.target.value)} className="bp-input" placeholder="smtp.gmail.com" /></Field>
+          <Field label="Port"><input value={config.port ?? ''} onChange={(e) => updateConfig('port', e.target.value)} className="bp-input" placeholder="587" /></Field>
+          <Field label="User"><input value={config.user ?? ''} onChange={(e) => updateConfig('user', e.target.value)} className="bp-input" placeholder="your@gmail.com" /></Field>
+          <Field label="Pass"><input type="password" value={config.pass ?? ''} onChange={(e) => updateConfig('pass', e.target.value)} className="bp-input" placeholder="App password" /></Field>
+          <Field label="From"><input value={config.from ?? ''} onChange={(e) => updateConfig('from', e.target.value)} className="bp-input" placeholder="Blueprint <noreply@yourdomain.com>" /></Field>
+        </>
+      )}
+      {provider === 'resend' && (
+        <>
+          <Field label="API Key"><input type="password" value={config.api_key ?? ''} onChange={(e) => updateConfig('api_key', e.target.value)} className="bp-input" placeholder="re_..." /></Field>
+          <Field label="From"><input value={config.from ?? ''} onChange={(e) => updateConfig('from', e.target.value)} className="bp-input" placeholder="Blueprint <noreply@yourdomain.com>" /></Field>
+        </>
+      )}
+      {provider === 'postmark' && (
+        <>
+          <Field label="Server Token"><input type="password" value={config.api_key ?? ''} onChange={(e) => updateConfig('api_key', e.target.value)} className="bp-input" /></Field>
+          <Field label="From"><input value={config.from ?? ''} onChange={(e) => updateConfig('from', e.target.value)} className="bp-input" /></Field>
+        </>
+      )}
+      {provider === 'brevo' && (
+        <>
+          <Field label="API Key"><input type="password" value={config.api_key ?? ''} onChange={(e) => updateConfig('api_key', e.target.value)} className="bp-input" placeholder="xkeysib-..." /></Field>
+          <Field label="From"><input value={config.from ?? ''} onChange={(e) => updateConfig('from', e.target.value)} className="bp-input" /></Field>
+        </>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={handleSave} disabled={saving} className="bp-btn bp-btn-primary text-xs">
+          <Save size={12} />
+          {saving ? 'Saving…' : 'Save email settings'}
+        </button>
+        <button onClick={handleTest} disabled={sendingTest || !recipient} className="bp-btn bp-btn-secondary text-xs">
+          <Send size={12} />
+          {sendingTest ? 'Sending…' : 'Send test email'}
+        </button>
+      </div>
+    </Section>
   )
 }
 

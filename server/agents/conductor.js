@@ -179,6 +179,17 @@ export async function runConductor(businessId) {
     }
   }
 
+  // 7. Run signal clustering (groups related open signals) — non-fatal
+  try {
+    const { runClustering } = await import('../signals/cluster-engine.js');
+    const clusters = await runClustering(businessId);
+    if (clusters.length > 0) {
+      console.log(`[conductor] Created ${clusters.length} signal cluster(s).`);
+    }
+  } catch (err) {
+    console.warn('[conductor] Clustering failed (non-fatal):', err.message);
+  }
+
   console.log(`[conductor] Conductor run complete for business ${businessId}. Runs: ${runs.length}, Errors: ${errors.length}`);
 
   return { runs, errors };

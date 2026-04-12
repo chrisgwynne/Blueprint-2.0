@@ -445,6 +445,90 @@ router.get('/google-ads/callback', async (req, res) => {
 });
 
 /**
+ * GET /api/oauth/meta
+ * Initiates Meta (Facebook) OAuth flow for Meta Ads connector.
+ */
+router.get('/meta', async (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  try {
+    const { default: metaConnector } = await import('../connectors/meta-ads/index.js');
+    const state = Buffer.from(JSON.stringify({ businessId, type: 'meta-ads' })).toString('base64url');
+    const authUrl = await metaConnector.getAuthUrl(state);
+    return res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth] Meta init error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/oauth/meta/callback
+ * OAuth callback from Meta. Exchanges code for long-lived token, stores encrypted.
+ */
+router.get('/meta/callback', async (req, res) => {
+  const { code, state, error, error_description } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+  if (error) {
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error_description || error)}`);
+  }
+  if (!code || !state) {
+    return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+  }
+
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+
+  try {
+    const { default: metaConnector } = await import('../connectors/meta-ads/index.js');
+    const credentials = await metaConnector.exchangeCode(code);
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'meta-ads'"
+    ).get(businessId);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'meta-ads', 'Meta Ads', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+
+    return res.redirect(`${clientUrl}/connectors?connected=meta`);
+  } catch (err) {
+    console.error('[oauth] Meta callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+/**
+ * DELETE /api/oauth/meta/:businessId
+ * Disconnect the Meta Ads connector.
+ */
+router.delete('/meta/:businessId', isAuthenticated, (req, res) => {
+  const { businessId } = req.params;
+  db.prepare(`
+    UPDATE connectors
+    SET status = 'disconnected', credentials = ?, last_error = NULL
+    WHERE business_id = ? AND type = 'meta-ads'
+  `).run(encrypt(JSON.stringify({})), businessId);
+  return res.json({ ok: true });
+});
+
+/**
  * DELETE /api/oauth/google/:businessId
  * Revokes Google access and sets GSC + GA4 connectors to disconnected.
  */

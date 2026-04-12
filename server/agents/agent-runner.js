@@ -689,6 +689,16 @@ ${signalsDetected} signal(s) reviewed.
       }
     }
 
+    // 18. Reporter agent → send email briefing (Feature 5, non-fatal)
+    if (agentId === 'reporter') {
+      try {
+        const { sendReporterEmail } = await import('../notifications/reporter-email.js');
+        await sendReporterEmail(parsed, business, businessId, startedAt);
+      } catch (err) {
+        console.warn('[agent-runner] Reporter email send failed (non-fatal):', err.message);
+      }
+    }
+
     console.log(`[agent-runner] '${agentId}' complete. Tasks: ${createdTasks.length}, Cost: $${costUsd.toFixed(6)}`);
 
     return { runId, tasksProposed: createdTasks.length, signalsDetected, costUsd };
