@@ -40,7 +40,16 @@ async function runConnectorSync(rowId) {
 
   const parsed = parseRow(row);
   const config = row.config ? JSON.parse(row.config) : {};
-  const dataType = config.defaultDataType || row.type === 'pagespeed' ? 'performance' : (row.type === 'gsc' ? 'search_analytics' : 'report');
+  // Operator precedence: || binds tighter than ?:, so the original
+  //   config.defaultDataType || row.type === 'pagespeed' ? 'performance' : ...
+  // collapsed to "performance" whenever defaultDataType was set. Wrap the
+  // fallback ternary in parens so the user's stored value wins.
+  const dataType = config.defaultDataType || (
+    row.type === 'pagespeed' ? 'performance' :
+    row.type === 'gsc' ? 'search_analytics' :
+    row.type === 'ga4' ? 'report' :
+    'report'
+  );
   const params = { ...config, businessId: row.business_id };
 
   try {
@@ -294,7 +303,12 @@ router.post('/:id/sync', async (req, res) => {
 
     const parsed = parseRow(row);
     const config = row.config ? JSON.parse(row.config) : {};
-    const dataType = config.defaultDataType || row.type === 'pagespeed' ? 'performance' : (row.type === 'gsc' ? 'search_analytics' : 'report');
+    const dataType = config.defaultDataType || (
+      row.type === 'pagespeed' ? 'performance' :
+      row.type === 'gsc' ? 'search_analytics' :
+      row.type === 'ga4' ? 'report' :
+      'report'
+    );
     const params = { ...config, businessId: row.business_id };
 
     res.status(202).json({ ok: true, message: 'Sync started.' });
