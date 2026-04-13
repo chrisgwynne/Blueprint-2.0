@@ -190,7 +190,7 @@ router.post('/:id/sync', async (req, res) => {
     const parsed = parseRow(row);
     const config = row.config ? JSON.parse(row.config) : {};
     const dataType = config.defaultDataType || row.type === 'pagespeed' ? 'performance' : (row.type === 'gsc' ? 'search_analytics' : 'report');
-    const params = { ...config };
+    const params = { ...config, businessId: row.business_id };
 
     res.status(202).json({ ok: true, message: 'Sync started.' });
 

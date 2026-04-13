@@ -45,6 +45,7 @@ async function syncConnector(connector) {
 
     const fetchParams = {
       ...config,
+      businessId: connector.business_id,
       ...(config.siteUrl ? { siteUrl: config.siteUrl } : {}),
       ...(config.propertyId ? { propertyId: config.propertyId } : {}),
       ...(config.url ? { url: config.url } : businessUrl ? { url: businessUrl } : {}),

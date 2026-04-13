@@ -1,18 +1,49 @@
 import fetch from 'node-fetch';
+import { getValidGoogleAccessToken } from '../google-auth.js';
 
 const PSI_BASE = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 const CATEGORIES = ['PERFORMANCE', 'ACCESSIBILITY', 'SEO', 'BEST_PRACTICES'];
+
+/**
+ * Resolve which auth method to use for a PageSpeed request, in priority:
+ *   1. OAuth token from any connected GSC/GA4/GBP connector for this business
+ *   2. Connector-specific PageSpeed API key
+ *   3. Env PAGESPEED_API_KEY
+ *   4. No auth (low anonymous quota)
+ *
+ * The businessId is plumbed through `params` because the connector framework
+ * doesn't pass it to fetch() by default — see scheduler/post-sync wiring.
+ */
+async function resolveAuth(credentials, params) {
+  const businessId = params?.businessId || credentials?.businessId;
+  if (businessId) {
+    try {
+      const tok = await getValidGoogleAccessToken(businessId);
+      if (tok?.accessToken) return { accessToken: tok.accessToken };
+    } catch (err) {
+      console.warn('[pagespeed] OAuth lookup failed, falling back to api key:', err.message);
+    }
+  }
+  const apiKey = credentials?.apiKey || process.env.PAGESPEED_API_KEY || null;
+  return { apiKey };
+}
 const SKIP_AUDIT_IDS = new Set([
   'screenshot-thumbnails', 'final-screenshot', 'full-page-screenshot', 'network-requests',
   'network-rtt', 'network-server-latency', 'main-thread-tasks', 'diagnostics',
 ]);
 
-async function runStrategy(url, strategy, apiKey) {
+async function runStrategy(url, strategy, auth) {
+  const { apiKey, accessToken } = auth ?? {};
   const categoryQuery = CATEGORIES.map(c => `category=${c}`).join('&');
-  const keyParam = apiKey ? `&key=${encodeURIComponent(apiKey)}` : '';
+  // Bearer token (OAuth) takes precedence over api key. With either, you
+  // get the per-user quota; with neither, you get the small anonymous quota.
+  const keyParam = (!accessToken && apiKey) ? `&key=${encodeURIComponent(apiKey)}` : '';
   const apiUrl = `${PSI_BASE}?url=${encodeURIComponent(url)}&strategy=${strategy}&${categoryQuery}${keyParam}`;
 
-  const res = await fetch(apiUrl);
+  const headers = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+
+  const res = await fetch(apiUrl, { headers });
   if (!res.ok) {
     const body = await res.text();
 
@@ -136,8 +167,8 @@ const connector = {
     if (!url) return { ok: false, error: 'No URL configured. Set a URL in the connector config.' };
 
     try {
-      const apiKey = credentials?.apiKey || process.env.PAGESPEED_API_KEY || null;
-      const result = await runStrategy(url, 'mobile', apiKey);
+      const auth = await resolveAuth(credentials, config);
+      const result = await runStrategy(url, 'mobile', auth);
       return {
         ok: true,
         details: {
@@ -146,6 +177,7 @@ const connector = {
           seo: result.scores.seo,
           accessibility: result.scores.accessibility,
           lcp_ms: result.cwv.lcp,
+          authMethod: auth.accessToken ? 'oauth' : (auth.apiKey ? 'apikey' : 'anonymous'),
         },
       };
     } catch (err) {
@@ -161,15 +193,14 @@ const connector = {
     const url = params?.url || credentials?.url;
     if (!url) throw new Error('URL is required. Configure a URL for the PageSpeed connector.');
 
-    // Priority: connector-specific key → env var fallback
-    const apiKey = credentials?.apiKey || process.env.PAGESPEED_API_KEY || null;
+    const auth = await resolveAuth(credentials, params);
 
     const [mobile, desktop] = await Promise.all([
-      runStrategy(url, 'mobile', apiKey),
-      runStrategy(url, 'desktop', apiKey),
+      runStrategy(url, 'mobile', auth),
+      runStrategy(url, 'desktop', auth),
     ]);
 
-    return { url, mobile, desktop, fetchedAt: new Date().toISOString() };
+    return { url, mobile, desktop, fetchedAt: new Date().toISOString(), authMethod: auth.accessToken ? 'oauth' : (auth.apiKey ? 'apikey' : 'anonymous') };
   },
 
   /**

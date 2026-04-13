@@ -123,14 +123,17 @@ function PageSpeedSetup({ businessId, existing, onSaved, onClose }) {
         />
       </div>
       <div>
-        <label className="block text-xs text-blueprint-muted mb-1">API Key <span className="text-blueprint-muted/60">(optional — increases quota)</span></label>
+        <label className="block text-xs text-blueprint-muted mb-1">API Key <span className="text-blueprint-muted/60">(optional — only needed if you haven't connected Google)</span></label>
         <input
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           className="bp-input"
           type="password"
-          placeholder="Google Cloud API key"
+          placeholder="Leave blank to use Google OAuth token"
         />
+        <p className="text-[10px] text-blueprint-muted mt-1">
+          If you've connected Search Console or Analytics, PageSpeed will reuse the same OAuth token automatically — no API key required.
+        </p>
       </div>
 
       <button
