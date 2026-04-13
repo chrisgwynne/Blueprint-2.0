@@ -21,6 +21,7 @@ const VALID_TRANSITIONS = {
   failed: ['proposed'], // allow retry
   rejected: [],
   verified: [],
+  deferred: ['proposed', 'rejected'],  // Brain may defer; resurface on schedule
 };
 
 function parseRow(row) {
@@ -160,6 +161,17 @@ export function updateTaskStatus(id, newStatus, actor, metadata = {}) {
 
   values.push(id);
   db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+
+  // Brain — when a task completes, record action memory so the Restraint
+  // system knows the measurement window is in flight.
+  if (newStatus === 'complete' || newStatus === 'verified') {
+    try {
+      import('../brain/action-windows.js').then((m) => {
+        try { m.recordActionMemory(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)); }
+        catch (err) { console.warn('[brain] recordActionMemory failed:', err.message); }
+      });
+    } catch {}
+  }
 
   const before = parseRow(existing);
   const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id));

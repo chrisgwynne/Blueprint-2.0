@@ -270,6 +270,30 @@ export async function processMessage(message, conversationId, businessId) {
     VALUES (?, ?, ?, 'human', 'human', 'You', ?, ?, CURRENT_TIMESTAMP)
   `).run(humanMsgId, conversationId, businessId, message.content, JSON.stringify(mentions));
 
+  // Brain — extract intent from the human message (non-blocking for agent response)
+  (async () => {
+    try {
+      const { extractIntent, actOnExtractions } = await import('../brain/intent-extractor.js');
+      const extractions = await extractIntent(message.content, history, businessId);
+      if (extractions.length === 0) return;
+      const actions = await actOnExtractions(extractions, businessId, conversationId);
+      const messages = actions.map((a) => a?.message).filter(Boolean);
+      if (messages.length === 0) return;
+      const combined = messages.join(' ');
+      db.prepare(`
+        INSERT INTO chat_messages
+        (id, conversation_id, business_id, sender_type, sender_id, sender_name, content, metadata, created_at)
+        VALUES (?, ?, ?, 'system', 'brain', 'Blueprint Brain', ?, ?, CURRENT_TIMESTAMP)
+      `).run(
+        crypto.randomUUID(), conversationId, businessId,
+        combined,
+        JSON.stringify({ intent_extractions: extractions.length, actions: actions.map((a) => a?.type) })
+      );
+    } catch (err) {
+      console.warn('[brain] intent extraction failed (non-fatal):', err.message);
+    }
+  })();
+
   // Touch conversation
   db.prepare(`UPDATE chat_conversations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).run(conversationId);
 

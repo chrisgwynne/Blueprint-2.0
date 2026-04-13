@@ -216,7 +216,7 @@ function briefConductor(agentId, parsed, businessId) {
 
 // ─── User context builder ─────────────────────────────────────────────────────
 
-function buildUserContext({ agentId, profile, business, signals, metrics, existingTasks, connectors, trigger, triggerId }) {
+async function buildUserContext({ agentId, profile, business, signals, metrics, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
   const lines = [];
 
   lines.push(`## Current Run`);
@@ -291,6 +291,105 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
   }
   lines.push('');
 
+  // Brain — in-flight actions currently in measurement windows.
+  // Agents must NOT propose further changes to these areas.
+  try {
+    const inFlight = db.prepare(`
+      SELECT am.title, am.action_type, am.target_url,
+             am.measurement_window_start, am.measurement_window_end,
+             am.do_not_touch_until, am.metrics_expected,
+             aw.measurement_notes
+      FROM action_memory am
+      LEFT JOIN action_windows aw ON aw.action_type = am.action_type
+      WHERE am.business_id = ?
+        AND am.outcome_measured = 0
+        AND am.do_not_touch_until > CURRENT_TIMESTAMP
+      ORDER BY am.measurement_window_start DESC LIMIT 10
+    `).all(business.id);
+    if (inFlight.length > 0) {
+      lines.push('## Actions Currently In Measurement Windows');
+      lines.push('These actions have been taken recently and are still in their measurement windows.');
+      lines.push('DO NOT propose further changes to these areas until the window closes.');
+      lines.push('If you notice an issue in one of these areas, note it as a DEFERRED observation — explain what you see and recommend measuring after the window ends.');
+      lines.push('');
+      for (const a of inFlight) {
+        let metrics = [];
+        try { metrics = JSON.parse(a.metrics_expected); } catch {}
+        const daysSince = Math.ceil((Date.now() - new Date(a.measurement_window_start)) / 86400000);
+        const daysUntilTouchable = Math.ceil((new Date(a.do_not_touch_until) - Date.now()) / 86400000);
+        lines.push(`- **${a.title}** (${a.action_type})`);
+        lines.push(`  Taken ${daysSince} days ago. Do not touch for ${daysUntilTouchable} more day${daysUntilTouchable === 1 ? '' : 's'}.`);
+        if (a.target_url) lines.push(`  Target: ${a.target_url}`);
+        if (metrics.length > 0) lines.push(`  Metrics affected: ${metrics.join(', ')}`);
+        if (a.measurement_notes) lines.push(`  Notes: ${a.measurement_notes}`);
+      }
+      lines.push('');
+    }
+  } catch {}
+
+  // Recent KB decisions — agents must not contradict these
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const kbResult = await getKBForBusiness(business.id);
+    if (kbResult?.engine) {
+      const files = await kbResult.engine.listFiles('decisions');
+      const recent = files.slice(-5);
+      if (recent.length > 0) {
+        lines.push('## Recent Decisions (do not contradict these)');
+        for (const f of recent) {
+          try {
+            const parsed = await kbResult.engine.readFile(f);
+            const title = parsed.frontmatter?.title ?? f;
+            const excerpt = (parsed.content || '').slice(0, 180).replace(/\n/g, ' ').trim();
+            lines.push(`- **${title}** — ${excerpt}`);
+          } catch {}
+        }
+        lines.push('');
+      }
+    }
+  } catch {}
+
+  // Active goals — agents should keep them in mind on every run
+  try {
+    const activeGoals = db.prepare(`
+      SELECT title, description, metric_name, metric_target, metric_current,
+             progress_pct, deadline, strategy
+      FROM goals
+      WHERE business_id = ? AND status = 'active'
+      ORDER BY (deadline IS NULL) ASC, deadline ASC
+      LIMIT 5
+    `).all(business.id);
+    if (activeGoals.length > 0) {
+      lines.push('## Active Business Goals');
+      lines.push('Consider these when proposing tasks — prefer actions that move the needle.');
+      for (const g of activeGoals) {
+        lines.push(`- **${g.title}** (${(g.progress_pct ?? 0).toFixed(0)}% complete)`);
+        if (g.metric_name) lines.push(`  Target: ${g.metric_name} → ${g.metric_target} (current: ${g.metric_current ?? '?'})`);
+        if (g.deadline) lines.push(`  Deadline: ${g.deadline}`);
+        if (g.strategy) lines.push(`  Strategy: ${g.strategy}`);
+      }
+      lines.push('');
+    }
+
+    // Active projects
+    const activeProjects = db.prepare(`
+      SELECT id, name, description, assigned_agents, tags
+      FROM projects
+      WHERE business_id = ? AND status = 'active'
+      ORDER BY updated_at DESC LIMIT 3
+    `).all(business.id);
+    if (activeProjects.length > 0) {
+      lines.push('## Active Projects');
+      for (const p of activeProjects) {
+        let agents = [];
+        try { agents = JSON.parse(p.assigned_agents); } catch {}
+        lines.push(`- **${p.name}**${p.description ? `: ${p.description}` : ''}`);
+        if (agents.length) lines.push(`  Assigned: ${agents.join(', ')}`);
+      }
+      lines.push('');
+    }
+  } catch {}
+
   lines.push(`## Existing Pending Tasks (do not duplicate these)`);
   if (existingTasks.length === 0) {
     lines.push('No pending tasks.');
@@ -302,7 +401,9 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
   lines.push('');
 
   lines.push(`## Your Task`);
-  if (trigger === 'schedule') {
+  if (trigger === 'workflow' && extraUserMessage) {
+    lines.push(extraUserMessage);
+  } else if (trigger === 'schedule') {
     const job = profile.scheduled_jobs?.find(j => j.id === triggerId) ?? profile.scheduled_jobs?.[0];
     if (job) {
       lines.push(job.task);
@@ -323,7 +424,7 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
 /**
  * Run an agent against a business context.
  */
-export async function runAgent(agentId, businessId, trigger, triggerId = null) {
+export async function runAgent(agentId, businessId, trigger, triggerId = null, options = {}) {
   const runId = generateId();
   const startedAt = new Date().toISOString();
 
@@ -404,6 +505,11 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
   `).run(runId, agentId, businessId, trigger, triggerId, startedAt);
 
   try {
+    const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+    pushDashboardEvent(businessId, 'agent_run_started', { agentId, runId, trigger });
+  } catch {}
+
+  try {
     // 5. Load business context
     const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId);
     if (!business) throw new Error(`Business '${businessId}' not found.`);
@@ -439,7 +545,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     const systemPrompt = assembleSystemPrompt(agentId, profile);
 
     // 8. Build user context message
-    const userContext = buildUserContext({
+    const userContext = await buildUserContext({
       agentId,
       profile,
       business,
@@ -449,6 +555,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
       connectors,
       trigger,
       triggerId,
+      extraUserMessage: options.extra_user_message,
     });
 
     // 9. Run LLM (with fallback)
@@ -500,16 +607,38 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
     const tasksToCreate = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     const signalsDetected = parsed.signals_detected ?? relevantSignals.length;
 
-    // 11. Insert tasks
+    // 11. Insert tasks (with brain restraint check)
     const createdTasks = [];
     for (const taskDef of tasksToCreate) {
       if (!taskDef.title) continue;
       try {
+        // Brain — check restraint before creating
+        let restraint = { allowed: true };
+        try {
+          const { checkRestraint } = await import('../brain/restraint.js');
+          restraint = await checkRestraint(taskDef, businessId);
+        } catch (err) {
+          console.warn('[brain] restraint check failed (allowing):', err.message);
+        }
+
+        let deferredUntil = null;
+        let deferredReason = null;
+        let description = taskDef.description ?? null;
+
+        if (!restraint.allowed) {
+          deferredUntil = restraint.measurement_window_ends;
+          deferredReason = restraint.reason;
+          if (description) description += `\n\n⏳ Deferred: ${restraint.reason}`;
+          else description = `⏳ Deferred: ${restraint.reason}`;
+        } else if (restraint.confounding_warning) {
+          description = `${description ?? ''}\n\n⚠️ ${restraint.confounding_warning}`.trim();
+        }
+
         const task = createTask({
           business_id: businessId,
           signal_id: triggerId && trigger === 'signal' ? triggerId : null,
           title: taskDef.title,
-          description: taskDef.description ?? null,
+          description,
           proposed_by: agentId,
           action_type: taskDef.action_type ?? null,
           action_payload: taskDef.action_payload ?? {},
@@ -519,6 +648,22 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
           estimated_impact: taskDef.estimated_impact ?? null,
           approval_mode: profile.approval_mode ?? 'requires_approval',
         });
+
+        // If deferred, immediately move to 'deferred' status with the wake-up time
+        if (deferredUntil) {
+          try {
+            db.prepare(`
+              UPDATE tasks
+              SET status = 'deferred', deferred_until = ?, deferred_reason = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(deferredUntil, deferredReason, task.id);
+            task.status = 'deferred';
+            task.deferred_until = deferredUntil;
+            task.deferred_reason = deferredReason;
+          } catch (err) {
+            console.warn('[brain] failed to mark task deferred:', err.message);
+          }
+        }
 
         createdTasks.push(task);
 
@@ -541,7 +686,13 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
           console.warn('[agent-runner] task_events insert failed (non-fatal):', evErr.message);
         }
 
-        if (shouldAutoApprove(task)) {
+        // Deferred tasks skip approval flow — they will re-surface automatically
+        if (deferredUntil) {
+          try {
+            createTaskEvent(task.id, 'deferred', 'system:brain',
+              `Deferred until ${deferredUntil}`, { reason: deferredReason });
+          } catch {}
+        } else if (shouldAutoApprove(task)) {
           try { approveTask(task.id, `agent:${agentId}`); } catch {}
         } else {
           try { await sendApprovalRequest(task, business); } catch {}
@@ -701,6 +852,13 @@ ${signalsDetected} signal(s) reviewed.
 
     console.log(`[agent-runner] '${agentId}' complete. Tasks: ${createdTasks.length}, Cost: $${costUsd.toFixed(6)}`);
 
+    try {
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+      pushDashboardEvent(businessId, 'agent_run_complete', {
+        agentId, runId, tasksProposed: createdTasks.length, costUsd, signalsDetected,
+      });
+    } catch {}
+
     return { runId, tasksProposed: createdTasks.length, signalsDetected, costUsd };
 
   } catch (err) {
@@ -708,6 +866,11 @@ ${signalsDetected} signal(s) reviewed.
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(err.message, runId);
+
+    try {
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+      pushDashboardEvent(businessId, 'agent_run_failed', { agentId, runId, error: err.message });
+    } catch {}
 
     // Update agent stats even on failure so last_run + run_count reflect reality
     try {

@@ -9,18 +9,39 @@ import {
   Menu,
 } from 'lucide-react'
 import Sidebar from './Sidebar.jsx'
+import AgentPanel from './AgentPanel.jsx'
 import useStore from '../lib/store.js'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
+
+function useLocalStorage(key, fallback) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = window.localStorage.getItem(key)
+      return raw != null ? JSON.parse(raw) : fallback
+    } catch { return fallback }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(key, JSON.stringify(value)) } catch {}
+  }, [key, value])
+  return [value, setValue]
+}
 
 // Page title map
 const PAGE_TITLES = {
   '/':           'Dashboard',
   '/signals':    'Signals',
   '/tasks':      'Tasks',
+  '/chat':       'Chat',
   '/agents':     'Agents',
   '/connectors': 'Connectors',
+  '/outcomes':   'Outcomes',
+  '/workflows':  'Workflows',
+  '/goals':      'Goals',
+  '/projects':   'Projects',
+  '/timeline':   'Timeline',
   '/kb':         'Knowledge Base',
+  '/health':     'System Health',
   '/settings':   'Settings',
 }
 
@@ -254,6 +275,7 @@ function TopBar({ onHamburger }) {
 function Layout() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
+  const [agentPanelOpen, setAgentPanelOpen] = useLocalStorage('agent-panel-open', true)
   const location = useLocation()
 
   // Close mobile sidebar on navigation
@@ -288,6 +310,7 @@ function Layout() {
           <Outlet />
         </main>
       </div>
+      <AgentPanel open={agentPanelOpen} onToggle={() => setAgentPanelOpen(!agentPanelOpen)} />
       <NotificationArea />
     </div>
   )

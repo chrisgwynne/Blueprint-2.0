@@ -172,6 +172,13 @@ const mountRoutes = async () => {
   const { default: systemHealthRoutes } = await import('./routes/system-health.js');
   const { default: outcomesRoutes } = await import('./routes/outcomes.js');
   const { default: chatRoutes } = await import('./routes/chat.js');
+  const { default: workflowsRoutes } = await import('./routes/workflows.js');
+  const { default: goalsRoutes } = await import('./routes/goals.js');
+  const { default: projectsRoutes } = await import('./routes/projects.js');
+  const { default: timelineRoutes } = await import('./routes/timeline.js');
+  const { default: agentStatusRoutes } = await import('./routes/agent-status.js');
+  const { default: brainRoutes } = await import('./routes/brain.js');
+  const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
   app.use('/api/auth', authRoutes);
@@ -193,6 +200,17 @@ const mountRoutes = async () => {
   app.use('/api/system', systemHealthRoutes);
   app.use('/api/outcomes', outcomesRoutes);
   app.use('/api/chat', chatRoutes);
+  app.use('/api/workflows', workflowsRoutes);
+  app.use('/api/goals', goalsRoutes);
+  app.use('/api/projects', projectsRoutes);
+  app.use('/api/timeline', timelineRoutes);
+  app.use('/api/agents-status', agentStatusRoutes);
+  app.use('/api/brain', brainRoutes);
+  app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
+    // Session-authed — uses same cookie
+    if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
+    sseHandler(req, res);
+  });
 
   // API key management (session auth — used by Settings UI)
   const { isAuthenticated: _isAuth } = await import('./middleware/auth.js');
@@ -412,6 +430,22 @@ async function start() {
 
     // Mount all routes
     await mountRoutes();
+
+    // Seed built-in workflows for businesses with none (idempotent)
+    try {
+      const { seedAllBusinesses } = await import('./workflows/built-in-templates.js');
+      seedAllBusinesses();
+    } catch (err) {
+      console.warn('[startup] workflow seed skipped:', err.message);
+    }
+
+    // Brain — seed action_windows (idempotent)
+    try {
+      const { seedActionWindows } = await import('./brain/action-windows.js');
+      seedActionWindows();
+    } catch (err) {
+      console.warn('[startup] action-windows seed skipped:', err.message);
+    }
 
     // Start scheduler (after routes are ready)
     if (process.env.DISABLE_SCHEDULER !== 'true') {

@@ -113,12 +113,25 @@ export async function sendReporterEmail(parsed, business, businessId, startedAt)
   const tasksCompleted = buildOutcomes(businessId);
   const priorities = extractPriorities(parsed);
 
+  // Brain — in-flight temporal summary
+  let temporalSummary = '';
+  try {
+    const { generateTemporalSummary } = await import('../brain/temporal-summary.js');
+    const t = await generateTemporalSummary(businessId);
+    temporalSummary = t.summary;
+  } catch {}
+
+  const combinedSummary = [
+    parsed?.summary || parsed?.reasoning?.slice(0, 400) || 'Reporter agent run completed.',
+    temporalSummary ? `\n\n**What's in flight:** ${temporalSummary}` : '',
+  ].join('');
+
   const data = {
     business,
     period: weekOfLabel(),
     health_score: healthScore,
     health_direction: healthDirection(businessId),
-    summary: parsed?.summary || parsed?.reasoning?.slice(0, 400) || 'Reporter agent run completed.',
+    summary: combinedSummary,
     metrics,
     tasks_completed: tasksCompleted,
     priorities,

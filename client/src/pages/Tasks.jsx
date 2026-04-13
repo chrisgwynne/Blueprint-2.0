@@ -12,13 +12,14 @@ const STATUS_CONFIG = {
   complete:  { label: 'Complete',  pill: 'bp-pill-green' },
   verified:  { label: 'Verified',  pill: 'bp-pill-grey' },
   rejected:  { label: 'Rejected',  pill: 'bp-pill-red' },
+  deferred:  { label: 'Deferred',  pill: 'bp-pill-grey' },
 }
 
 const PRIORITY_PILL = { 1: 'bp-pill-red', 2: 'bp-pill-amber', 3: 'bp-pill-blue', 4: 'bp-pill-grey' }
 const PRIORITY_LABEL = { 1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4', p1: 'P1', p2: 'P2', p3: 'P3', p4: 'P4' }
 const PRIORITY_NUM = { p1: 1, p2: 2, p3: 3, p4: 4 }
 
-const STATUS_FILTERS = ['all', 'proposed', 'approved', 'executing', 'complete', 'verified', 'rejected']
+const STATUS_FILTERS = ['all', 'proposed', 'deferred', 'approved', 'executing', 'complete', 'verified', 'rejected']
 
 // ─── New Task Modal ───────────────────────────────────────────────────────────
 
@@ -218,8 +219,53 @@ function TaskListRow({ task, onApprove, onReject, onSelect }) {
             </button>
           </div>
         )}
+        {task.status === 'deferred' && <DeferredBadge task={task} />}
       </td>
     </tr>
+  )
+}
+
+function DeferredBadge({ task }) {
+  const [overriding, setOverriding] = useState(false)
+  const days = task.deferred_until
+    ? Math.max(0, Math.ceil((new Date(task.deferred_until) - new Date()) / 86400000))
+    : null
+
+  async function handleOverride() {
+    if (!confirm(`Override deferral and propose this task now?\n\nBlueprint deferred this task because a recent related change is still in its measurement window. Overriding means you take responsibility for the attribution risk.\n\nReason: ${task.deferred_reason ?? 'temporal restraint'}`)) return
+    setOverriding(true)
+    try {
+      const { overrideDeferredTask } = await import('../lib/api.js')
+      await overrideDeferredTask(task.business_id, task.id)
+      window.location.reload()
+    } catch (err) {
+      alert(`Override failed: ${err.message}`)
+    } finally { setOverriding(false) }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 280 }}>
+      <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-amber)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+        ⏳ Deferred{days != null ? ` — ${days} day${days === 1 ? '' : 's'}` : ''}
+      </span>
+      {task.deferred_reason && (
+        <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', fontStyle: 'italic', lineHeight: 1.4 }}>
+          {task.deferred_reason.slice(0, 180)}
+        </span>
+      )}
+      <button
+        onClick={handleOverride}
+        disabled={overriding}
+        style={{
+          padding: '3px 8px', fontSize: 9, background: 'transparent',
+          border: '1px solid var(--bp-border)', color: 'var(--bp-text-3)',
+          borderRadius: 3, cursor: 'pointer', width: 'fit-content',
+          fontFamily: 'var(--bp-font-mono)',
+        }}
+        title="Force this task through — you understand the risks">
+        {overriding ? 'Overriding…' : 'Override'}
+      </button>
+    </div>
   )
 }
 

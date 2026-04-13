@@ -12,6 +12,10 @@ import KB from './pages/KB.jsx'
 import SystemHealth from './pages/SystemHealth.jsx'
 import Chat from './pages/Chat.jsx'
 import Outcomes from './pages/Outcomes.jsx'
+import Workflows from './pages/Workflows.jsx'
+import Goals from './pages/Goals.jsx'
+import Projects from './pages/Projects.jsx'
+import Timeline from './pages/Timeline.jsx'
 import Settings from './pages/Settings.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import Onboarding from './pages/Onboarding.jsx'
@@ -120,6 +124,11 @@ function App() {
         <Route path="chat" element={<Chat />} />
         <Route path="chat/:conversationId" element={<Chat />} />
         <Route path="outcomes" element={<Outcomes />} />
+        <Route path="workflows" element={<Workflows />} />
+        <Route path="goals" element={<Goals />} />
+        <Route path="projects" element={<Projects />} />
+        <Route path="projects/:projectId" element={<Projects />} />
+        <Route path="timeline" element={<Timeline />} />
         <Route path="settings" element={<Settings />} />
       </Route>
 

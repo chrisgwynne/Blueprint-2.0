@@ -5,7 +5,8 @@ import {
   AlertTriangle, CheckCircle2, XCircle, Pause, Database,
   BookOpen, Clock, Zap,
 } from 'lucide-react'
-import { getSystemHealth, syncConnector, runAgent } from '../lib/api.js'
+import { getSystemHealth, syncConnector, runAgent, getBrainStatus } from '../lib/api.js'
+import useStore from '../lib/store.js'
 
 const STATUS_COLORS = {
   healthy:  { label: 'ALL SYSTEMS OPERATIONAL', color: 'var(--bp-green)', bg: 'rgba(0,201,167,0.10)' },
@@ -470,6 +471,74 @@ export default function SystemHealth() {
       <Section title="Scheduler">
         <SchedulerSection scheduler={data.scheduler} />
       </Section>
+
+      <Section title="Brain">
+        <BrainSection />
+      </Section>
+    </div>
+  )
+}
+
+function BrainSection() {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [brain, setBrain] = useState(null)
+
+  useEffect(() => {
+    if (!currentBusiness) return
+    getBrainStatus(currentBusiness.id).then(setBrain).catch(() => setBrain(null))
+  }, [currentBusiness])
+
+  if (!brain) return null
+
+  return (
+    <div className="bp-card" style={{ padding: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 16 }}>🧠</span>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase' }}>
+          Temporal awareness: <span style={{ color: 'var(--bp-green)' }}>● Active</span>
+        </div>
+      </div>
+
+      {brain.summary && (
+        <div style={{
+          padding: 12, marginBottom: 14,
+          background: 'rgba(77,166,255,0.06)',
+          border: '1px solid rgba(77,166,255,0.15)',
+          borderRadius: 4,
+          fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text-2)',
+          lineHeight: 1.6, fontStyle: 'italic',
+        }}>
+          {brain.summary}
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+        {[
+          { label: 'Actions in flight', value: brain.in_flight_count ?? 0, color: 'var(--bp-blue)' },
+          { label: 'Ready to measure', value: brain.ready_for_measurement ?? 0, color: 'var(--bp-green)' },
+          { label: 'Deferred tasks', value: brain.deferred_tasks ?? 0, color: 'var(--bp-amber)' },
+          { label: 'Seasonal patterns', value: brain.seasonal_patterns ?? 0, color: 'var(--bp-purple)' },
+        ].map(c => (
+          <div key={c.label} style={{ padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3 }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 18, fontWeight: 700, color: c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+
+      {Array.isArray(brain.still_waiting) && brain.still_waiting.length > 0 && (
+        <div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Actions in measurement windows
+          </div>
+          {brain.still_waiting.slice(0, 5).map((w) => (
+            <div key={w.id} style={{ padding: '6px 0', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', borderTop: '1px solid var(--bp-border)' }}>
+              • <strong>{w.title}</strong>
+              <span style={{ color: 'var(--bp-text-3)' }}> — ready in {w.days_until_measurable} day{w.days_until_measurable === 1 ? '' : 's'}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
