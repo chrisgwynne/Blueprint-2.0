@@ -1228,7 +1228,7 @@ function Connectors() {
       if (error === 'google_oauth_not_configured') {
         message = detail
           ? decodeURIComponent(detail)
-          : 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI in .env, then restart Blueprint.'
+          : 'Google OAuth is not configured. Open Settings → Google OAuth and paste your Client ID and Client Secret from Google Cloud Console.'
       } else if (detail) {
         message = `${decodeURIComponent(error)} — ${decodeURIComponent(detail)}`
       } else {

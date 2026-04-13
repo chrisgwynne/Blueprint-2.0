@@ -381,3 +381,7 @@ export const getBrainStatus = (businessId) => get(`/brain/${businessId}`)
 export const getActionWindows = (businessId) => get(`/brain/${businessId}/action-windows`)
 export const getInFlightActions = (businessId) => get(`/brain/${businessId}/in-flight`)
 export const overrideDeferredTask = (businessId, taskId) => post(`/brain/${businessId}/tasks/${taskId}/override`)
+
+// ─── Google OAuth app configuration ────────────────────────────────────────
+export const getGoogleOAuthConfig = () => get('/oauth/google/config')
+export const saveGoogleOAuthConfig = (body) => request('PUT', '/oauth/google/config', body)

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -10,6 +10,7 @@ const TABS = [
   { id: 'business',  label: 'Business Profile' },
   { id: 'notifications', label: 'Notifications' },
   { id: 'llm',       label: 'LLM Providers' },
+  { id: 'oauth',     label: 'Google OAuth' },
   { id: 'kb',        label: 'Knowledge Base' },
   { id: 'agents',    label: 'Agent Defaults' },
   { id: 'integrations', label: 'External Agents' },
@@ -1341,6 +1342,181 @@ function IntegrationsTab() {
 }
 
 // ============================================
+function GoogleOAuthTab() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [config, setConfig] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [redirectUri, setRedirectUri] = useState('')
+  const [showSecret, setShowSecret] = useState(false)
+  const [secretChanged, setSecretChanged] = useState(false)
+
+  useEffect(() => {
+    getGoogleOAuthConfig()
+      .then((c) => {
+        setConfig(c)
+        setClientId(c.client_id ?? '')
+        setRedirectUri(c.redirect_uri ?? c.default_redirect_uri ?? '')
+        // Never pre-populate the secret — we don't send it back
+        setClientSecret(c.has_secret ? '' : '')
+      })
+      .catch((err) => addNotification({ type: 'error', message: 'Failed to load OAuth config: ' + err.message }))
+      .finally(() => setLoading(false))
+  }, [])
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      const body = {
+        client_id: clientId.trim(),
+        redirect_uri: redirectUri.trim(),
+      }
+      // Only submit the secret if the user typed one (or explicitly cleared it).
+      if (secretChanged) body.client_secret = clientSecret
+      const updated = await saveGoogleOAuthConfig(body)
+      setConfig(updated)
+      setSecretChanged(false)
+      setClientSecret('')
+      addNotification({
+        type: 'success',
+        message: updated.configured
+          ? 'Google OAuth configured. You can now connect Google connectors.'
+          : 'Saved, but configuration is still incomplete.',
+      })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return <div className="text-sm text-blueprint-muted">Loading…</div>
+  }
+
+  const configured = config?.configured
+  const hasSecret = config?.has_secret
+
+  return (
+    <div className="space-y-6">
+      <Section
+        title="Google OAuth app credentials"
+        description="Used to connect Google Search Console, Analytics 4, Business Profile, and Google Ads. You only set this up once — all Google connectors share these credentials."
+      >
+        {/* Status banner */}
+        <div className={clsx(
+          'p-3 rounded text-sm mb-4 border',
+          configured
+            ? 'bg-blueprint-green/10 border-blueprint-green/30 text-blueprint-green'
+            : 'bg-blueprint-amber/10 border-blueprint-amber/30 text-blueprint-amber',
+        )}>
+          {configured ? (
+            <span className="flex items-center gap-2"><Check size={14}/> Configured — Google connectors will work.</span>
+          ) : (
+            <span className="flex items-center gap-2"><Info size={14}/> Not yet configured. Follow the steps below.</span>
+          )}
+        </div>
+
+        {/* Setup instructions */}
+        <div className="p-3 rounded bg-blueprint-card border border-blueprint-border text-xs text-blueprint-muted leading-relaxed mb-4">
+          <div className="text-slate-200 font-medium text-sm mb-2">How to create your OAuth client</div>
+          <ol className="list-decimal list-inside space-y-1.5">
+            <li>
+              Go to{' '}
+              <a
+                href="https://console.cloud.google.com/apis/credentials"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blueprint-blue hover:underline"
+              >Google Cloud Console → APIs &amp; Services → Credentials</a>
+              {' '}(create a free project if you don't have one).
+            </li>
+            <li>Click <b>Create credentials → OAuth client ID</b>. Pick application type <b>Web application</b>.</li>
+            <li>
+              Under <b>Authorised redirect URIs</b>, add exactly:
+              <div className="mt-1 p-2 rounded bg-blueprint-bg border border-blueprint-border font-mono text-xs text-slate-200 break-all select-all">
+                {config?.default_redirect_uri || 'http://localhost:4000/api/oauth/google/callback'}
+              </div>
+            </li>
+            <li>
+              Enable the APIs you need:{' '}
+              <a href="https://console.cloud.google.com/apis/library/searchconsole.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-blueprint-blue hover:underline">Search Console</a>,{' '}
+              <a href="https://console.cloud.google.com/apis/library/analyticsdata.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-blueprint-blue hover:underline">Analytics Data</a>,{' '}
+              <a href="https://console.cloud.google.com/apis/library/mybusinessbusinessinformation.googleapis.com" target="_blank" rel="noopener noreferrer" className="text-blueprint-blue hover:underline">Business Profile</a>.
+            </li>
+            <li>Copy the <b>Client ID</b> and <b>Client Secret</b> Google gives you and paste them below.</li>
+          </ol>
+        </div>
+
+        <Field label="Client ID" hint="Looks like 1234567890-abcdef.apps.googleusercontent.com">
+          <input
+            type="text"
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            placeholder="123456789012-xxxxxxxxxxxxxxxxx.apps.googleusercontent.com"
+            className="w-full px-3 py-2 bg-blueprint-card border border-blueprint-border rounded text-sm text-slate-200 font-mono placeholder-blueprint-muted focus:outline-none focus:border-blueprint-blue"
+          />
+        </Field>
+
+        <Field
+          label="Client Secret"
+          hint={hasSecret && !secretChanged ? 'A secret is already saved. Leave blank to keep it.' : 'Starts with GOCSPX-'}
+        >
+          <div className="relative">
+            <input
+              type={showSecret ? 'text' : 'password'}
+              value={clientSecret}
+              onChange={(e) => { setClientSecret(e.target.value); setSecretChanged(true) }}
+              placeholder={hasSecret && !secretChanged ? '••••••••••••••••' : 'GOCSPX-xxxxxxxxxxxxxxxxxx'}
+              className="w-full px-3 py-2 pr-10 bg-blueprint-card border border-blueprint-border rounded text-sm text-slate-200 font-mono placeholder-blueprint-muted focus:outline-none focus:border-blueprint-blue"
+            />
+            <button
+              type="button"
+              onClick={() => setShowSecret((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-blueprint-muted hover:text-slate-200"
+              tabIndex={-1}
+            >
+              {showSecret ? <EyeOff size={14}/> : <Eye size={14}/>}
+            </button>
+          </div>
+        </Field>
+
+        <Field
+          label="Redirect URI"
+          hint="Must match exactly what you entered in Google Cloud Console."
+        >
+          <input
+            type="text"
+            value={redirectUri}
+            onChange={(e) => setRedirectUri(e.target.value)}
+            placeholder={config?.default_redirect_uri || 'http://localhost:4000/api/oauth/google/callback'}
+            className="w-full px-3 py-2 bg-blueprint-card border border-blueprint-border rounded text-sm text-slate-200 font-mono placeholder-blueprint-muted focus:outline-none focus:border-blueprint-blue"
+          />
+        </Field>
+
+        <div className="flex items-center gap-2 mt-4">
+          <button
+            onClick={handleSave}
+            disabled={saving || !clientId.trim() || (!hasSecret && !clientSecret.trim())}
+            className="px-4 py-2 bg-blueprint-blue text-white text-sm rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {saving ? <RefreshCw size={14} className="animate-spin"/> : <Save size={14}/>}
+            Save
+          </button>
+          {config?.source && (
+            <span className="text-xs text-blueprint-muted">
+              Loading from: {config.source.client_id}/{config.source.client_secret}/{config.source.redirect_uri}
+            </span>
+          )}
+        </div>
+      </Section>
+    </div>
+  )
+}
+
+// ============================================
 function Settings() {
   const [activeTab, setActiveTab] = useState('business')
 
@@ -1348,6 +1524,7 @@ function Settings() {
     business:      <BusinessTab />,
     notifications: <NotificationsTab />,
     llm:           <LLMTab />,
+    oauth:         <GoogleOAuthTab />,
     kb:            <KBTab />,
     agents:        <AgentDefaultsTab />,
     integrations:  <IntegrationsTab />,

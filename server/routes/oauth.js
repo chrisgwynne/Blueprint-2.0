@@ -19,6 +19,60 @@ const SCOPES = [
   'profile',
 ].join(' ');
 
+// ─── OAuth config resolution ──────────────────────────────────────────────────
+// Config is loaded from the DB (settings.google_oauth_config) first, then
+// falls back to environment variables. The DB form lets non-technical users
+// paste credentials into the Settings UI without editing .env.
+const PLACEHOLDER_PATTERNS = [/^your-/i, /GOCSPX-your-client-secret/i, /your-client/i];
+function isPlaceholder(v) {
+  if (!v || typeof v !== 'string') return true;
+  return PLACEHOLDER_PATTERNS.some((r) => r.test(v));
+}
+
+function defaultRedirectUri() {
+  // Blueprint lives at PORT (default 4000) on the local machine. Anyone
+  // running this on a remote host sets GOOGLE_REDIRECT_URI in .env.
+  const port = process.env.PORT || 4000;
+  return `http://localhost:${port}/api/oauth/google/callback`;
+}
+
+export function readGoogleOAuthConfig() {
+  let fromDb = {};
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get();
+    if (row?.value) {
+      const parsed = JSON.parse(row.value);
+      // The secret is encrypted at rest
+      fromDb = {
+        client_id: parsed.client_id ?? null,
+        client_secret: parsed.client_secret_enc
+          ? (() => { try { return decrypt(parsed.client_secret_enc); } catch { return null; } })()
+          : null,
+        redirect_uri: parsed.redirect_uri ?? null,
+      };
+    }
+  } catch (err) {
+    console.warn('[oauth] reading google_oauth_config failed:', err.message);
+  }
+
+  const clientId = !isPlaceholder(fromDb.client_id) ? fromDb.client_id
+    : !isPlaceholder(process.env.GOOGLE_CLIENT_ID) ? process.env.GOOGLE_CLIENT_ID
+    : null;
+  const clientSecret = !isPlaceholder(fromDb.client_secret) ? fromDb.client_secret
+    : !isPlaceholder(process.env.GOOGLE_CLIENT_SECRET) ? process.env.GOOGLE_CLIENT_SECRET
+    : null;
+  const redirectUri = !isPlaceholder(fromDb.redirect_uri) ? fromDb.redirect_uri
+    : !isPlaceholder(process.env.GOOGLE_REDIRECT_URI) ? process.env.GOOGLE_REDIRECT_URI
+    : defaultRedirectUri();
+
+  return { clientId, clientSecret, redirectUri };
+}
+
+function isGoogleOAuthConfigured() {
+  const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
+  return !!(clientId && clientSecret && redirectUri);
+}
+
 /**
  * GET /api/oauth/google
  * Initiates Google OAuth flow. Redirects the browser to Google consent screen.
@@ -35,24 +89,12 @@ router.get('/google', (req, res) => {
     return res.status(400).json({ error: 'businessId is required.' });
   }
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
 
-  // Detect both missing values AND the placeholder values that ship in
-  // .env.example, so the user gets a clear message instead of being bounced
-  // to Google which returns a cryptic "invalid_client" 401.
-  const isPlaceholder = (v) =>
-    !v ||
-    v.startsWith('your-') ||
-    v === 'GOCSPX-your-client-secret' ||
-    v.includes('your-client');
-
-  if (isPlaceholder(clientId) || isPlaceholder(clientSecret) || isPlaceholder(redirectUri)) {
-    const msg = 'google_oauth_not_configured';
+  if (!clientId || !clientSecret || !redirectUri) {
     return res.redirect(
-      `${clientUrl}/connectors?error=${msg}&detail=${encodeURIComponent(
-        'GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI must be set in your .env before connecting Google. See .env.example for the required fields and https://console.cloud.google.com/apis/credentials to create an OAuth client.'
+      `${clientUrl}/connectors?error=google_oauth_not_configured&detail=${encodeURIComponent(
+        'Google OAuth is not configured. Open Settings → Google OAuth and paste your Client ID + Client Secret from Google Cloud Console (APIs & Services → Credentials).'
       )}`
     );
   }
@@ -99,9 +141,7 @@ router.get('/google/callback', async (req, res) => {
   const { businessId, types = 'gsc,ga4' } = parsedState;
   const connectorTypes = types.split(',').map(t => t.trim()).filter(t => ['gsc', 'ga4'].includes(t));
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+  const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
 
   if (!clientId || !clientSecret || !redirectUri) {
     return res.redirect(`${clientUrl}/connectors?error=server_misconfigured`);
@@ -265,11 +305,14 @@ router.get('/gbp', (req, res) => {
   const { businessId } = req.query;
   if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const { clientId, redirectUri: googleRedirect } = readGoogleOAuthConfig();
   const redirectUri = process.env.GBP_REDIRECT_URI ||
-    process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/gbp/callback') ||
+    googleRedirect?.replace('/google/callback', '/gbp/callback') ||
     'http://localhost:4000/api/oauth/gbp/callback';
-  if (!clientId) return res.status(500).json({ error: 'GOOGLE_CLIENT_ID is not configured.' });
+  if (!clientId) {
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+    return res.redirect(`${clientUrl}/connectors?error=google_oauth_not_configured&detail=${encodeURIComponent('Configure Google OAuth in Settings → Google OAuth first.')}`);
+  }
 
   const state = Buffer.from(JSON.stringify({ businessId, type: 'gbp' })).toString('base64url');
   const params = new URLSearchParams({
@@ -302,10 +345,9 @@ router.get('/gbp/callback', async (req, res) => {
   }
   const { businessId } = parsedState;
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const { clientId, clientSecret, redirectUri: googleRedirect } = readGoogleOAuthConfig();
   const redirectUri = process.env.GBP_REDIRECT_URI ||
-    process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/gbp/callback') ||
+    googleRedirect?.replace('/google/callback', '/gbp/callback') ||
     'http://localhost:4000/api/oauth/gbp/callback';
 
   try {
@@ -367,9 +409,14 @@ router.get('/google-ads', (req, res) => {
   const { businessId } = req.query;
   if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/google-ads/callback')}`;
-  if (!clientId) return res.status(500).json({ error: 'GOOGLE_CLIENT_ID is not configured.' });
+  const { clientId, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI ||
+    googleRedirect?.replace('/google/callback', '/google-ads/callback') ||
+    'http://localhost:4000/api/oauth/google-ads/callback';
+  if (!clientId) {
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+    return res.redirect(`${clientUrl}/connectors?error=google_oauth_not_configured&detail=${encodeURIComponent('Configure Google OAuth in Settings → Google OAuth first.')}`);
+  }
 
   const state = Buffer.from(JSON.stringify({ businessId, type: 'google-ads' })).toString('base64url');
   const params = new URLSearchParams({
@@ -402,9 +449,10 @@ router.get('/google-ads/callback', async (req, res) => {
   }
   const { businessId } = parsedState;
 
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || `${process.env.GOOGLE_REDIRECT_URI?.replace('/google/callback', '/google-ads/callback')}`;
+  const { clientId, clientSecret, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+  const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI ||
+    googleRedirect?.replace('/google/callback', '/google-ads/callback') ||
+    'http://localhost:4000/api/oauth/google-ads/callback';
 
   try {
     const tokenRes = await fetch(TOKEN_URL, {
@@ -575,6 +623,93 @@ router.delete('/google/:businessId', isAuthenticated, async (req, res) => {
 
   console.log(`[oauth] Revoked Google access for business ${businessId} (${connectors.length} connectors)`);
   return res.json({ ok: true, disconnected: connectors.length });
+});
+
+// ─── Google OAuth app credentials (Client ID / Secret / redirect URI) ─────────
+// Stored in settings.google_oauth_config with the secret encrypted. This lets
+// the user paste credentials into the Settings UI instead of editing .env.
+
+/**
+ * GET /api/oauth/google/config
+ * Returns the current Google OAuth configuration. The secret is NEVER returned
+ * in plain text — only a boolean `has_secret` flag.
+ */
+router.get('/google/config', isAuthenticated, (req, res) => {
+  try {
+    const cfg = readGoogleOAuthConfig();
+    // Expose whether the *live* config resolves (via DB or env), and the
+    // storage source so the user can tell if they're overriding env.
+    const storedRow = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get();
+    let stored = null;
+    try { stored = storedRow?.value ? JSON.parse(storedRow.value) : null; } catch {}
+    const envPresent = {
+      client_id: !isPlaceholder(process.env.GOOGLE_CLIENT_ID),
+      client_secret: !isPlaceholder(process.env.GOOGLE_CLIENT_SECRET),
+      redirect_uri: !isPlaceholder(process.env.GOOGLE_REDIRECT_URI),
+    };
+    return res.json({
+      configured: !!(cfg.clientId && cfg.clientSecret && cfg.redirectUri),
+      client_id: cfg.clientId ?? '',
+      redirect_uri: cfg.redirectUri ?? defaultRedirectUri(),
+      has_secret: !!cfg.clientSecret,
+      source: {
+        client_id: stored?.client_id ? 'settings' : (envPresent.client_id ? 'env' : 'none'),
+        client_secret: stored?.client_secret_enc ? 'settings' : (envPresent.client_secret ? 'env' : 'none'),
+        redirect_uri: stored?.redirect_uri ? 'settings' : (envPresent.redirect_uri ? 'env' : 'default'),
+      },
+      default_redirect_uri: defaultRedirectUri(),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/oauth/google/config
+ * Body: { client_id, client_secret, redirect_uri }
+ *   - Pass an empty string or omit a field to delete that slot (falls back to env).
+ *   - Pass `null` for client_secret to leave it unchanged (so the UI can edit
+ *     client_id without re-entering the secret).
+ */
+router.put('/google/config', isAuthenticated, (req, res) => {
+  try {
+    const { client_id, client_secret, redirect_uri } = req.body ?? {};
+
+    // Read existing so we can preserve the secret when not re-submitted.
+    let existing = {};
+    try {
+      const row = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get();
+      existing = row?.value ? JSON.parse(row.value) : {};
+    } catch {}
+
+    const next = {
+      client_id: typeof client_id === 'string' ? client_id.trim() : (existing.client_id ?? null),
+      redirect_uri: typeof redirect_uri === 'string' ? redirect_uri.trim() : (existing.redirect_uri ?? null),
+      client_secret_enc: existing.client_secret_enc ?? null,
+    };
+    if (typeof client_secret === 'string') {
+      next.client_secret_enc = client_secret.trim()
+        ? encrypt(client_secret.trim())
+        : null;
+    }
+
+    db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ('google_oauth_config', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(JSON.stringify(next));
+
+    const cfg = readGoogleOAuthConfig();
+    return res.json({
+      ok: true,
+      configured: !!(cfg.clientId && cfg.clientSecret && cfg.redirectUri),
+      client_id: cfg.clientId ?? '',
+      redirect_uri: cfg.redirectUri ?? defaultRedirectUri(),
+      has_secret: !!cfg.clientSecret,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
 });
 
 export default router;
