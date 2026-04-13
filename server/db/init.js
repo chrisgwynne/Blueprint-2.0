@@ -124,34 +124,13 @@ function preInstallCoreAgents() {
   }
 }
 
-function seedDefaultBusiness() {
-  const existing = db.prepare('SELECT COUNT(*) as n FROM businesses').get();
-  if (existing.n > 0) {
-    console.log('[db:init] Business already exists — skipping seed.');
-    return;
-  }
-
-  const id = crypto.randomUUID();
-  db.prepare(`
-    INSERT INTO businesses (id, name, slug, type, description, settings, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-  `).run(
-    id,
-    'My Business',
-    'my-business',
-    'general',
-    'Default business — rename in Settings',
-    '{}'
-  );
-  console.log(`[db:init] Default business seeded (id: ${id}).`);
-}
-
 try {
   initSchema();
   seedSettings();
   seedAgentProfiles();
   preInstallCoreAgents();
-  seedDefaultBusiness();
+  // No default business seeded — the onboarding wizard creates it so the
+  // user goes through the proper setup flow on first login.
   console.log('[db:init] Database initialisation complete.');
   process.exit(0);
 } catch (err) {
