@@ -15,6 +15,7 @@ import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { recordAgentActivity } from '../agents/activity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -184,6 +185,12 @@ async function runAgentChat(agentId, userMessage, history, businessId) {
     max_tokens: 2048,
   });
 
+  // Record this chat response as an agent_run so the sidebar "last seen
+  // Xh ago" reflects chat activity, not just scheduled agent runs. Chat
+  // is real work the agent did — it should count.
+  const runId = crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+
   try {
     const result = await runLLM(providerId, model, {
       system: systemPrompt,
@@ -193,16 +200,37 @@ async function runAgentChat(agentId, userMessage, history, businessId) {
     });
 
     const content = result.content?.trim() ?? '';
-    if (!content) return null;
+    if (!content) {
+      recordAgentActivity({
+        agentId, businessId, trigger: 'chat', status: 'failed',
+        reasoning: 'Empty response from LLM',
+        usage: result.usage, cost_usd: result.cost_usd, startedAt,
+      });
+      return null;
+    }
+
+    const tasksProposed = (content.match(/proposed a task/gi) ?? []).length;
+    recordAgentActivity({
+      agentId, businessId, trigger: 'chat', status: 'complete',
+      reasoning: `Chat: "${userMessage.slice(0, 80)}"`,
+      tasks_proposed: tasksProposed,
+      usage: result.usage, cost_usd: result.cost_usd, startedAt,
+    });
 
     return {
       content,
       mentions_in_response: extractMentions(content),
-      tasks_proposed: (content.match(/proposed a task/gi) ?? []).length,
+      tasks_proposed: tasksProposed,
       cost_usd: result.cost_usd ?? 0,
     };
   } catch (err) {
     console.warn(`[chat-engine] Agent '${agentId}' chat run failed:`, err.message);
+    recordAgentActivity({
+      agentId, businessId, trigger: 'chat', status: 'failed',
+      reasoning: `Chat run failed: ${err.message.slice(0, 200)}`,
+      error: err.message.slice(0, 500),
+      startedAt,
+    });
     return {
       content: `⚠️ ${getAgentDisplayName(agentId)} is unavailable right now (${err.message.slice(0, 100)}).`,
       mentions_in_response: [],

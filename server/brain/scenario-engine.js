@@ -74,8 +74,11 @@ export async function modelScenarios(businessId, question, context = '') {
 
   let rawContent = '';
   let parsed = null;
+  let result = null;
+  const startedAt = new Date().toISOString();
+  const { recordAgentActivity } = await import('../agents/activity.js');
   try {
-    const result = await runLLM(providerId, model, {
+    result = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.4,
@@ -83,7 +86,17 @@ export async function modelScenarios(businessId, question, context = '') {
     });
     rawContent = result?.content ?? '';
     parsed = extractJSON(rawContent);
+    recordAgentActivity({
+      agentId: 'conductor', businessId, trigger: 'scenarios',
+      status: 'complete', reasoning: `Scenario modelling: "${(question ?? '').slice(0, 80)}"`,
+      usage: result?.usage, cost_usd: result?.cost_usd, startedAt,
+    });
   } catch (err) {
+    recordAgentActivity({
+      agentId: 'conductor', businessId, trigger: 'scenarios',
+      status: 'failed', reasoning: `Scenario modelling failed`,
+      error: err.message.slice(0, 500), startedAt,
+    });
     // Surface the real reason instead of a silent null. Most common causes:
     //   - no provider credentials configured for the chosen provider
     //   - provider quota / rate limit

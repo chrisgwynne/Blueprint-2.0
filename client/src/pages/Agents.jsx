@@ -116,13 +116,18 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }) {
 
       {/* Stats */}
       <div style={{ padding: '10px 16px', flex: 1, display: 'flex', flexDirection: 'column', gap: 7 }}>
-        {/* LLM */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Cpu size={10} />Model
-          </span>
-          <ProviderBadge llm={ps.llm} />
-        </div>
+        {/* LLM — only show a specific model when the profile explicitly
+            overrides. Otherwise the agent inherits the global default set
+            in Settings → LLM Providers, so we don't mislead the user into
+            thinking it's pinned to Claude when they've switched default. */}
+        {ps.llm?.model_override && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Cpu size={10} />Model
+            </span>
+            <ProviderBadge llm={ps.llm} />
+          </div>
+        )}
 
         {/* Last run */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -231,10 +236,15 @@ function TemplateCard({ template, onInstall, installing }) {
             ))}
           </div>
         )}
-        {template.llm && (
+        {template.llm?.model_override ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
             <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>Model:</span>
             <ProviderBadge llm={template.llm} />
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>Uses:</span>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-2)' }}>default LLM</span>
           </div>
         )}
       </div>

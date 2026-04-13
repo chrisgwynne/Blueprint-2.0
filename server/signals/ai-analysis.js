@@ -37,7 +37,13 @@ function extractJSON(rawContent) {
 }
 
 // Resolve which provider + model to use for AI analysis.
-// Priority: settings table 'ai_analysis_provider' → first configured provider → anthropic
+// Priority:
+//   1. Legacy ai_analysis_provider setting (explicit per-feature override)
+//   2. Global default (settings.llm_default_provider — set via Settings UI
+//      'Make default'). This is what the user expects to win when they
+//      pick MiniMax / Gemini / etc.
+//   3. Any configured provider, picking local/cheap ones first
+//   4. Fall back to the provider's default model from DEFAULT_MODEL_BY_PROVIDER
 function resolveAnalysisProvider() {
   const stored = db.prepare("SELECT value FROM settings WHERE key = 'ai_analysis_provider'").get();
   if (stored?.value) {
@@ -46,14 +52,12 @@ function resolveAnalysisProvider() {
       if (provider && model) return { provider, model };
     } catch {}
   }
-  // Fall back to claude-cli if available, then anthropic
-  const providers = listProviders();
-  const cli = providers.find(p => p.id === 'claude-cli');
-  if (cli?.configured) return { provider: 'claude-cli', model: 'claude-sonnet-4-20250514' };
-  const ant = providers.find(p => p.id === 'anthropic');
-  if (ant?.configured) return { provider: 'anthropic', model: 'claude-sonnet-4-20250514' };
-  // Last resort
-  return { provider: 'anthropic', model: 'claude-sonnet-4-20250514' };
+
+  // Respect the global default the user set via Settings → LLM Providers → Make default.
+  // resolveProfileLLM handles env fallbacks, model resolution, and swapping
+  // to another configured provider when the requested one has no creds.
+  const resolved = resolveProfileLLM({ provider: null });
+  return { provider: resolved.providerId, model: resolved.model };
 }
 
 const ANALYSIS_SYSTEM_PROMPT = `You are Blueprint's intelligence engine analyzing real business data to surface actionable insights.

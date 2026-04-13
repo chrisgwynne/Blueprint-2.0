@@ -198,8 +198,11 @@ export async function runInvestigation({ businessId, metricName = null, signalId
 
   let rawContent = '';
   let parsed = null;
+  const startedAt = new Date().toISOString();
+  const { recordAgentActivity } = await import('../agents/activity.js');
+  let result = null;
   try {
-    const result = await runLLM(providerId, model, {
+    result = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3, max_tokens: 2000,
@@ -208,8 +211,18 @@ export async function runInvestigation({ businessId, metricName = null, signalId
     parsed = extractJSON(rawContent);
   } catch (err) {
     console.warn('[investigation] LLM failed:', err.message);
+    recordAgentActivity({
+      agentId: 'conductor', businessId, trigger: 'investigation',
+      status: 'failed', reasoning: `Investigation failed: ${err.message.slice(0, 160)}`,
+      error: err.message.slice(0, 500), startedAt,
+    });
     throw new Error(`LLM call failed (${providerId}/${model}): ${err.message}`);
   }
+  recordAgentActivity({
+    agentId: 'conductor', businessId, trigger: 'investigation',
+    status: 'complete', reasoning: `Investigation: ${metricName || signalId || (question ?? '').slice(0, 80)}`,
+    usage: result?.usage, cost_usd: result?.cost_usd, startedAt,
+  });
 
   if (!parsed) {
     const preview = rawContent

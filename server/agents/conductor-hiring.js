@@ -234,16 +234,40 @@ Return JSON in this shape:
 
 If no agents are worth hiring right now, return { "recommendations": [] }.`;
 
-  const resp = await runLLM(providerId, model, {
-    system,
-    messages: [{ role: 'user', content: user }],
-    temperature: 0.2,
-    max_tokens: 1024,
-  });
+  const startedAt = new Date().toISOString();
+  const { recordAgentActivity } = await import('./activity.js');
+  let resp;
+  try {
+    resp = await runLLM(providerId, model, {
+      system,
+      messages: [{ role: 'user', content: user }],
+      temperature: 0.2,
+      max_tokens: 1024,
+    });
+  } catch (err) {
+    recordAgentActivity({
+      agentId: 'conductor', businessId, trigger: 'hiring_analysis',
+      status: 'failed', reasoning: 'Hiring analysis failed',
+      error: err.message.slice(0, 500), startedAt,
+    });
+    throw err;
+  }
 
   const parsed = extractJSONFromLLM(resp?.content ?? '');
   if (!parsed || !Array.isArray(parsed.recommendations)) {
+    recordAgentActivity({
+      agentId: 'conductor', businessId, trigger: 'hiring_analysis',
+      status: 'failed', reasoning: 'Hiring analysis — unparseable response',
+      usage: resp?.usage, cost_usd: resp?.cost_usd, startedAt,
+    });
     throw new Error('LLM response missing recommendations array');
   }
+
+  recordAgentActivity({
+    agentId: 'conductor', businessId, trigger: 'hiring_analysis',
+    status: 'complete',
+    reasoning: `Hiring analysis: considered ${candidates.length} agent${candidates.length === 1 ? '' : 's'}, recommended ${parsed.recommendations.length}`,
+    usage: resp?.usage, cost_usd: resp?.cost_usd, startedAt,
+  });
   return parsed.recommendations;
 }
