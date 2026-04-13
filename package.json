@@ -8,6 +8,7 @@
   "engines": { "node": ">=20.0.0" },
   "workspaces": ["server", "client"],
   "scripts": {
+    "setup": "bun scripts/setup.js",
     "dev": "concurrently \"bun run --cwd server dev\" \"bun run --cwd client dev\"",
     "build": "bun run --cwd client build",
     "start": "bun run --cwd server start",
