@@ -29,8 +29,11 @@ import { getMe, getBusinesses } from './lib/api.js'
 // Protected Route Wrapper
 // ============================================
 function ProtectedRoute({ children }) {
+  // All hooks must be at the top — no hooks after conditional returns.
   const user = useStore((s) => s.user)
+  const businesses = useStore((s) => s.businesses)
   const [checking, setChecking] = useState(true)
+  const [onboardingDone, setOnboardingDone] = useState(false)
   const setUser = useStore((s) => s.setUser)
   const setBusinesses = useStore((s) => s.setBusinesses)
   const setCurrentBusiness = useStore((s) => s.setCurrentBusiness)
@@ -45,10 +48,10 @@ function ProtectedRoute({ children }) {
       .then(async (me) => {
         setUser(me)
         try {
-          const businesses = await getBusinesses()
-          setBusinesses(businesses || [])
-          if (businesses && businesses.length > 0 && !currentBusiness) {
-            setCurrentBusiness(businesses[0])
+          const bs = await getBusinesses()
+          setBusinesses(bs || [])
+          if (bs && bs.length > 0 && !currentBusiness) {
+            setCurrentBusiness(bs[0])
           }
         } catch {
           // ignore
@@ -79,14 +82,11 @@ function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace />
   }
 
-  // Show onboarding if no businesses exist
-  const businesses = useStore((s) => s.businesses)
-  const [onboardingDone, setOnboardingDone] = useState(false)
+  // Show onboarding if no businesses have been created yet
   if (!onboardingDone && Array.isArray(businesses) && businesses.length === 0) {
     return (
       <Onboarding onComplete={() => {
         setOnboardingDone(true)
-        // Refresh businesses list
         getBusinesses().then((bs) => {
           useStore.getState().setBusinesses(bs ?? [])
           if (bs?.length > 0) useStore.getState().setCurrentBusiness(bs[0])
