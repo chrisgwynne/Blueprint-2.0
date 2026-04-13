@@ -569,7 +569,16 @@ function Tasks() {
       const data = await getTasks(currentBusiness.id, {
         status: statusFilter !== 'all' ? statusFilter : undefined,
       })
-      const list = Array.isArray(data) ? data : data?.tasks || []
+      // Server response shape is { view, data, pagination } for list view,
+      // { view, columns, data } for kanban, or a bare array from older code.
+      // Resolve whichever we got.
+      const list = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.data)
+          ? data.data
+          : Array.isArray(data?.tasks)
+            ? data.tasks
+            : []
       setTasks(list)
       setPendingTaskCount(list.filter((t) => t.status === 'proposed').length)
     } catch (err) {
