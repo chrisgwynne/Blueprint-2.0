@@ -259,19 +259,21 @@ router.get('/:businessId', (req, res) => {
     const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
     const offset = (pageNum - 1) * limitNum;
 
-    const conditions = ['business_id = ?'];
+    // Prefix every condition with "s." so they remain unambiguous in the
+    // JOIN query (connectors also has business_id, created_at, etc.).
+    const conditions = ['s.business_id = ?'];
     const params = [businessId];
 
-    if (severity) { conditions.push('severity = ?'); params.push(severity); }
-    if (connector) { conditions.push('connector_id = ?'); params.push(connector); }
-    if (type) { conditions.push('type = ?'); params.push(type); }
-    if (status) { conditions.push('status = ?'); params.push(status); }
-    if (dateFrom) { conditions.push('created_at >= ?'); params.push(dateFrom); }
-    if (dateTo) { conditions.push('created_at <= ?'); params.push(dateTo); }
+    if (severity) { conditions.push('s.severity = ?'); params.push(severity); }
+    if (connector) { conditions.push('s.connector_id = ?'); params.push(connector); }
+    if (type) { conditions.push('s.type = ?'); params.push(type); }
+    if (status) { conditions.push('s.status = ?'); params.push(status); }
+    if (dateFrom) { conditions.push('s.created_at >= ?'); params.push(dateFrom); }
+    if (dateTo) { conditions.push('s.created_at <= ?'); params.push(dateTo); }
 
     const where = conditions.join(' AND ');
 
-    const total = db.prepare(`SELECT COUNT(*) as cnt FROM signals WHERE ${where}`).get(...params)?.cnt ?? 0;
+    const total = db.prepare(`SELECT COUNT(*) as cnt FROM signals s WHERE ${where}`).get(...params)?.cnt ?? 0;
     const rows = db.prepare(`
       SELECT s.*, c.type as connector_type, c.name as connector_name
       FROM signals s
