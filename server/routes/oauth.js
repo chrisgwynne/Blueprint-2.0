@@ -82,7 +82,7 @@ function isGoogleOAuthConfigured() {
  *   types       — comma-separated connector types to create (default: gsc,ga4)
  */
 router.get('/google', (req, res) => {
-  const { businessId, types = 'gsc,ga4' } = req.query;
+  const { businessId, types = 'gsc,ga4', debug } = req.query;
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 
   if (!businessId) {
@@ -92,6 +92,15 @@ router.get('/google', (req, res) => {
   const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
 
   if (!clientId || !clientSecret || !redirectUri) {
+    if (debug) {
+      return res.json({
+        ok: false,
+        reason: 'not_configured',
+        client_id: clientId ?? null,
+        has_client_secret: !!clientSecret,
+        redirect_uri: redirectUri ?? null,
+      });
+    }
     return res.redirect(
       `${clientUrl}/connectors?error=google_oauth_not_configured&detail=${encodeURIComponent(
         'Google OAuth is not configured. Open Settings → Google OAuth and paste your Client ID + Client Secret from Google Cloud Console (APIs & Services → Credentials).'
@@ -111,7 +120,30 @@ router.get('/google', (req, res) => {
     state,
   });
 
-  return res.redirect(`${AUTH_BASE}?${params.toString()}`);
+  const fullUrl = `${AUTH_BASE}?${params.toString()}`;
+
+  // ?debug=1 — returns the exact URL + params instead of redirecting to
+  // Google, so the user can eyeball what Blueprint is sending and diff it
+  // against what's registered in Cloud Console. Useful when Google keeps
+  // returning redirect_uri_mismatch despite the fields looking right.
+  if (debug) {
+    return res.json({
+      ok: true,
+      oauth_url: fullUrl,
+      redirect_uri_blueprint_sends: redirectUri,
+      redirect_uri_bytes: Array.from(redirectUri).map((c, i) => ({
+        index: i,
+        char: c,
+        codepoint: c.codePointAt(0),
+      })),
+      client_id: clientId,
+      client_id_length: clientId.length,
+      scopes: SCOPES.split(' '),
+      instructions: 'Open https://console.cloud.google.com/apis/credentials → click your OAuth client → confirm this EXACT string is in Authorised redirect URIs. Not Authorised JavaScript origins. Must be Web application client type, not Desktop.',
+    });
+  }
+
+  return res.redirect(fullUrl);
 });
 
 /**
