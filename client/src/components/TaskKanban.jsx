@@ -26,6 +26,9 @@ const COLUMNS = [
   { id: 'executing', label: 'Executing', color: 'var(--bp-blue)' },
   { id: 'complete',  label: 'Complete',  color: 'var(--bp-green)' },
   { id: 'verified',  label: 'Verified',  color: 'var(--bp-text-3)' },
+  { id: 'failed',    label: 'Failed',    color: 'var(--bp-red)' },
+  { id: 'rejected',  label: 'Rejected',  color: 'var(--bp-text-3)' },
+  { id: 'deferred',  label: 'Deferred',  color: 'var(--bp-amber)' },
 ]
 
 const PRIORITY_PILL = { 1: 'bp-pill-red', 2: 'bp-pill-amber', 3: 'bp-pill-blue', 4: 'bp-pill-grey' }

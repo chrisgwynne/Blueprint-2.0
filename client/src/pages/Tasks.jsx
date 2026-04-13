@@ -461,6 +461,85 @@ function TaskDetailDrawer({ taskId, onClose, onUpdate }) {
                 ))}
               </div>
 
+              {/* Outcome — shows what actually happened. For 'failed' tasks
+                  this includes the error so the user doesn't wonder why the
+                  task vanished. For 'complete' it shows the executor's
+                  outcome string and any structured outcome_data. */}
+              {(task.outcome || task.outcome_data) && (
+                <div style={{
+                  marginBottom: 18,
+                  padding: '12px 14px',
+                  background: task.status === 'failed' ? 'rgba(255,82,82,0.05)' : 'rgba(34,197,94,0.05)',
+                  borderRadius: 4,
+                  border: task.status === 'failed' ? '1px solid rgba(255,82,82,0.2)' : '1px solid rgba(34,197,94,0.2)',
+                }}>
+                  <div style={{
+                    fontFamily: 'var(--bp-font-mono)', fontSize: 9,
+                    color: task.status === 'failed' ? 'var(--bp-red)' : 'var(--bp-green)',
+                    textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6,
+                  }}>
+                    {task.status === 'failed' ? 'Error' : 'Outcome'}
+                  </div>
+                  {task.outcome && (
+                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5, marginBottom: task.outcome_data ? 8 : 0, whiteSpace: 'pre-wrap' }}>
+                      {task.outcome}
+                    </div>
+                  )}
+                  {task.outcome_data?.error && (
+                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-red)', lineHeight: 1.5, padding: 8, background: 'rgba(0,0,0,0.2)', borderRadius: 3 }}>
+                      {task.outcome_data.error}
+                    </div>
+                  )}
+                  {task.outcome_data && !task.outcome_data.error && (
+                    <details style={{ marginTop: 6 }}>
+                      <summary style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', cursor: 'pointer' }}>
+                        Outcome data
+                      </summary>
+                      <pre style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', marginTop: 6, padding: 8, background: 'rgba(0,0,0,0.2)', borderRadius: 3, overflow: 'auto', maxHeight: 200 }}>
+                        {JSON.stringify(task.outcome_data, null, 2)}
+                      </pre>
+                    </details>
+                  )}
+                  {task.status === 'failed' && (
+                    <button
+                      onClick={async () => {
+                        setActing(true)
+                        try {
+                          await fetch(`/api/tasks/${taskId}/retry`, { method: 'POST', credentials: 'include' })
+                          const [d, h] = await Promise.all([getTaskDetail(taskId), getTaskHistory(taskId)])
+                          setDetail(d); setHistory(h || [])
+                          onUpdate?.()
+                          addNotification({ type: 'success', message: 'Retry queued' })
+                        } catch (err) { addNotification({ type: 'error', message: err.message }) }
+                        finally { setActing(false) }
+                      }}
+                      disabled={acting}
+                      className="bp-btn bp-btn-secondary"
+                      style={{ marginTop: 10, fontSize: 11 }}
+                    >
+                      <RefreshCw size={11} /> Retry
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Who's working on it — surface proposed_by + assigned_to so
+                  the user knows which agent/human owns the task right now. */}
+              <div style={{ marginBottom: 18, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <div style={{ padding: '10px 12px', background: 'var(--bp-base)', borderRadius: 4, border: '1px solid var(--bp-border)' }}>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Proposed by</div>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>{task.proposed_by || '—'}</div>
+                </div>
+                <div style={{ padding: '10px 12px', background: 'var(--bp-base)', borderRadius: 4, border: '1px solid var(--bp-border)' }}>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+                    {task.status === 'executing' ? 'Executing now' : task.status === 'complete' || task.status === 'verified' ? 'Completed by' : 'Assigned to'}
+                  </div>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>
+                    {task.assigned_to || (task.status === 'executing' ? 'system:executor' : task.status === 'complete' ? task.proposed_by : 'unassigned')}
+                  </div>
+                </div>
+              </div>
+
               {/* Linked signal */}
               {signal && (
                 <div style={{ marginBottom: 18, padding: '10px 14px', background: 'rgba(77,166,255,0.05)', borderRadius: 4, border: '1px solid rgba(77,166,255,0.15)' }}>

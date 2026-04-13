@@ -1,4 +1,4 @@
-const API_URL = 'https://api.openai.com/v1';
+const DEFAULT_API_URL = 'https://api.openai.com/v1';
 
 export const KNOWN_MODELS = [
   'gpt-4o',
@@ -22,12 +22,17 @@ export function estimateCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
 }
 
-export async function complete({ apiKey, model, messages, system, temperature = 0.7, max_tokens = 4096 }) {
+// All three call sites accept a baseUrl override so OpenAI-compatible
+// providers (MiniMax, Kimi, custom) can reuse this adapter without
+// duplicating the fetch/parse logic.
+
+export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 4096 }) {
+  const root = baseUrl || DEFAULT_API_URL;
   const allMessages = [];
   if (system) allMessages.push({ role: 'system', content: system });
   allMessages.push(...messages);
 
-  const response = await fetch(`${API_URL}/chat/completions`, {
+  const response = await fetch(`${root}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -43,7 +48,7 @@ export async function complete({ apiKey, model, messages, system, temperature = 
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err}`);
+    throw new Error(`OpenAI-compatible API error ${response.status}: ${err.substring(0, 300)}`);
   }
 
   const data = await response.json();
@@ -56,15 +61,15 @@ export async function complete({ apiKey, model, messages, system, temperature = 
   };
 }
 
-export async function listModels({ apiKey }) {
+export async function listModels({ apiKey, baseUrl }) {
+  const root = baseUrl || DEFAULT_API_URL;
   try {
-    const response = await fetch(`${API_URL}/models`, {
+    const response = await fetch(`${root}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
     if (!response.ok) return KNOWN_MODELS;
     const data = await response.json();
     return (data.data ?? [])
-      .filter(m => /^(gpt|o1|o3)/.test(m.id))
       .map(m => m.id)
       .sort();
   } catch {
@@ -72,12 +77,31 @@ export async function listModels({ apiKey }) {
   }
 }
 
-export async function validateApiKey({ apiKey }) {
+export async function validateApiKey({ apiKey, baseUrl, validationModel }) {
+  const root = baseUrl || DEFAULT_API_URL;
   try {
-    const response = await fetch(`${API_URL}/models`, {
+    const modelsRes = await fetch(`${root}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
     });
-    return response.ok;
+    if (modelsRes.ok) return true;
+
+    // Fall back: some OpenAI-compatible providers (e.g. MiniMax) lock down
+    // /models behind a different scope or auth header but accept chat
+    // completions on the same key. Try a single-token chat as a probe.
+    if (!validationModel) return false;
+    const chatRes = await fetch(`${root}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: validationModel,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      }),
+    });
+    return chatRes.ok;
   } catch {
     return false;
   }

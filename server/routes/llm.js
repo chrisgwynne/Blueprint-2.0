@@ -107,12 +107,13 @@ router.put('/providers/:id/credentials', (req, res) => {
     const catalog = PROVIDERS_CATALOG.find(p => p.id === req.params.id);
     if (!catalog) return res.status(404).json({ error: 'Provider not found.' });
 
-    const { apiKey, baseUrl } = req.body;
+    const { apiKey, baseUrl, model } = req.body;
     const existing = getProviderCredentials(req.params.id);
     const updated = { ...existing };
 
     if (apiKey !== undefined) updated.apiKey = apiKey;
     if (baseUrl !== undefined) updated.baseUrl = baseUrl;
+    if (model !== undefined) updated.model = model;
 
     saveProviderCredentials(req.params.id, updated);
     res.json({ ok: true, message: `Credentials saved for ${catalog.name}.` });

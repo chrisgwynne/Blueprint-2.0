@@ -51,5 +51,11 @@ export async function listModels(creds) {
 }
 
 export async function validateApiKey(creds) {
-  return openai.validateApiKey({ ...creds, baseUrl: creds?.baseUrl || MINIMAX_BASE });
+  return openai.validateApiKey({
+    ...creds,
+    baseUrl: creds?.baseUrl || MINIMAX_BASE,
+    // MiniMax doesn't expose /models on the same auth — a tiny chat call
+    // is the canonical way to verify the key.
+    validationModel: 'MiniMax-M1',
+  });
 }

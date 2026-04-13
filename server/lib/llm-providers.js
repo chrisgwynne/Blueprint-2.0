@@ -182,6 +182,10 @@ export function listProviders() {
       base_url_label: p.base_url_label ?? null,
       default_models: p.default_models,
       configured,
+      // Surface the saved preferred model so the Settings dropdown can
+      // pre-select it. Never expose the api key.
+      model: creds?.model ?? null,
+      base_url: creds?.baseUrl ?? null,
     };
   });
 }
@@ -244,7 +248,13 @@ const DEFAULT_MODEL_BY_PROVIDER = {
  */
 export function resolveProfileLLM(profileLLM) {
   let providerId = profileLLM?.provider ?? 'anthropic';
-  let model = profileLLM?.model ?? DEFAULT_MODEL_BY_PROVIDER[providerId] ?? 'claude-sonnet-4-20250514';
+  // Honour the user-saved 'preferred model' for this provider in Settings,
+  // then the profile's pinned model, then the per-provider sensible default.
+  const savedModel = getProviderCredentials(providerId)?.model;
+  let model = profileLLM?.model
+    ?? savedModel
+    ?? DEFAULT_MODEL_BY_PROVIDER[providerId]
+    ?? 'claude-sonnet-4-20250514';
   const temperature = profileLLM?.temperature ?? 0.7;
   const max_tokens = profileLLM?.max_tokens ?? 4096;
 

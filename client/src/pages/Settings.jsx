@@ -637,6 +637,9 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
   const addNotification = useStore((s) => s.addNotification)
   const [apiKey, setApiKey] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  // Preferred model for this provider — written into the same credentials
+  // record so resolveProfileLLM can pick it up as a sensible default.
+  const [model, setModel] = useState(provider.model || provider.default_models?.[0] || '')
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -644,6 +647,7 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
 
   const needsKey = provider.id !== 'ollama' && provider.id !== 'lmstudio' && provider.id !== 'claude-cli'
   const needsBaseUrl = provider.id === 'ollama' || provider.id === 'lmstudio' || provider.id === 'custom'
+  const models = Array.isArray(provider.default_models) ? provider.default_models : []
 
   async function handleSave() {
     setSaving(true)
@@ -651,8 +655,9 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
       const body = {}
       if (apiKey.trim()) body.apiKey = apiKey.trim()
       if (baseUrl.trim()) body.baseUrl = baseUrl.trim()
+      if (model && model.trim()) body.model = model.trim()
       if (Object.keys(body).length === 0) {
-        addNotification({ type: 'warning', message: 'Enter an API key or base URL first.' })
+        addNotification({ type: 'warning', message: 'Enter an API key, base URL, or pick a model first.' })
         return
       }
       await saveLLMCredentials(provider.id, body)
@@ -741,6 +746,39 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
             className="bp-input"
             placeholder={provider.id === 'ollama' ? 'http://localhost:11434' : provider.id === 'lmstudio' ? 'http://localhost:1234/v1' : 'https://...'}
           />
+        </div>
+      )}
+
+      {/* Model picker — agents that don't pin a model fall back to this. */}
+      {(models.length > 0 || provider.id === 'custom' || provider.id === 'ollama' || provider.id === 'lmstudio') && (
+        <div>
+          <label className="block text-xs text-blueprint-muted mb-1">
+            Default model
+          </label>
+          {models.length > 0 ? (
+            <div className="flex gap-2">
+              <select
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                className="bp-input bp-select flex-1"
+              >
+                <option value="">— Use provider default —</option>
+                {models.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+                <option value="__custom">Custom (type below)</option>
+              </select>
+            </div>
+          ) : null}
+          {(model === '__custom' || models.length === 0) && (
+            <input
+              type="text"
+              value={model === '__custom' ? '' : model}
+              onChange={(e) => setModel(e.target.value)}
+              className="bp-input mt-1"
+              placeholder={provider.id === 'ollama' ? 'llama3' : provider.id === 'custom' ? 'model-id' : 'Custom model id'}
+            />
+          )}
         </div>
       )}
 
