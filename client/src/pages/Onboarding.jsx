@@ -13,6 +13,7 @@ import useStore from '../lib/store.js'
 import {
   createBusiness, getBusinesses, addConnector, testPageSpeed,
   getAgents, updateAgent, syncConnector, getGoogleAuthUrl, getConnectors,
+  getGoogleOAuthConfig, saveGoogleOAuthConfig,
 } from '../lib/api.js'
 
 const STEPS = ['Welcome', 'Business', 'Data', 'Agents', 'Notifications']
@@ -63,6 +64,66 @@ export default function Onboarding({ onComplete }) {
   const [enabledAgents, setEnabledAgents] = useState(new Set(['conductor']))
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
+
+  // ── Google OAuth app credentials (one-time per install) ─────────────────
+  const [googleCfg, setGoogleCfg] = useState(null)
+  const [googleClientId, setGoogleClientId] = useState('')
+  const [googleClientSecret, setGoogleClientSecret] = useState('')
+  const [savingGoogleCfg, setSavingGoogleCfg] = useState(false)
+  const [showGoogleSetup, setShowGoogleSetup] = useState(false)
+
+  // ── Shopify inline setup ────────────────────────────────────────────────
+  const [shopDomain, setShopDomain] = useState('')
+  const [shopToken, setShopToken] = useState('')
+  const [shopSaving, setShopSaving] = useState(false)
+  const [shopResult, setShopResult] = useState(null)
+
+  // Preload Google OAuth config on mount so we know whether to show setup.
+  useEffect(() => {
+    getGoogleOAuthConfig()
+      .then((c) => setGoogleCfg(c))
+      .catch(() => {})
+  }, [])
+
+  async function handleSaveGoogleCfg() {
+    if (!googleClientId.trim() || !googleClientSecret.trim()) return
+    setSavingGoogleCfg(true)
+    try {
+      const updated = await saveGoogleOAuthConfig({
+        client_id: googleClientId.trim(),
+        client_secret: googleClientSecret.trim(),
+        // Let the server default the redirect URI.
+      })
+      setGoogleCfg(updated)
+      setGoogleClientSecret('')
+      setShowGoogleSetup(false)
+    } catch (err) {
+      alert('Failed to save Google OAuth: ' + err.message)
+    } finally {
+      setSavingGoogleCfg(false)
+    }
+  }
+
+  async function handleShopifyConnect() {
+    if (!shopDomain.trim() || !shopToken.trim() || !createdBiz) return
+    setShopSaving(true)
+    setShopResult(null)
+    try {
+      await addConnector({
+        type: 'shopify',
+        business_id: createdBiz.id,
+        name: 'Shopify',
+        config: { shopDomain: shopDomain.trim(), days: 120, defaultDataType: 'analytics' },
+        credentials: { shopDomain: shopDomain.trim(), accessToken: shopToken.trim() },
+      })
+      setShopResult({ ok: true })
+      setConnectorAdded(true)
+    } catch (err) {
+      setShopResult({ ok: false, error: err.message })
+    } finally {
+      setShopSaving(false)
+    }
+  }
 
   // ── Step 2: Create business ─────────────────────────────────────────────
   async function handleCreateBusiness() {
@@ -255,24 +316,112 @@ export default function Onboarding({ onComplete }) {
               <div className="bp-card" style={{ padding: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <Search size={16} style={{ color: 'var(--bp-blue)' }} />
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>Google (GSC + GA4)</div>
                     <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>One OAuth flow covers both</div>
                   </div>
+                  {googleCfg?.configured && (
+                    <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-green)', padding: '2px 6px', borderRadius: 3, background: 'rgba(34,197,94,0.12)' }}>
+                      ✓ App configured
+                    </span>
+                  )}
                 </div>
-                <a href={createdBiz ? getGoogleAuthUrl(createdBiz.id) : '#'} className="bp-btn bp-btn-secondary text-xs" style={{ textDecoration: 'none' }}>
-                  <ExternalLink size={11} /> Connect with Google
-                </a>
+
+                {googleCfg && !googleCfg.configured && !showGoogleSetup && (
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 8, lineHeight: 1.5 }}>
+                    To connect Google, Blueprint needs OAuth credentials from Google Cloud Console (a one-time setup).
+                  </div>
+                )}
+
+                {showGoogleSetup && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10, padding: 10, background: 'rgba(77,166,255,0.06)', borderRadius: 4 }}>
+                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.6 }}>
+                      1. Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--bp-blue)' }}>Google Cloud Console → Credentials</a><br/>
+                      2. Create an OAuth client ID, type <strong>Web application</strong><br/>
+                      3. Add this redirect URI:
+                      <div style={{ margin: '4px 0', padding: '4px 6px', background: 'var(--bp-surface-2)', borderRadius: 3, fontSize: 9, userSelect: 'all' }}>
+                        {googleCfg?.default_redirect_uri || 'http://localhost:4000/api/oauth/google/callback'}
+                      </div>
+                      4. Paste the Client ID + Secret below
+                    </div>
+                    <input
+                      value={googleClientId}
+                      onChange={(e) => setGoogleClientId(e.target.value)}
+                      placeholder="Client ID (xxxxx.apps.googleusercontent.com)"
+                      className="bp-input"
+                      style={{ fontSize: 11 }}
+                    />
+                    <input
+                      type="password"
+                      value={googleClientSecret}
+                      onChange={(e) => setGoogleClientSecret(e.target.value)}
+                      placeholder="Client Secret (GOCSPX-...)"
+                      className="bp-input"
+                      style={{ fontSize: 11 }}
+                    />
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={handleSaveGoogleCfg}
+                        disabled={savingGoogleCfg || !googleClientId.trim() || !googleClientSecret.trim()}
+                        className="bp-btn bp-btn-primary text-xs"
+                      >
+                        {savingGoogleCfg ? <RefreshCw size={11} className="animate-spin" /> : <Check size={11} />} Save credentials
+                      </button>
+                      <button onClick={() => setShowGoogleSetup(false)} className="bp-btn bp-btn-ghost text-xs">Cancel</button>
+                    </div>
+                  </div>
+                )}
+
+                {!showGoogleSetup && !googleCfg?.configured && (
+                  <button onClick={() => setShowGoogleSetup(true)} className="bp-btn bp-btn-secondary text-xs">
+                    <Search size={11} /> Configure Google OAuth
+                  </button>
+                )}
+
+                {!showGoogleSetup && googleCfg?.configured && (
+                  <a href={createdBiz ? getGoogleAuthUrl(createdBiz.id) : '#'} className="bp-btn bp-btn-secondary text-xs" style={{ textDecoration: 'none' }}>
+                    <ExternalLink size={11} /> Connect with Google
+                  </a>
+                )}
               </div>
 
               {/* Shopify */}
               <div className="bp-card" style={{ padding: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
                   <ShoppingBag size={16} style={{ color: 'var(--bp-green)' }} />
                   <div>
                     <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>Shopify</div>
-                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>Set up from Connectors page after onboarding</div>
+                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>Store domain + Admin API access token</div>
                   </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <input
+                    value={shopDomain}
+                    onChange={(e) => setShopDomain(e.target.value)}
+                    placeholder="yourstore.myshopify.com"
+                    className="bp-input"
+                    style={{ fontSize: 11 }}
+                  />
+                  <input
+                    type="password"
+                    value={shopToken}
+                    onChange={(e) => setShopToken(e.target.value)}
+                    placeholder="shpat_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                    className="bp-input"
+                    style={{ fontSize: 11 }}
+                  />
+                  <button
+                    onClick={handleShopifyConnect}
+                    disabled={shopSaving || !shopDomain.trim() || !shopToken.trim()}
+                    className="bp-btn bp-btn-primary text-xs"
+                  >
+                    {shopSaving ? <RefreshCw size={11} className="animate-spin" /> : <ShoppingBag size={11} />} Connect Shopify
+                  </button>
+                  {shopResult?.ok && <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-green)' }}>✅ Connected! Shopify is syncing.</div>}
+                  {shopResult && !shopResult.ok && <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-red)' }}>{shopResult.error}</div>}
+                </div>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginTop: 6, lineHeight: 1.5 }}>
+                  Get a token from Shopify Admin → Apps → Develop apps → Create a custom app → API access scopes: read_products, read_orders, read_inventory.
                 </div>
               </div>
             </div>
