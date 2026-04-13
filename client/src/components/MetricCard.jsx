@@ -3,11 +3,24 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react'
 import clsx from 'clsx'
 import { SparkLine } from './Charts.jsx'
 
+// Unwrap { value, prev, trend } wrappers returned by the backend
+// (dashboard.js metricSummary shape) so callers can still pass the whole
+// object as `value` without getting "[object Object]" on screen.
+function unwrapMetric(v) {
+  if (v == null) return v
+  if (typeof v !== 'object') return v
+  if ('value' in v) return v.value
+  if ('current' in v) return v.current
+  if ('count' in v) return v.count
+  if ('n' in v) return v.n
+  return null
+}
+
 function MetricCard({
   label,
-  value,
-  prev,
-  trend,
+  value: rawValue,
+  prev: rawPrev,
+  trend: rawTrend,
   sparklineData,
   unit = '',
   icon: Icon,
@@ -16,6 +29,15 @@ function MetricCard({
   invertPolarity = false,  // true = lower is better (avg position)
   accentColor,             // override sparkline/trend colour
 }) {
+  // If the caller passed a { value, prev, trend } wrapper, pull fields from
+  // it so the rest of the component sees plain scalars.
+  const wrapped = (typeof rawValue === 'object' && rawValue !== null)
+    ? rawValue
+    : null
+  const value = unwrapMetric(rawValue)
+  const prev = rawPrev !== undefined ? unwrapMetric(rawPrev) : (wrapped?.prev ?? null)
+  const trend = rawTrend !== undefined ? rawTrend : (wrapped?.trend ?? undefined)
+
   // Trend calculation
   const trendValue = trend ?? (
     prev !== undefined && prev !== null && prev !== 0 && value !== undefined && value !== null
@@ -36,7 +58,15 @@ function MetricCard({
 
   function formatValue(v) {
     if (v === undefined || v === null) return '—'
+    if (typeof v === 'object') {
+      // Defensive — should already be unwrapped at the top, but never let
+      // an object coerce to "[object Object]" on screen.
+      const u = unwrapMetric(v)
+      if (u === null || typeof u === 'object') return '—'
+      return formatValue(u)
+    }
     if (typeof v === 'number') {
+      if (!Number.isFinite(v)) return '—'
       if (v >= 1_000_000) return (v / 1_000_000).toFixed(1) + 'M'
       if (v >= 1_000) return (v / 1_000).toFixed(1) + 'k'
       return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(1)

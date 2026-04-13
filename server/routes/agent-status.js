@@ -2,8 +2,20 @@
  * Agent Status API (Prompt 4) — lightweight endpoint for the AgentPanel.
  */
 import { Router } from 'express';
+import { existsSync } from 'fs';
+import { dirname, join, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const AGENTS_DIR = resolve(__dirname, '..', 'agents');
+
+// Match the definition in routes/agents.js so the sidebar and the Agents
+// page agree on what "installed" means (profile.yaml exists on disk).
+function agentIsInstalled(agentId) {
+  return existsSync(join(AGENTS_DIR, agentId, 'profile.yaml'));
+}
 
 const router = Router();
 router.use(isAuthenticated);
@@ -23,7 +35,11 @@ router.get('/', (req, res) => {
       return res.json(cache.payload);
     }
 
-    const agents = db.prepare('SELECT * FROM agents ORDER BY name ASC').all();
+    // Only surface agents that are actually installed (profile.yaml present
+    // on disk). Otherwise the sidebar shows agents that the Agents page
+    // flags as "Not installed — profile missing" — one source of truth.
+    const allAgents = db.prepare('SELECT * FROM agents ORDER BY name ASC').all();
+    const agents = allAgents.filter((a) => agentIsInstalled(a.id));
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
 
     const out = agents.map((a) => {

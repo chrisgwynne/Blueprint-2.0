@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import {
-  RefreshCw, Check, Clock, Plus, X,
+  RefreshCw, Check, Clock, Plus, X, Search,
   Brain, Zap, TrendingUp, AlertTriangle,
   Lightbulb, Activity, BarChart2, Cpu, ChevronRight, ChevronUp, ChevronDown, Sparkles,
 } from 'lucide-react'
