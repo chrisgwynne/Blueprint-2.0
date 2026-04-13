@@ -6,7 +6,7 @@ import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
   Activity, CheckSquare, Mail, Send, Globe, FileText, TrendingUp,
-  CreditCard, GitBranch, MapPin,
+  CreditCard, GitBranch, MapPin, Settings2,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
@@ -901,7 +901,20 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [revoking, setRevoking] = useState(false)
+  const [showConfig, setShowConfig] = useState(false)
   const pollRef = React.useRef(null)
+
+  // If the connector has an error suggesting missing config, open the
+  // editor automatically so the user lands on the fix.
+  useEffect(() => {
+    const err = (connector?.last_error || '').toLowerCase()
+    const missingConfig = err.includes('siteurl is required') ||
+      err.includes('propertyid is required') ||
+      err.includes('shopdomain') ||
+      err.includes('url is required')
+    if (missingConfig && !showConfig) setShowConfig(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connector?.last_error])
 
   // Keep local connector in sync with parent updates
   useEffect(() => { setConnector(initialConnector) }, [initialConnector])
@@ -1029,6 +1042,69 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
                 <p className="text-xs text-blueprint-red/80">{connector.last_error}</p>
               </div>
             </div>
+          )}
+
+          {/* Inline configuration — lets the user supply missing siteUrl,
+              propertyId, etc. without leaving the drawer. */}
+          {showConfig ? (
+            <div className="bp-card p-4">
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-xs uppercase tracking-wider font-semibold text-blueprint-muted">Configure</p>
+                <button onClick={() => setShowConfig(false)} className="text-blueprint-muted hover:text-slate-200">
+                  <X size={14} />
+                </button>
+              </div>
+              {connector.type === 'gsc' && (
+                <GSCSetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  googleConnected
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {connector.type === 'ga4' && (
+                <GA4Setup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  googleConnected
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {connector.type === 'pagespeed' && (
+                <PageSpeedSetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {connector.type === 'shopify' && (
+                <ShopifySetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {!['gsc', 'ga4', 'pagespeed', 'shopify'].includes(connector.type) && (
+                <p className="text-xs text-blueprint-muted">
+                  This connector type doesn't have an inline editor yet. Delete and re-add it to change credentials.
+                </p>
+              )}
+            </div>
+          ) : (
+            // Show a one-click "Configure" button so users can fix missing
+            // siteUrl / propertyId / etc. without re-creating the connector.
+            (['gsc', 'ga4', 'pagespeed', 'shopify'].includes(connector.type)) && (
+              <button
+                onClick={() => setShowConfig(true)}
+                className="bp-btn bp-btn-secondary text-xs"
+              >
+                <Settings2 size={12} /> Configure
+              </button>
+            )
           )}
 
           {/* Health check */}

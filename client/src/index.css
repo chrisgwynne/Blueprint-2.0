@@ -216,16 +216,33 @@ input:-webkit-autofill:focus {
 }
 
 /* Catch any raw <input> not using bp-input either: ensure dark background
-   so the user can read their own typing. */
+   so the user can read their own typing. Tailwind utility classes win
+   when present (so explicit overrides like bg-blueprint-card still work),
+   but unstyled or third-party inputs no longer flash white. */
 input[type="text"],
 input[type="password"],
 input[type="email"],
 input[type="url"],
 input[type="number"],
 input[type="search"],
+input[type="tel"],
+input:not([type]),
 textarea,
 select {
   color-scheme: dark;
+  background-color: #060f1e;
+  color: #c9dff2;
+  border-color: #1a3d5c;
+}
+input[type="text"]::placeholder,
+input[type="password"]::placeholder,
+input[type="email"]::placeholder,
+input[type="url"]::placeholder,
+input[type="search"]::placeholder,
+input[type="tel"]::placeholder,
+input:not([type])::placeholder,
+textarea::placeholder {
+  color: #4d7a96;
 }
 select.bp-input {
   appearance: none;

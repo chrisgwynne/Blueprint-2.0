@@ -17,6 +17,99 @@ async function getConnector(type) {
   }
 }
 
+/**
+ * Run a sync against a connector row. Identical logic to POST /:id/sync but
+ * callable from anywhere (e.g. immediately after creating a connector).
+ * Fire-and-forget — never throws on the caller side.
+ */
+async function runConnectorSync(rowId) {
+  const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(rowId);
+  if (!row) return;
+
+  let connector;
+  try {
+    connector = await getConnector(row.type);
+  } catch (err) {
+    console.error(`[connectors] Cannot load connector type '${row.type}':`, err.message);
+    return;
+  }
+  if (!connector) {
+    console.error(`[connectors] Connector type '${row.type}' not supported.`);
+    return;
+  }
+
+  const parsed = parseRow(row);
+  const config = row.config ? JSON.parse(row.config) : {};
+  const dataType = config.defaultDataType || row.type === 'pagespeed' ? 'performance' : (row.type === 'gsc' ? 'search_analytics' : 'report');
+  const params = { ...config, businessId: row.business_id };
+
+  try {
+    const data = await connector.fetch(dataType, parsed.credentials, params);
+    const now = new Date().toISOString();
+
+    if (typeof connector.extractMetrics === 'function') {
+      const metrics = connector.extractMetrics(data, now);
+      for (const m of metrics) {
+        db.prepare(`
+          INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_value, metric_data, period_start, period_end, recorded_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        `).run(
+          crypto.randomUUID(),
+          row.business_id,
+          row.id,
+          m.name,
+          m.value ?? null,
+          m.data ? JSON.stringify(m.data) : null,
+          now, now,
+        );
+      }
+    }
+
+    db.prepare(`
+      INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_data, period_start, period_end, recorded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(crypto.randomUUID(), row.business_id, row.id, `${row.type}_sync`, JSON.stringify(data), now, now);
+
+    db.prepare(`UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?`).run(row.id);
+    console.log(`[connectors] Sync complete for ${row.name}`);
+
+    try {
+      db.prepare(
+        `INSERT INTO connector_syncs (id, connector_id, status, created_at)
+         VALUES (lower(hex(randomblob(16))), ?, 'complete', CURRENT_TIMESTAMP)`
+      ).run(row.id);
+    } catch {}
+
+    try {
+      const { onConnectorSyncSuccess } = await import('../connectors/post-sync.js');
+      onConnectorSyncSuccess(row.type, row.business_id);
+    } catch (err) {
+      console.warn('[connectors] post-sync hook failed:', err.message);
+    }
+
+    try {
+      const { runSignalEngine } = await import('../signals/signal-engine.js');
+      const prevMetric = db.prepare(`
+        SELECT metric_data FROM metrics
+        WHERE business_id = ? AND connector_id = ? AND metric_name = ?
+        ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
+      `).get(row.business_id, row.id, `${row.type}_sync`);
+      let previousData = null;
+      if (prevMetric?.metric_data) {
+        try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
+      }
+      const signalData = (row.type === 'pagespeed' && data.mobile) ? data.mobile : data;
+      const prevSignalData = (row.type === 'pagespeed' && previousData?.mobile) ? previousData.mobile : previousData;
+      await runSignalEngine(row.business_id, row.id, signalData, prevSignalData, row.type);
+    } catch (sigErr) {
+      console.error(`[connectors] Signal engine error for ${row.name}:`, sigErr.message);
+    }
+  } catch (err) {
+    db.prepare(`UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?`).run(err.message.substring(0, 500), row.id);
+    console.error(`[connectors] Sync error for ${row.name}:`, err.message);
+  }
+}
+
 function parseRow(row) {
   if (!row) return null;
   let credentials = {};
@@ -86,6 +179,11 @@ router.post('/', async (req, res) => {
     const created = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id));
     audit(business_id, 'connector', id, 'create', req.session.userId, null, created);
 
+    // Auto-sync — fire-and-forget so the user doesn't have to click sync
+    // after adding. Failures land in connectors.last_error and surface in
+    // the UI; they don't block the create response.
+    runConnectorSync(id).catch((err) => console.warn('[connectors] auto-sync after create failed:', err.message));
+
     return res.status(201).json(created);
   } catch (err) {
     console.error('[connectors] Create error:', err);
@@ -126,6 +224,13 @@ router.patch('/:id', async (req, res) => {
 
     const after = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(req.params.id));
     audit(existing.business_id, 'connector', req.params.id, 'update', req.session.userId, before, after);
+
+    // If credentials or config changed, re-sync immediately so the user
+    // sees results without having to click sync. Skip if only `name` or
+    // `status` (e.g. pause) was edited.
+    if (credentials !== undefined || config !== undefined) {
+      runConnectorSync(req.params.id).catch((err) => console.warn('[connectors] auto-sync after update failed:', err.message));
+    }
 
     return res.json(after);
   } catch (err) {
