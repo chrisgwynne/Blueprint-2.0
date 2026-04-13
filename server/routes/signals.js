@@ -226,14 +226,22 @@ const VALID_TRANSITIONS = {
   resolved: ['open'], // allow re-opening
 };
 
+function safeJSON(raw, fallback) {
+  if (raw == null) return fallback;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); }
+  catch {
+    console.warn('[signals] Failed to parse JSON field, using fallback. Raw:', String(raw).slice(0, 120));
+    return fallback;
+  }
+}
+
 function parseRow(row) {
   if (!row) return null;
-  let attribution = null;
-  try { attribution = row.attribution_analysis ? JSON.parse(row.attribution_analysis) : null; } catch {}
   return {
     ...row,
-    data: row.data ? JSON.parse(row.data) : {},
-    attribution_analysis: attribution,
+    data: safeJSON(row.data, {}),
+    attribution_analysis: safeJSON(row.attribution_analysis, null),
   };
 }
 
