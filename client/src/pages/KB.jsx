@@ -18,11 +18,36 @@ import { parseTimestamp } from '../lib/time.js'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import Editor from '../components/Editor.jsx'
+import { marked } from 'marked'
+import TurndownService from 'turndown'
 import {
   getKbTree, getKbFile, saveKbFile, archiveKbFile, getKbBacklinks,
   getKbHistory, restoreKbVersion, searchKb, uploadKbRaw,
   ingestKb, queryKb, lintKb, getKbLog, getKbSettings,
 } from '../lib/api.js'
+
+// KB files are markdown on disk. TipTap stores HTML. Translate on load/save.
+// gfm enables tables, task lists, strikethrough — what our KB actually uses.
+marked.setOptions({ gfm: true, breaks: false })
+const turndown = new TurndownService({
+  headingStyle: 'atx',
+  codeBlockStyle: 'fenced',
+  bulletListMarker: '-',
+})
+// Preserve ATX-style wikilinks ([[foo]]) so the round-trip doesn't mangle them.
+turndown.keep(['del', 'mark'])
+
+function markdownToHtml(md) {
+  if (!md) return ''
+  try { return marked.parse(md) }
+  catch { return `<pre>${md}</pre>` }
+}
+
+function htmlToMarkdown(html) {
+  if (!html) return ''
+  try { return turndown.turndown(html) }
+  catch { return html }
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -538,7 +563,10 @@ function KB() {
     try {
       const file = await getKbFile(businessId, path)
       setSelectedDoc(file)
-      setEditorContent(file.content || file.raw || '')
+      // Convert the raw markdown to HTML so TipTap renders headings, lists,
+      // bold, links, tables — rather than displaying the literal #, **, etc.
+      const md = file.content || file.raw || ''
+      setEditorContent(markdownToHtml(md))
       setDirty(false)
 
       // Load backlinks + history in parallel
@@ -557,8 +585,11 @@ function KB() {
     if (!selectedPath || !dirty) return
     setSaving(true)
     try {
+      // Convert the editor's HTML back to markdown so files stay human- and
+      // LLM-readable on disk (and so KB wikilinks, frontmatter, etc. continue
+      // to work via the existing KB engine tooling).
       await saveKbFile(businessId, selectedPath, {
-        content: editorContent,
+        content: htmlToMarkdown(editorContent),
         frontmatter: selectedDoc?.frontmatter ?? null,
         message: `update: ${selectedPath}`,
       })
