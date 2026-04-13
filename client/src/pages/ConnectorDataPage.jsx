@@ -692,6 +692,71 @@ function PSOpportunities({ metrics, connector }) {
 
 // ─── Stripe Overview ──────────────────────────────────────────────────────────
 
+function BrevoOverview({ metrics, summary }) {
+  const { latest } = metrics
+  const totalContacts = latest['total_contacts'] ?? 0
+  const campaigns30d = latest['campaigns_sent_30d'] ?? 0
+  const openRate = latest['avg_open_rate'] ?? 0
+  const clickRate = latest['avg_click_rate'] ?? 0
+  const unsubRate = latest['avg_unsubscribe_rate'] ?? 0
+  const bounceRate = latest['avg_bounce_rate'] ?? 0
+  const txDelivered = latest['transactional_delivered_7d'] ?? null
+  const txBounceRate = latest['transactional_bounce_rate_7d'] ?? null
+  const campaigns = Array.isArray(latest['campaigns_data']) ? latest['campaigns_data'] : []
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Total Contacts" value={totalContacts} accent="var(--bp-blue)" />
+        <MetricCard label="Campaigns (30d)" value={campaigns30d} accent="var(--bp-text-3)" />
+        <MetricCard label="Avg Open Rate" value={openRate} format="pct" previous={summary?.avg_open_rate_prev} accent="var(--bp-green)" />
+        <MetricCard label="Avg Click Rate" value={clickRate} format="pct" accent="var(--bp-blue)" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Unsubscribe Rate" value={unsubRate} format="pct" invertPolarity accent="var(--bp-amber)" />
+        <MetricCard label="Bounce Rate" value={bounceRate} format="pct" invertPolarity accent="var(--bp-amber)" />
+        {txDelivered != null && <MetricCard label="Transactional 7d" value={txDelivered} accent="var(--bp-text-3)" />}
+        {txBounceRate != null && <MetricCard label="TX Bounce 7d" value={txBounceRate} format="pct" invertPolarity accent="var(--bp-red)" />}
+      </div>
+
+      {campaigns.length > 0 && (
+        <div className="bp-card" style={{ padding: '16px 18px' }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>
+            Recent Campaigns ({campaigns.length})
+          </div>
+          <div style={{ overflow: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid var(--bp-border)', color: 'var(--bp-text-3)', textAlign: 'left', fontFamily: 'var(--bp-font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  <th style={{ padding: '8px 6px' }}>Name</th>
+                  <th style={{ padding: '8px 6px' }}>Sent</th>
+                  <th style={{ padding: '8px 6px', textAlign: 'right' }}>Open %</th>
+                  <th style={{ padding: '8px 6px', textAlign: 'right' }}>Click %</th>
+                  <th style={{ padding: '8px 6px', textAlign: 'right' }}>Bounce %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {campaigns.slice(0, 25).map((c, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+                    <td style={{ padding: '8px 6px', color: 'var(--bp-text-2)' }}>{c.name ?? c.subject ?? '—'}</td>
+                    <td style={{ padding: '8px 6px', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+                      {c.sentDate ? format(parseISO(c.sentDate), 'MMM d') : '—'}
+                    </td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', color: 'var(--bp-green)' }}>{c.openRate != null ? `${(c.openRate * 100).toFixed(1)}%` : '—'}</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', color: 'var(--bp-blue)' }}>{c.clickRate != null ? `${(c.clickRate * 100).toFixed(1)}%` : '—'}</td>
+                    <td style={{ padding: '8px 6px', textAlign: 'right', color: 'var(--bp-amber)' }}>{c.bounceRate != null ? `${(c.bounceRate * 100).toFixed(1)}%` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function StripeOverview({ metrics }) {
   const { latest, series } = metrics
   const mrr = latest['mrr'] ?? 0
@@ -1630,7 +1695,7 @@ function MetaAdsCampaigns({ metrics }) {
 
 function renderTab(connector, tab, data, range) {
   const { type } = connector
-  const { metrics } = data
+  const { metrics, summary } = data
 
   if (tab === 'Raw Data') return <RawDataTab data={data} />
 
@@ -1677,6 +1742,12 @@ function renderTab(connector, tab, data, range) {
     if (tab === 'Campaigns') return <MetaAdsCampaigns metrics={metrics} />
     if (tab === 'Audiences') return <EmptyState message="Ad set and audience breakdown coming soon." />
     if (tab === 'Creative')  return <EmptyState message="Creative performance breakdown coming soon." />
+  }
+  if (type === 'brevo') {
+    if (tab === 'Overview') return <BrevoOverview metrics={metrics} summary={summary} />
+    if (tab === 'Campaigns') return <BrevoOverview metrics={metrics} summary={summary} />
+    if (tab === 'Contacts') return <EmptyState message="Detailed contact list coming soon. Total contacts and list breakdown shown on Overview." />
+    if (tab === 'Transactional') return <EmptyState message="Transactional email logs coming soon. 7-day delivered + bounce shown on Overview." />
   }
 
   return <EmptyState message="This view is coming soon." />
