@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import { config as loadEnv } from 'dotenv';
 import express from 'express';
 import session from 'express-session';
 import cors from 'cors';
@@ -8,6 +8,10 @@ import { fileURLToPath } from 'url';
 import db from './db/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Load .env from the repo root regardless of which directory the server
+// process was launched from (bun run --cwd server sets CWD to server/).
+loadEnv({ path: resolve(__dirname, '../.env') });
 
 // ─── Session Store (SQLite-backed) ──────────────────────────────────────────
 
