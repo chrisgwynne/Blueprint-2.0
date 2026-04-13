@@ -178,16 +178,48 @@ async function executeGithubPR(task) {
   };
 }
 
-function executeInvestigation(task) {
-  // Investigation tasks are flagged for human review. Mark complete with a
-  // note so they show up in the dashboard as "investigated by agent" but
-  // require humans to act on the findings.
+async function executeInvestigation(task) {
+  // Approving an investigation task should actually RUN the investigation,
+  // not mark it complete with a placeholder. Previously this returned a
+  // one-liner "queued for human review" and the task instantly landed in
+  // Complete with nothing to show.
+  const { runInvestigation } = await import('../brain/investigation-engine.js');
+
+  // The investigation engine wants a specific metric OR a signal id OR a
+  // free-form question. For a task created from a signal, use the signal.
+  // Otherwise ship the task title + description as the question so the
+  // LLM has something to reason about.
+  const question = task.description
+    ? `${task.title}. ${task.description}`
+    : task.title;
+
+  const investigation = await runInvestigation({
+    businessId: task.business_id,
+    signalId: task.signal_id ?? null,
+    metricName: task.action_payload?.metric_name ?? null,
+    question,
+    triggeredBy: `task:${task.id}`,
+  });
+
+  if (!investigation) {
+    // Shouldn't happen now that runInvestigation throws on failure, but guard
+    // in case the engine returned a shape we didn't expect.
+    throw new Error('Investigation engine returned no result.');
+  }
+
   return {
-    outcome: `Investigation queued for human review`,
+    outcome: investigation.explanation
+      ? `Investigation complete. ${String(investigation.explanation).slice(0, 140)}${investigation.explanation.length > 140 ? '…' : ''}`
+      : 'Investigation complete.',
     outcome_data: {
       type: 'investigation',
-      description: task.description ?? null,
-      proposed_by: task.proposed_by,
+      investigation_id: investigation.id,
+      confidence: investigation.confidence ?? null,
+      primary_cause: investigation.primary_cause ?? null,
+      recommendation: investigation.recommendation ?? null,
+      explanation: investigation.explanation ?? null,
+      alternatives: investigation.alternatives ?? null,
+      evidence: investigation.evidence ?? null,
     },
   };
 }
@@ -532,7 +564,7 @@ export async function executeTask(taskId) {
     switch (task.action_type) {
       case 'github_issue':             result = await executeGithubIssue(task); break;
       case 'github_pr':                result = await executeGithubPR(task);    break;
-      case 'investigation':            result = executeInvestigation(task);      break;
+      case 'investigation':            result = await executeInvestigation(task);  break;
       case 'content_draft':            result = executeContentDraft(task);       break;
       case 'shopify_product_create':   result = await executeShopifyProductCreate(task); break;
       case 'shopify_product_update':
