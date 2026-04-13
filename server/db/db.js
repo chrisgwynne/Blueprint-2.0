@@ -243,6 +243,159 @@ const STARTUP_MIGRATIONS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_seasonal_unique ON seasonal_patterns(business_id, metric_name, pattern_type)`,
   `ALTER TABLE tasks ADD COLUMN deferred_until DATETIME`,
   `ALTER TABLE tasks ADD COLUMN deferred_reason TEXT`,
+
+  // ─── Intelligence layer (9 features) ────────────────────────────────────
+  // Feature 1 — Scenarios
+  `CREATE TABLE IF NOT EXISTS scenarios (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    question TEXT NOT NULL,
+    context TEXT,
+    scenarios_json JSON NOT NULL,
+    recommended TEXT,
+    recommendation_reasoning TEXT,
+    decision_criteria JSON,
+    next_step TEXT,
+    created_by TEXT DEFAULT 'human',
+    kb_path TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_scenarios_business_created ON scenarios(business_id, created_at)`,
+
+  // Feature 2 — Conflicts
+  `CREATE TABLE IF NOT EXISTS conflicts (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    conflict_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'warning',
+    entity_a_type TEXT NOT NULL,
+    entity_a_id TEXT NOT NULL,
+    entity_a_title TEXT,
+    entity_b_type TEXT NOT NULL,
+    entity_b_id TEXT NOT NULL,
+    entity_b_title TEXT,
+    description TEXT NOT NULL,
+    recommendation TEXT,
+    resolution_kind TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    resolution_note TEXT,
+    detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_conflicts_business_status ON conflicts(business_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_conflicts_entity_a ON conflicts(entity_a_type, entity_a_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_conflicts_entity_b ON conflicts(entity_b_type, entity_b_id)`,
+
+  // Feature 3 — Retrospectives
+  `CREATE TABLE IF NOT EXISTS retrospectives (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    period_start DATETIME NOT NULL,
+    period_end DATETIME NOT NULL,
+    executive_summary TEXT,
+    what_worked JSON DEFAULT '[]',
+    what_didnt JSON DEFAULT '[]',
+    learnings JSON DEFAULT '[]',
+    agent_assessments JSON DEFAULT '[]',
+    open_windows JSON DEFAULT '[]',
+    recommendations JSON DEFAULT '[]',
+    operating_changes JSON DEFAULT '[]',
+    calibration_notes JSON DEFAULT '[]',
+    full_report_json JSON,
+    kb_path TEXT,
+    triggered_by TEXT DEFAULT 'scheduler',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_retrospectives_business ON retrospectives(business_id, created_at)`,
+
+  // Feature 4 — Attribution on signals
+  `ALTER TABLE signals ADD COLUMN attribution_analysis JSON`,
+  `ALTER TABLE signals ADD COLUMN attribution_recommendation TEXT`,
+  `ALTER TABLE signals ADD COLUMN attribution_primary_cause TEXT`,
+  `ALTER TABLE signals ADD COLUMN attribution_primary_confidence REAL`,
+  `ALTER TABLE signals ADD COLUMN do_not_act_until DATETIME`,
+
+  // Feature 5 — Agent calibration
+  `CREATE TABLE IF NOT EXISTS agent_calibration (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    business_id TEXT,
+    period_start DATETIME NOT NULL,
+    period_end DATETIME NOT NULL,
+    tasks_with_outcomes INTEGER DEFAULT 0,
+    avg_stated_confidence REAL,
+    avg_actual_outcome_rate REAL,
+    calibration_error REAL,
+    calibration_score REAL,
+    calibration_offset REAL DEFAULT 0,
+    trend TEXT,
+    notes TEXT,
+    calculated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_calibration_agent ON agent_calibration(agent_id, period_end)`,
+  `ALTER TABLE agent_runs ADD COLUMN calibration_data JSON`,
+
+  // Feature 6 — Goal suggestions
+  `CREATE TABLE IF NOT EXISTS goal_suggestions (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    opportunity_value REAL,
+    opportunity_unit TEXT DEFAULT 'gbp_per_month',
+    metric_name TEXT,
+    current_value REAL,
+    target_value REAL,
+    barrier TEXT,
+    suggested_deadline DATETIME,
+    suggested_agents JSON DEFAULT '[]',
+    suggested_workflow_id TEXT,
+    confidence REAL,
+    connector_source TEXT,
+    evidence JSON,
+    status TEXT NOT NULL DEFAULT 'pending',
+    snoozed_until DATETIME,
+    dismissed_reason TEXT,
+    accepted_goal_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_goal_suggestions_business_status ON goal_suggestions(business_id, status)`,
+
+  // Feature 8 — Constraint scheduling log
+  `CREATE TABLE IF NOT EXISTS scheduler_log (
+    id TEXT PRIMARY KEY,
+    job_name TEXT NOT NULL,
+    business_id TEXT,
+    decision TEXT NOT NULL,
+    was_scheduled_for DATETIME,
+    delayed_to DATETIME,
+    reason TEXT,
+    constraints_json JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_scheduler_log_job ON scheduler_log(job_name, created_at)`,
+
+  // Feature 9 — Investigations
+  `CREATE TABLE IF NOT EXISTS investigations (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    metric_name TEXT,
+    signal_id TEXT,
+    question TEXT,
+    triggered_by TEXT DEFAULT 'human',
+    report_json JSON NOT NULL,
+    plain_english TEXT,
+    primary_cause TEXT,
+    primary_confidence REAL,
+    recommendation TEXT,
+    recommended_action TEXT,
+    kb_path TEXT,
+    cache_until DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_investigations_biz_metric ON investigations(business_id, metric_name, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_investigations_signal ON investigations(signal_id)`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

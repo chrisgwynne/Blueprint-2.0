@@ -407,3 +407,139 @@ CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status, type, run_a
 CREATE INDEX IF NOT EXISTS idx_bap_agents_prefix ON bap_agents(api_key_prefix, status);
 CREATE INDEX IF NOT EXISTS idx_bap_audit_agent_created ON bap_audit(agent_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bap_webhook_status ON bap_webhook_deliveries(delivery_status, next_retry);
+
+-- ─── Intelligence Layer (9 features) ────────────────────────────────────────
+
+CREATE TABLE IF NOT EXISTS scenarios (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  question TEXT NOT NULL,
+  context TEXT,
+  scenarios_json JSON NOT NULL,
+  recommended TEXT,
+  recommendation_reasoning TEXT,
+  decision_criteria JSON,
+  next_step TEXT,
+  created_by TEXT DEFAULT 'human',
+  kb_path TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scenarios_business_created ON scenarios(business_id, created_at);
+
+CREATE TABLE IF NOT EXISTS conflicts (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  conflict_type TEXT NOT NULL,
+  severity TEXT NOT NULL DEFAULT 'warning',
+  entity_a_type TEXT NOT NULL,
+  entity_a_id TEXT NOT NULL,
+  entity_a_title TEXT,
+  entity_b_type TEXT NOT NULL,
+  entity_b_id TEXT NOT NULL,
+  entity_b_title TEXT,
+  description TEXT NOT NULL,
+  recommendation TEXT,
+  resolution_kind TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  resolution_note TEXT,
+  detected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  resolved_at DATETIME
+);
+CREATE INDEX IF NOT EXISTS idx_conflicts_business_status ON conflicts(business_id, status);
+
+CREATE TABLE IF NOT EXISTS retrospectives (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  period_start DATETIME NOT NULL,
+  period_end DATETIME NOT NULL,
+  executive_summary TEXT,
+  what_worked JSON DEFAULT '[]',
+  what_didnt JSON DEFAULT '[]',
+  learnings JSON DEFAULT '[]',
+  agent_assessments JSON DEFAULT '[]',
+  open_windows JSON DEFAULT '[]',
+  recommendations JSON DEFAULT '[]',
+  operating_changes JSON DEFAULT '[]',
+  calibration_notes JSON DEFAULT '[]',
+  full_report_json JSON,
+  kb_path TEXT,
+  triggered_by TEXT DEFAULT 'scheduler',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_retrospectives_business ON retrospectives(business_id, created_at);
+
+CREATE TABLE IF NOT EXISTS agent_calibration (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  business_id TEXT,
+  period_start DATETIME NOT NULL,
+  period_end DATETIME NOT NULL,
+  tasks_with_outcomes INTEGER DEFAULT 0,
+  avg_stated_confidence REAL,
+  avg_actual_outcome_rate REAL,
+  calibration_error REAL,
+  calibration_score REAL,
+  calibration_offset REAL DEFAULT 0,
+  trend TEXT,
+  notes TEXT,
+  calculated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_agent_calibration_agent ON agent_calibration(agent_id, period_end);
+
+CREATE TABLE IF NOT EXISTS goal_suggestions (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  title TEXT NOT NULL,
+  description TEXT,
+  opportunity_value REAL,
+  opportunity_unit TEXT DEFAULT 'gbp_per_month',
+  metric_name TEXT,
+  current_value REAL,
+  target_value REAL,
+  barrier TEXT,
+  suggested_deadline DATETIME,
+  suggested_agents JSON DEFAULT '[]',
+  suggested_workflow_id TEXT,
+  confidence REAL,
+  connector_source TEXT,
+  evidence JSON,
+  status TEXT NOT NULL DEFAULT 'pending',
+  snoozed_until DATETIME,
+  dismissed_reason TEXT,
+  accepted_goal_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_goal_suggestions_business_status ON goal_suggestions(business_id, status);
+
+CREATE TABLE IF NOT EXISTS scheduler_log (
+  id TEXT PRIMARY KEY,
+  job_name TEXT NOT NULL,
+  business_id TEXT,
+  decision TEXT NOT NULL,
+  was_scheduled_for DATETIME,
+  delayed_to DATETIME,
+  reason TEXT,
+  constraints_json JSON,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_scheduler_log_job ON scheduler_log(job_name, created_at);
+
+CREATE TABLE IF NOT EXISTS investigations (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL REFERENCES businesses(id),
+  metric_name TEXT,
+  signal_id TEXT,
+  question TEXT,
+  triggered_by TEXT DEFAULT 'human',
+  report_json JSON NOT NULL,
+  plain_english TEXT,
+  primary_cause TEXT,
+  primary_confidence REAL,
+  recommendation TEXT,
+  recommended_action TEXT,
+  kb_path TEXT,
+  cache_until DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_investigations_biz_metric ON investigations(business_id, metric_name, created_at);

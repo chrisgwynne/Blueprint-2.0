@@ -16,6 +16,8 @@ Detect any of:
 - CONCERN — a worry about a metric or area
 - CONTEXT — important upcoming information (launch, sale, event)
 - TASK_IMPLICIT — something that clearly needs doing
+- SCENARIO_QUESTION — a "what if" / "should we" strategic question
+- INVESTIGATION_QUESTION — a "why is X happening" / "why did Y drop" question
 - NONE — normal conversation, no extractable intent
 
 Be conservative — only extract with confidence >= 0.7.
@@ -25,7 +27,7 @@ Shape:
 {
   "extractions": [
     {
-      "type": "goal|decision|concern|context|task_implicit|none",
+      "type": "goal|decision|concern|context|task_implicit|scenario_question|investigation_question|none",
       "confidence": 0.0-1.0,
       "raw_text": "exact phrase that triggered this",
       "structured": { ... type-specific fields ... }
@@ -34,11 +36,13 @@ Shape:
 }
 
 Type-specific structured fields:
-  goal:          { title, metric_hint?, timeframe_hint? }
-  decision:      { decision, affects?, kb_path? }
-  concern:       { area, metric_to_check? }
-  context:       { event, date_hint?, implications? }
-  task_implicit: { task_title, action_type?, urgency? }`;
+  goal:                   { title, metric_hint?, timeframe_hint? }
+  decision:               { decision, affects?, kb_path? }
+  concern:                { area, metric_to_check? }
+  context:                { event, date_hint?, implications? }
+  task_implicit:          { task_title, action_type?, urgency? }
+  scenario_question:      { question }
+  investigation_question: { question, metric_hint? }`;
 
 function extractJSON(content) {
   if (!content) return null;
@@ -113,6 +117,12 @@ export async function actOnExtractions(extractions, businessId, conversationId) 
           break;
         case 'task_implicit':
           actions.push(await handleTask(e, businessId));
+          break;
+        case 'scenario_question':
+          actions.push(await handleScenario(e, businessId));
+          break;
+        case 'investigation_question':
+          actions.push(await handleInvestigation(e, businessId));
           break;
       }
     } catch (err) {
@@ -231,6 +241,50 @@ Agents should factor this into their analysis and avoid attributing metric chang
       message: `Noted. Added "${s.event}" to the knowledge base so agents factor it into their analysis.`,
     };
   } catch {
+    return null;
+  }
+}
+
+async function handleScenario(e, businessId) {
+  const s = e.structured ?? {};
+  const question = s.question || e.raw_text;
+  if (!question) return null;
+  try {
+    const { modelScenarios } = await import('./scenario-engine.js');
+    const result = await modelScenarios(businessId, question, '');
+    if (!result) return null;
+    const rec = result.recommended_scenario ? ` Recommended: **${result.recommended_scenario}**.` : '';
+    return {
+      type: 'scenario_modelled',
+      id: result.id,
+      message: `I've modelled ${result.scenarios.length} scenarios for "${question}".${rec} [View full scenario →](/scenarios?id=${result.id})`,
+    };
+  } catch (err) {
+    console.warn('[brain] scenario from chat failed:', err.message);
+    return null;
+  }
+}
+
+async function handleInvestigation(e, businessId) {
+  const s = e.structured ?? {};
+  const question = s.question || e.raw_text;
+  if (!question) return null;
+  try {
+    const { runInvestigation } = await import('./investigation-engine.js');
+    const result = await runInvestigation({
+      businessId,
+      metricName: s.metric_hint ?? null,
+      question,
+      triggeredBy: 'chat',
+    });
+    if (!result) return null;
+    return {
+      type: 'investigation_ran',
+      id: result.id,
+      message: `I investigated: ${result.plain_english ?? '(see full report)'} [View full report →](/signals?investigation=${result.id})`,
+    };
+  } catch (err) {
+    console.warn('[brain] investigation from chat failed:', err.message);
     return null;
   }
 }

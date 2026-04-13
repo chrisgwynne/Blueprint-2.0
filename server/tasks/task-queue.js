@@ -101,6 +101,16 @@ export function createTask(taskData) {
     import('./outcomes.js').then((m) => m.setTaskTargetMetric(id, business_id, action_type)).catch(() => {});
   } catch {}
 
+  // Brain — fire-and-forget conflict detection against goals + action windows
+  (async () => {
+    try {
+      const { runTaskConflictCheck } = await import('../brain/conflict-engine.js');
+      await runTaskConflictCheck(created, business_id);
+    } catch (err) {
+      console.warn('[tasks] Conflict check failed:', err.message);
+    }
+  })();
+
   return created;
 }
 

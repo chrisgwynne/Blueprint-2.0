@@ -90,6 +90,16 @@ router.post('/:businessId', (req, res) => {
       }
     })();
 
+    // Brain — fire-and-forget conflict check against other active goals
+    (async () => {
+      try {
+        const { checkGoalConflicts } = await import('../brain/conflict-engine.js');
+        await checkGoalConflicts(id, businessId);
+      } catch (err) {
+        console.warn('[Goals] Conflict check failed:', err.message);
+      }
+    })();
+
     res.status(201).json(parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id)));
   } catch (err) {
     res.status(500).json({ error: err.message });

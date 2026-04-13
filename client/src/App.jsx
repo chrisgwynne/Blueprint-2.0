@@ -14,6 +14,9 @@ import Chat from './pages/Chat.jsx'
 import Outcomes from './pages/Outcomes.jsx'
 import Workflows from './pages/Workflows.jsx'
 import Goals from './pages/Goals.jsx'
+import Scenarios from './pages/Scenarios.jsx'
+import Conflicts from './pages/Conflicts.jsx'
+import Retrospectives from './pages/Retrospectives.jsx'
 import Projects from './pages/Projects.jsx'
 import Timeline from './pages/Timeline.jsx'
 import Settings from './pages/Settings.jsx'
@@ -126,6 +129,10 @@ function App() {
         <Route path="outcomes" element={<Outcomes />} />
         <Route path="workflows" element={<Workflows />} />
         <Route path="goals" element={<Goals />} />
+        <Route path="scenarios" element={<Scenarios />} />
+        <Route path="conflicts" element={<Conflicts />} />
+        <Route path="retrospectives" element={<Retrospectives />} />
+        <Route path="retrospectives/:id" element={<Retrospectives />} />
         <Route path="projects" element={<Projects />} />
         <Route path="projects/:projectId" element={<Projects />} />
         <Route path="timeline" element={<Timeline />} />

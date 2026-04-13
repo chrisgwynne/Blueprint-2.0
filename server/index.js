@@ -178,6 +178,11 @@ const mountRoutes = async () => {
   const { default: timelineRoutes } = await import('./routes/timeline.js');
   const { default: agentStatusRoutes } = await import('./routes/agent-status.js');
   const { default: brainRoutes } = await import('./routes/brain.js');
+  const { default: scenariosRoutes } = await import('./routes/scenarios.js');
+  const { default: conflictsRoutes } = await import('./routes/conflicts.js');
+  const { default: retrospectivesRoutes } = await import('./routes/retrospectives.js');
+  const { default: investigationsRoutes } = await import('./routes/investigations.js');
+  const { default: goalSuggestionsRoutes } = await import('./routes/goal-suggestions.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -206,6 +211,11 @@ const mountRoutes = async () => {
   app.use('/api/timeline', timelineRoutes);
   app.use('/api/agents-status', agentStatusRoutes);
   app.use('/api/brain', brainRoutes);
+  app.use('/api/scenarios', scenariosRoutes);
+  app.use('/api/conflicts', conflictsRoutes);
+  app.use('/api/retrospectives', retrospectivesRoutes);
+  app.use('/api/investigations', investigationsRoutes);
+  app.use('/api/goal-suggestions', goalSuggestionsRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });

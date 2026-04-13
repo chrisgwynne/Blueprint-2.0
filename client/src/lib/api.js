@@ -299,6 +299,53 @@ export const proposeGoal = (businessId, context) => post(`/goals/${businessId}/p
 export const reasonGoal = (businessId, id) => post(`/goals/${businessId}/${id}/reason`)
 
 // ============================================
+// Scenarios (Feature 1)
+// ============================================
+export const getScenarios = (businessId) => get(`/scenarios/${businessId}`)
+export const getScenario = (businessId, id) => get(`/scenarios/${businessId}/${id}`)
+export const modelScenario = (businessId, question, context) =>
+  post(`/scenarios/${businessId}/model`, { question, context })
+export const deleteScenario = (businessId, id) => del(`/scenarios/${businessId}/${id}`)
+
+// ============================================
+// Conflicts (Feature 2)
+// ============================================
+export const getConflicts = (businessId, params = '') =>
+  get(`/conflicts/${businessId}${params ? `?${params}` : ''}`)
+export const resolveConflict = (businessId, id, note) =>
+  post(`/conflicts/${businessId}/${id}/resolve`, { note })
+export const dismissConflict = (businessId, id, reason) =>
+  post(`/conflicts/${businessId}/${id}/dismiss`, { reason })
+export const auditConflicts = (businessId) => post(`/conflicts/${businessId}/audit`)
+
+// ============================================
+// Retrospectives (Feature 3)
+// ============================================
+export const getRetrospectives = (businessId) => get(`/retrospectives/${businessId}`)
+export const getRetrospective = (businessId, id) => get(`/retrospectives/${businessId}/${id}`)
+export const runRetrospective = (businessId) => post(`/retrospectives/${businessId}/run`)
+
+// ============================================
+// Goal suggestions (Feature 6)
+// ============================================
+export const getGoalSuggestions = (businessId) => get(`/goal-suggestions/${businessId}`)
+export const runGoalSuggestionScan = (businessId) => post(`/goal-suggestions/${businessId}/scan`)
+export const acceptGoalSuggestion = (businessId, id) =>
+  post(`/goal-suggestions/${businessId}/${id}/accept`)
+export const dismissGoalSuggestion = (businessId, id, reason) =>
+  post(`/goal-suggestions/${businessId}/${id}/dismiss`, { reason })
+export const snoozeGoalSuggestion = (businessId, id, days) =>
+  post(`/goal-suggestions/${businessId}/${id}/snooze`, { days })
+
+// ============================================
+// Investigations (Feature 9)
+// ============================================
+export const getInvestigations = (businessId) => get(`/investigations/${businessId}`)
+export const getInvestigation = (businessId, id) => get(`/investigations/${businessId}/${id}`)
+export const runInvestigation = (businessId, payload) =>
+  post(`/investigations/${businessId}/run`, payload)
+
+// ============================================
 // Projects (Prompt 3)
 // ============================================
 export const getProjects = (businessId) => get(`/projects/${businessId}`)

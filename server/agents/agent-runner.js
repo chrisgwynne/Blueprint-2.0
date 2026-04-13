@@ -371,6 +371,24 @@ async function buildUserContext({ agentId, profile, business, signals, metrics, 
       lines.push('');
     }
 
+    // Latest retrospective note for this specific agent.
+    try {
+      const retroRow = db.prepare('SELECT value FROM settings WHERE key = ?')
+        .get(`agent_retro_note_${business.id}_${agentId}`);
+      if (retroRow?.value) {
+        const retro = JSON.parse(retroRow.value);
+        if (retro?.note) {
+          lines.push('## Last Retrospective Finding (about you)');
+          lines.push(`${retro.note}${retro.grade ? ` (grade: ${retro.grade})` : ''}`);
+          if (retro.calibration_error != null) {
+            const pct = (retro.calibration_error * 100).toFixed(0);
+            lines.push(`Your recent confidence scores were ${pct}% ${retro.calibration_error > 0 ? 'overconfident' : 'underconfident'} vs actual outcomes — please adjust.`);
+          }
+          lines.push('');
+        }
+      }
+    } catch {}
+
     // Per-agent goal briefings produced by the Goal Reasoner.
     // These tell THIS specific agent what to focus on / avoid for each goal.
     try {

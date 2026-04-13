@@ -339,6 +339,40 @@ export function startScheduler() {
     }
   });
 
+  // Monthly retrospective — 1st of every month at 06:00.
+  cron.schedule('0 6 1 * *', async () => {
+    try {
+      const { runRetrospective } = await import('../brain/retrospective-engine.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all();
+      for (const b of businesses) {
+        try {
+          const r = await runRetrospective(b.id, { triggered_by: 'scheduler' });
+          if (r) console.log(`[scheduler] Retrospective filed for ${b.id.slice(0, 8)}.`);
+        } catch (err) {
+          console.warn(`[scheduler] Retrospective failed for ${b.id}:`, err.message);
+        }
+      }
+    } catch (err) {
+      console.error('[scheduler] Retrospective run failed:', err.message);
+    }
+  });
+
+  // Weekly goal conflict audit — Monday 7am.
+  cron.schedule('0 7 * * 1', async () => {
+    try {
+      const { auditAllGoalConflicts, autoResolveStale } = await import('../brain/conflict-engine.js');
+      autoResolveStale();
+      const businesses = db.prepare('SELECT id FROM businesses').all();
+      let total = 0;
+      for (const b of businesses) {
+        total += await auditAllGoalConflicts(b.id).catch(() => 0);
+      }
+      if (total > 0) console.log(`[scheduler] Conflict audit: ${total} conflicts identified.`);
+    } catch (err) {
+      console.error('[scheduler] Conflict audit failed:', err.message);
+    }
+  });
+
   // Weekly strategic goal-reasoning refresh — Monday 6am.
   // Re-runs the LLM reasoning pass on every active goal so feasibility,
   // strategy, and agent briefings stay in sync with the latest metrics.

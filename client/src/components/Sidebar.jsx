@@ -29,7 +29,7 @@ import {
   CreditCard,
   GitBranch,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, Zap as ZapIcon, BookMarked, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -79,6 +79,9 @@ const NAV_ITEMS = [
   { label: 'Chat',          to: '/chat',       icon: MessageSquare },
   { label: 'Workflows',     to: '/workflows',  icon: Workflow },
   { label: 'Goals',         to: '/goals',      icon: Target },
+  { label: 'Scenarios',     to: '/scenarios',  icon: Sparkles },
+  { label: 'Conflicts',     to: '/conflicts',  icon: AlertTriangle },
+  { label: 'Retrospectives',to: '/retrospectives', icon: BookMarked },
   { label: 'Timeline',      to: '/timeline',   icon: Clock },
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },
