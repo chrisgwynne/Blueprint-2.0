@@ -12,8 +12,9 @@ import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import {
   createBusiness, getBusinesses, addConnector, testPageSpeed,
-  getAgents, updateAgent, syncConnector, getGoogleAuthUrl, getConnectors,
+  syncConnector, getGoogleAuthUrl, getConnectors,
   getGoogleOAuthConfig, saveGoogleOAuthConfig,
+  hireAgent, getHireRecommendations,
 } from '../lib/api.js'
 
 const STEPS = ['Welcome', 'Business', 'Data', 'Agents', 'Notifications']
@@ -60,8 +61,12 @@ export default function Onboarding({ onComplete }) {
   const [psUrl, setPsUrl] = useState('')
   const [psTesting, setPsTesting] = useState(false)
   const [psResult, setPsResult] = useState(null)
-  const [agents, setAgents] = useState([])
-  const [enabledAgents, setEnabledAgents] = useState(new Set(['conductor']))
+  // Conductor hiring recommendations shown inline on Step 3.
+  // analysing → loading spinner, recs → list of candidates, hired → Set of template ids
+  const [hireAnalysing, setHireAnalysing] = useState(false)
+  const [hireRecs, setHireRecs] = useState(null)   // null = not yet analysed
+  const [hiring, setHiring] = useState({})         // { [templateId]: 'pending' | 'done' | 'error' }
+  const [hireError, setHireError] = useState(null)
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
 
@@ -172,35 +177,50 @@ export default function Onboarding({ onComplete }) {
     }
   }
 
-  // ── Step 4: Load agents ─────────────────────────────────────────────────
+  // ── Step 4: Ask Conductor which agents to hire, based on what was connected.
+  // Runs a dry-run hiring analysis and renders the recommendations inline so
+  // the user can hire with one click (no task-queue round-trip).
   useEffect(() => {
-    if (step === 3) {
-      getAgents().then((data) => {
-        const list = Array.isArray(data) ? data : data?.agents ?? []
-        setAgents(list)
-        // Pre-select based on business type
-        const preselect = new Set(['conductor'])
-        if (bizType === 'ecommerce') { preselect.add('trend-spotter') }
-        if (bizType === 'saas') { preselect.add('trend-spotter') }
-        if (['local_service', 'agency'].includes(bizType)) { preselect.add('seo-sentinel') }
-        preselect.add('quill')
-        setEnabledAgents(preselect)
-      }).catch(() => {})
-    }
-  }, [step, bizType])
+    if (step !== 3 || !createdBiz?.id) return
+    let cancelled = false
+    setHireAnalysing(true)
+    setHireError(null)
+    ;(async () => {
+      try {
+        // Trigger a best-effort sync for any connectors that can run without
+        // user interaction — so Conductor reasons about real data, not just
+        // "connector exists, empty".
+        try {
+          const conns = await getConnectors(createdBiz.id)
+          const syncable = (Array.isArray(conns) ? conns : [])
+            .filter((c) => ['pagespeed', 'shopify'].includes(c.type))
+          await Promise.allSettled(syncable.map((c) => syncConnector(c.id)))
+        } catch {}
 
-  async function handleEnableAgents() {
-    setSaving(true)
-    try {
-      for (const agent of agents) {
-        const shouldBeActive = enabledAgents.has(agent.id)
-        if (shouldBeActive && agent.status !== 'active') {
-          await updateAgent(agent.id, { status: 'active' })
-        }
+        const result = await getHireRecommendations(createdBiz.id)
+        if (cancelled) return
+        setHireRecs(result?.recommendations ?? [])
+      } catch (err) {
+        if (cancelled) return
+        setHireError(err.message || 'Analysis failed')
+        setHireRecs([])
+      } finally {
+        if (!cancelled) setHireAnalysing(false)
       }
-    } catch {}
-    setSaving(false)
-    setStep(4)
+    })()
+    return () => { cancelled = true }
+  }, [step, createdBiz?.id])
+
+  async function handleHireOne(templateId) {
+    if (!createdBiz?.id) return
+    setHiring((p) => ({ ...p, [templateId]: 'pending' }))
+    try {
+      await hireAgent(templateId, createdBiz.id)
+      setHiring((p) => ({ ...p, [templateId]: 'done' }))
+    } catch (err) {
+      setHiring((p) => ({ ...p, [templateId]: 'error' }))
+      console.warn('[onboarding] hire failed:', err.message)
+    }
   }
 
   // ── Step 5: Finish ──────────────────────────────────────────────────────
@@ -437,58 +457,110 @@ export default function Onboarding({ onComplete }) {
           </div>
         )}
 
-        {/* ── STEP 3: How agents work ──────────────────────────────────── */}
+        {/* ── STEP 3: Conductor recommends agents to hire ───────────────── */}
         {step === 3 && (
           <div>
             <h2 style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 20, color: 'var(--bp-text)', margin: '0 0 4px' }}>
               Your AI team
             </h2>
             <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 16 }}>
-              Blueprint hires specialists for you based on the data you connect — no speculation.
+              Conductor has reviewed what you've connected and picked the agents
+              worth hiring now. No speculation — only agents whose data is live.
             </p>
-            <div className="bp-card" style={{ padding: 14, marginBottom: 10, display: 'flex', gap: 10 }}>
-              <Bot size={18} style={{ color: 'var(--bp-blue)', flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
-                  Conductor is always on
-                </div>
-                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
-                  The Conductor orchestrates everything. It watches every connector sync and
-                  proposes hiring a specialist agent when it spots useful data — for example,
-                  hiring the Merchant agent after you connect Shopify, or the SEO Sentinel
-                  once Search Console is live.
-                </div>
-              </div>
-            </div>
-            <div className="bp-card" style={{ padding: 14, marginBottom: 10, display: 'flex', gap: 10 }}>
-              <Check size={18} style={{ color: 'var(--bp-green)', flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
-                  Hires appear in your Tasks inbox
-                </div>
-                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
-                  Each hire is a proposed task with Conductor's reasoning. One click approves
-                  the hire, the agent runs its first analysis, and its findings show up on
-                  your dashboard.
+
+            {/* Analysing state */}
+            {hireAnalysing && (
+              <div className="bp-card" style={{ padding: 16, marginBottom: 10, display: 'flex', gap: 10, alignItems: 'center' }}>
+                <RefreshCw size={16} className="animate-spin" style={{ color: 'var(--bp-blue)' }} />
+                <div>
+                  <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>
+                    Conductor is analysing your data…
+                  </div>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
+                    Syncing connected sources and deciding which specialist agents to recommend.
+                  </div>
                 </div>
               </div>
-            </div>
-            <div className="bp-card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 10 }}>
-              <Clock size={18} style={{ color: 'var(--bp-amber)', flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
-                  No connectors = no agents
-                </div>
-                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
-                  An agent only runs once the data it depends on is connected and syncing.
-                  You'll never see agents producing findings from absent data.
+            )}
+
+            {/* Recommendations */}
+            {!hireAnalysing && hireRecs && hireRecs.length > 0 && (
+              <>
+                {hireRecs.map((r) => {
+                  const state = hiring[r.agent_id]
+                  return (
+                    <div key={r.agent_id} className="bp-card" style={{ padding: 14, marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                        <Bot size={18} style={{ color: 'var(--bp-blue)', flexShrink: 0, marginTop: 1 }} />
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 4 }}>
+                            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>
+                              {r.name || r.agent_id}
+                            </div>
+                            {typeof r.confidence === 'number' && (
+                              <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
+                                confidence {Math.round(r.confidence * 100)}%
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5, marginBottom: 6 }}>
+                            {r.reason}
+                          </div>
+                          {r.expected_value && (
+                            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 8 }}>
+                              → {r.expected_value}
+                            </div>
+                          )}
+                          {Array.isArray(r.required_connectors) && r.required_connectors.length > 0 && (
+                            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginBottom: 8 }}>
+                              Uses: {r.required_connectors.join(', ')}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => handleHireOne(r.agent_id)}
+                            disabled={state === 'pending' || state === 'done'}
+                            className={clsx('bp-btn text-xs', state === 'done' ? 'bp-btn-ghost' : 'bp-btn-primary')}
+                            style={{ padding: '6px 14px' }}
+                          >
+                            {state === 'done'
+                              ? (<><Check size={11} /> Hired</>)
+                              : state === 'pending'
+                                ? (<><RefreshCw size={11} className="animate-spin" /> Hiring…</>)
+                                : state === 'error'
+                                  ? (<><X size={11} /> Retry hire</>)
+                                  : (<><Zap size={11} /> Hire {r.name || r.agent_id}</>)}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )}
+
+            {/* Empty state — no recommendations (connectors not synced yet,
+                or Conductor genuinely has nothing to suggest). Show the
+                explainer so the user understands what will happen next. */}
+            {!hireAnalysing && hireRecs && hireRecs.length === 0 && (
+              <div className="bp-card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 10 }}>
+                <Clock size={18} style={{ color: 'var(--bp-amber)', flexShrink: 0, marginTop: 1 }} />
+                <div>
+                  <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+                    Nothing to hire yet
+                  </div>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+                    {hireError
+                      ? `We couldn't analyse right now (${hireError}). You can finish setup and Conductor will recommend agents after your connectors sync.`
+                      : "Your connectors are still syncing. As soon as data arrives, Conductor will recommend specialist agents in your Tasks inbox."}
+                  </div>
                 </div>
               </div>
-            </div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <button onClick={() => setStep(2)} className="bp-btn bp-btn-ghost text-xs"><ArrowLeft size={12} /> Back</button>
               <button onClick={() => setStep(4)} className="bp-btn bp-btn-primary text-xs ml-auto" style={{ padding: '10px 24px' }}>
-                Got it <ArrowRight size={12} />
+                Continue <ArrowRight size={12} />
               </button>
             </div>
           </div>

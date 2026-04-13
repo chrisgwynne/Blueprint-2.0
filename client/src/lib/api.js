@@ -118,6 +118,10 @@ export const getAgentMemory = (id) => get(`/agents/${id}/memory`)
 export const clearAgentMemory = (id) => del(`/agents/${id}/memory`)
 export const getAgentTemplates = () => get('/agents/templates')
 export const installAgent = (agentId) => post('/agents/install', { agent_id: agentId })
+export const hireAgent = (templateId, businessId) =>
+  post('/agents/hire', { template_id: templateId, business_id: businessId })
+export const getHireRecommendations = (businessId) =>
+  post('/agents/hire-recommendations', { business_id: businessId })
 
 // ============================================
 // LLM Providers

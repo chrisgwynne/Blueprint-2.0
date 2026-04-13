@@ -244,6 +244,18 @@ const STARTUP_MIGRATIONS = [
   `ALTER TABLE tasks ADD COLUMN deferred_until DATETIME`,
   `ALTER TABLE tasks ADD COLUMN deferred_reason TEXT`,
 
+  // Agent lifecycle — degraded-data flag for tasks proposed with stale or
+  // missing preferred connector data. These are capped at confidence ≤ 0.3
+  // and trust_tier='red' by agent-runner.js output validation.
+  `ALTER TABLE tasks ADD COLUMN degraded_data INTEGER DEFAULT 0`,
+
+  // KB pollution review — flag entries written before required connector
+  // data was available, and track which agent wrote each entry so later
+  // audits can trace speculation back to source.
+  `ALTER TABLE kb_docs ADD COLUMN review_status TEXT DEFAULT 'ok'`,
+  `ALTER TABLE kb_docs ADD COLUMN review_reason TEXT`,
+  `ALTER TABLE kb_docs ADD COLUMN created_by TEXT`,
+
   // ─── Intelligence layer (9 features) ────────────────────────────────────
   // Feature 1 — Scenarios
   `CREATE TABLE IF NOT EXISTS scenarios (

@@ -9,6 +9,8 @@ import yaml from 'js-yaml';
 import db, { audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { runAgent } from '../agents/agent-runner.js';
+import { installAgent } from '../agents/installer.js';
+import { analyseAndProposeHires } from '../agents/conductor-hiring.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -342,6 +344,74 @@ router.post('/install', (req, res) => {
   } catch (err) {
     console.error('[agents] Install error:', err);
     return res.status(500).json({ error: 'Failed to install agent.' });
+  }
+});
+
+// ─── Hire recommendations preview (onboarding inline flow) ──────────────────
+//
+// Runs the Conductor hiring analysis in dry-run mode and returns the ranked
+// recommendations WITHOUT creating hire_agent tasks. The onboarding wizard
+// renders these inline and lets the user hire with a single click, skipping
+// the task queue entirely.
+
+router.post('/hire-recommendations', async (req, res) => {
+  try {
+    const { business_id } = req.body;
+    if (!business_id) return res.status(400).json({ error: 'business_id is required.' });
+
+    const result = await analyseAndProposeHires(business_id, { dryRun: true });
+    return res.json({
+      ok: true,
+      business_id,
+      recommendations: result.recommendations ?? [],
+      reason: result.reason ?? null,
+    });
+  } catch (err) {
+    console.error('[agents] hire-recommendations error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to generate recommendations.' });
+  }
+});
+
+// ─── Direct hire (onboarding + Agents page one-click hire) ──────────────────
+//
+// Installs a template as a live agent for a business. If the agent is
+// immediately ready (required connectors present and fresh), queues a first
+// run so the user sees value straight away. Otherwise it lands as 'pending'
+// and will promote itself when the relevant connector finishes its next sync.
+
+router.post('/hire', async (req, res) => {
+  try {
+    const { template_id, business_id } = req.body;
+    if (!template_id) return res.status(400).json({ error: 'template_id is required.' });
+    if (!business_id) return res.status(400).json({ error: 'business_id is required.' });
+
+    const actor = req.session?.user?.email || req.session?.user?.id || 'human';
+    const result = installAgent(template_id, business_id, actor);
+
+    // If the agent is immediately ready, run it right away so the user sees
+    // output in the onboarding flow. Fire-and-forget so we don't hold the
+    // response while the LLM runs.
+    let initialRunQueued = false;
+    if (result.status === 'active') {
+      initialRunQueued = true;
+      runAgent(template_id, business_id, 'post_hire_initial_run', null).catch((err) => {
+        console.warn(`[agents] post-hire initial run for '${template_id}' failed:`, err.message);
+      });
+    }
+
+    return res.json({
+      ok: true,
+      agent_id: result.agentId,
+      status: result.status,
+      readiness: result.readiness,
+      initial_run_queued: initialRunQueued,
+      message: result.status === 'active'
+        ? `${template_id} hired and running its first analysis now.`
+        : `${template_id} hired. Waiting for: ${result.readiness.missing_required.join(', ') || 'data'}.`,
+    });
+  } catch (err) {
+    console.error('[agents] hire error:', err);
+    return res.status(500).json({ error: err.message || 'Failed to hire agent.' });
   }
 });
 

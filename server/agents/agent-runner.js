@@ -722,8 +722,64 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       parsed = { tasks: [], reasoning: rawContent, signals_detected: 0, learnings: [] };
     }
 
-    const tasksToCreate = Array.isArray(parsed.tasks) ? parsed.tasks : [];
+    let tasksToCreate = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     const signalsDetected = parsed.signals_detected ?? relevantSignals.length;
+
+    // 10b. Output validation — defence in depth against speculation.
+    //
+    // The readiness gate (step 1b) prevents runs when required connectors are
+    // absent or stale. But a run can still be degraded when: (a) a preferred
+    // connector is missing, or (b) required data is present but aging toward
+    // the staleness threshold. In those cases we keep the output but cap its
+    // authority: confidence ≤ 0.3 and trust_tier='red' so every task lands in
+    // front of a human reviewer instead of auto-approving.
+    //
+    // We also drop tasks that cite nothing verifiable — if the agent produced
+    // zero signals AND its reasoning doesn't reference any active connector,
+    // anything it proposed is pure speculation and we refuse to file it.
+    const missingPreferred = Array.isArray(readiness?.missing_preferred)
+      ? readiness.missing_preferred : [];
+    const anyStale = Object.values(readiness?.last_sync_ages ?? {})
+      .some((h) => typeof h === 'number' && h > 24);
+    const degradedRun = missingPreferred.length > 0 || anyStale;
+
+    if (degradedRun) {
+      tasksToCreate = tasksToCreate.map((t) => ({
+        ...t,
+        confidence: typeof t.confidence === 'number'
+          ? Math.min(t.confidence, 0.3) : 0.3,
+        trust_tier: 'red',
+        _degraded_data: true,
+      }));
+      console.warn(
+        `[agent-runner] '${agentId}' ran with degraded data (missing preferred: ${missingPreferred.join(',') || 'none'}, stale: ${anyStale}). ` +
+        `Tasks capped at confidence 0.3 / trust_tier=red.`
+      );
+    }
+
+    // Reject tasks with zero citation of real data. A task is a citation if
+    // reasoning mentions at least one active connector name/type, or if any
+    // signals were detected, or if the task's action_payload references a
+    // connector_id that belongs to this business.
+    const activeConnectorKeys = new Set();
+    for (const c of connectors) {
+      if (c.status === 'active') {
+        if (c.type) activeConnectorKeys.add(String(c.type).toLowerCase());
+        if (c.name) activeConnectorKeys.add(String(c.name).toLowerCase());
+      }
+    }
+    const reasoningText = String(parsed.reasoning ?? '').toLowerCase();
+    const reasoningCitesData = Array.from(activeConnectorKeys)
+      .some((k) => k && reasoningText.includes(k));
+    const hasSignalEvidence = (signalsDetected ?? 0) > 0;
+
+    if (!hasSignalEvidence && !reasoningCitesData && tasksToCreate.length > 0) {
+      console.warn(
+        `[agent-runner] '${agentId}' proposed ${tasksToCreate.length} task(s) with no data citation ` +
+        `(no signals, no connector reference in reasoning). Dropping tasks to prevent speculative KB pollution.`
+      );
+      tasksToCreate = [];
+    }
 
     // 11. Insert tasks (with brain restraint check)
     const createdTasks = [];
@@ -765,6 +821,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
           confidence: taskDef.confidence ?? null,
           estimated_impact: taskDef.estimated_impact ?? null,
           approval_mode: profile.approval_mode ?? 'requires_approval',
+          degraded_data: taskDef._degraded_data ? 1 : 0,
         });
 
         // If deferred, immediately move to 'deferred' status with the wake-up time
