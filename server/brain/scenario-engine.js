@@ -72,6 +72,7 @@ export async function modelScenarios(businessId, question, context = '') {
     provider: 'anthropic', model: 'claude-sonnet-4-20250514',
   });
 
+  let rawContent = '';
   let parsed = null;
   try {
     const result = await runLLM(providerId, model, {
@@ -80,14 +81,20 @@ export async function modelScenarios(businessId, question, context = '') {
       temperature: 0.4,
       max_tokens: 4096,
     });
-    parsed = extractJSON(result?.content ?? '');
+    rawContent = result?.content ?? '';
+    parsed = extractJSON(rawContent);
   } catch (err) {
+    // Surface the real reason instead of a silent null. Most common causes:
+    //   - no provider credentials configured for the chosen provider
+    //   - provider quota / rate limit
+    //   - model not available for this key
     console.warn('[scenario-engine] LLM failed:', err.message);
-    return null;
+    throw new Error(`LLM call failed (${providerId}/${model}): ${err.message}`);
   }
 
   if (!parsed || !Array.isArray(parsed.scenarios) || parsed.scenarios.length === 0) {
-    return null;
+    const preview = rawContent ? ` Response preview: ${rawContent.slice(0, 160)}` : ' The provider returned an empty response — check that your LLM provider credentials are configured in Settings.';
+    throw new Error(`LLM response could not be parsed into scenarios.${preview}`);
   }
 
   const id = crypto.randomUUID();

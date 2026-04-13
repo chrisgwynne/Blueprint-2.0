@@ -196,6 +196,7 @@ export async function runInvestigation({ businessId, metricName = null, signalId
     provider: 'anthropic', model: 'claude-sonnet-4-20250514',
   });
 
+  let rawContent = '';
   let parsed = null;
   try {
     const result = await runLLM(providerId, model, {
@@ -203,13 +204,19 @@ export async function runInvestigation({ businessId, metricName = null, signalId
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.3, max_tokens: 2000,
     });
-    parsed = extractJSON(result?.content ?? '');
+    rawContent = result?.content ?? '';
+    parsed = extractJSON(rawContent);
   } catch (err) {
     console.warn('[investigation] LLM failed:', err.message);
-    return null;
+    throw new Error(`LLM call failed (${providerId}/${model}): ${err.message}`);
   }
 
-  if (!parsed) return null;
+  if (!parsed) {
+    const preview = rawContent
+      ? ` Response preview: ${rawContent.slice(0, 160)}`
+      : ' The provider returned an empty response — check that your LLM provider credentials are configured in Settings.';
+    throw new Error(`LLM response could not be parsed into an investigation.${preview}`);
+  }
 
   const id = crypto.randomUUID();
   const cacheUntil = new Date(Date.now() + CACHE_HOURS * 3600000).toISOString();
