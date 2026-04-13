@@ -323,13 +323,23 @@ function Dashboard() {
         <MetricCard label="Sessions (7d)" value={metrics.sessions_7d} prev={metrics.sessions_prev_7d} sparklineData={spark('sessions')} icon={Globe} iconColor="var(--bp-blue)" accentColor="var(--bp-blue)" loading={loading} />
         <MetricCard label="Organic Sessions" value={metrics.organic_sessions} prev={metrics.organic_sessions_prev} sparklineData={spark('organic_sessions')} icon={Search} iconColor="var(--bp-cyan)" accentColor="var(--bp-cyan)" loading={loading} />
         <MetricCard label="Keywords" value={metrics.organic_keywords} prev={metrics.organic_keywords_prev} sparklineData={spark('keywords')} icon={Search} iconColor="var(--bp-blue)" loading={loading} />
-        <MetricCard label="Avg Position" value={metrics.avg_position != null ? Number(metrics.avg_position).toFixed(1) : undefined} prev={metrics.avg_position_prev != null ? Number(metrics.avg_position_prev).toFixed(1) : undefined} sparklineData={spark('position')} icon={TrendingUp} iconColor="var(--bp-amber)" accentColor="var(--bp-amber)" invertPolarity loading={loading} />
-        <MetricCard label="PageSpeed" value={score} prev={metrics.pagespeed_prev} unit="/100" sparklineData={spark('pagespeed')} icon={Zap} iconColor={score >= 90 ? 'var(--bp-green)' : score >= 50 ? 'var(--bp-amber)' : 'var(--bp-red)'} accentColor={score >= 90 ? 'var(--bp-green)' : score >= 50 ? 'var(--bp-amber)' : 'var(--bp-red)'} loading={loading} />
+        <MetricCard
+          label="Avg Position"
+          value={metrics.avg_position}
+          prev={metrics.avg_position_prev}
+          sparklineData={spark('position')}
+          icon={TrendingUp}
+          iconColor="var(--bp-amber)"
+          accentColor="var(--bp-amber)"
+          invertPolarity
+          loading={loading}
+        />
+        <MetricCard label="PageSpeed" value={metrics.pagespeed_score ?? score} unit="/100" sparklineData={spark('pagespeed')} icon={Zap} iconColor={(score ?? 0) >= 90 ? 'var(--bp-green)' : (score ?? 0) >= 50 ? 'var(--bp-amber)' : 'var(--bp-red)'} accentColor={(score ?? 0) >= 90 ? 'var(--bp-green)' : (score ?? 0) >= 50 ? 'var(--bp-amber)' : 'var(--bp-red)'} loading={loading} />
         <MetricCard label="Open Signals" value={signals.length} prev={metrics.signals_prev} sparklineData={spark('signals')} icon={Radio} iconColor="var(--bp-red)" accentColor="var(--bp-red)" invertPolarity loading={loading} />
       </div>
 
-      {/* Row 2: Signal Feed + Agent Activity */}
-      <div style={{ display: 'grid', gridTemplateColumns: '58fr 42fr', gap: 16, marginBottom: 16 }}>
+      {/* Row 2: Live Signals (full width — agent status now lives in the right sidebar) */}
+      <div style={{ marginBottom: 16 }}>
         <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--bp-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -342,21 +352,6 @@ function Dashboard() {
           {loading ? <div style={{ padding: 16 }}><SectionSkeleton rows={4} /></div> : (
             <SignalFeed signals={signals.slice(0, 15)} onSignalClick={() => {}} onAcknowledge={handleAcknowledge} maxHeight={360} />
           )}
-        </div>
-        <div className="bp-card" style={{ padding: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--bp-border)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
-            <span style={{ fontFamily: 'var(--bp-font-display)', fontSize: 11, fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--bp-text-3)' }}>Agent Status</span>
-            <Link to="/agents" style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-blue)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>Agents <ArrowRight size={11} /></Link>
-          </div>
-          <div style={{ padding: '8px 18px', flex: 1, overflowY: 'auto', maxHeight: 360 }}>
-            {loading ? <SectionSkeleton rows={4} /> : agents.length === 0 ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 0', textAlign: 'center' }}>
-                <Bot size={28} style={{ color: 'var(--bp-text-3)', marginBottom: 8 }} />
-                <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>No agents configured</p>
-                <Link to="/agents" style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-blue)', textDecoration: 'none', marginTop: 6 }}>Set up agents →</Link>
-              </div>
-            ) : agents.map(a => <AgentRow key={a.id} agent={a} />)}
-          </div>
         </div>
       </div>
 
