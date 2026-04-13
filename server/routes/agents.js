@@ -444,4 +444,31 @@ router.patch('/:id', (req, res) => {
   }
 });
 
+// ─── Agent calibration (Feature 5) ──────────────────────────────────────
+
+router.get('/:id/calibration', async (req, res) => {
+  try {
+    const { getLatestCalibration, listCalibrationHistory } = await import('../brain/calibration.js');
+    const businessId = req.query.business_id || null;
+    const latest = getLatestCalibration(req.params.id, businessId);
+    const history = listCalibrationHistory(req.params.id, businessId, 12);
+    res.json({ latest, history });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/:id/calibration/recalculate', async (req, res) => {
+  try {
+    const { recalculateCalibrationForBusiness } = await import('../brain/calibration.js');
+    const businessId = req.body?.business_id;
+    if (!businessId) return res.status(400).json({ error: 'business_id required' });
+    const results = recalculateCalibrationForBusiness(businessId);
+    const me = results.find((r) => r.agent === req.params.id) || null;
+    res.json({ ok: true, agent: me });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

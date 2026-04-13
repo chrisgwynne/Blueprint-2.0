@@ -357,6 +357,12 @@ router.get('/health/full', async (req, res) => {
         jobs_registered: nextRuns.length,
         jobs_failed_24h: jobsFailed24h,
         next_runs: nextRuns.slice(0, 5),
+        jobs_with_constraints: db.prepare(
+          "SELECT COUNT(*) AS n FROM scheduler_log WHERE decision='delayed' AND created_at > datetime('now','-7 days')"
+        ).get()?.n ?? 0,
+        recent_decisions: db.prepare(
+          "SELECT job_name, decision, reason, delayed_to, created_at FROM scheduler_log ORDER BY created_at DESC LIMIT 20"
+        ).all(),
       },
     });
   } catch (err) {

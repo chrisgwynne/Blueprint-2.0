@@ -4,6 +4,8 @@ import { Target, Plus, Sparkles, Check, X, Pause, Edit2, RefreshCw } from 'lucid
 import useStore from '../lib/store.js'
 import {
   getGoals, createGoal, updateGoal, deleteGoal, checkGoal, proposeGoal, reasonGoal,
+  getGoalSuggestions, runGoalSuggestionScan,
+  acceptGoalSuggestion, dismissGoalSuggestion, snoozeGoalSuggestion,
 } from '../lib/api.js'
 
 const AGENTS = ['conductor', 'seo-sentinel', 'quill', 'velocity', 'trend-spotter', 'merchant', 'ledger', 'sentinel', 'researcher', 'reporter', 'dev', 'outreach']
@@ -259,18 +261,88 @@ function GoalForm({ businessId, initial, onSaved, onCancel }) {
   )
 }
 
+function SuggestionCard({ suggestion, businessId, onRefresh }) {
+  const [working, setWorking] = useState(false)
+  async function handle(fn) { setWorking(true); try { await fn(); await onRefresh() } finally { setWorking(false) } }
+
+  const val = suggestion.opportunity_value
+  const unit = suggestion.opportunity_unit?.startsWith('gbp') ? '£'
+             : suggestion.opportunity_unit?.startsWith('usd') ? '$' : ''
+  return (
+    <div className="bp-card" style={{ padding: 16, marginBottom: 10, borderLeft: '3px solid var(--bp-purple)' }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+        <Sparkles size={14} style={{ color: 'var(--bp-purple)', marginTop: 2, flexShrink: 0 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 14, color: 'var(--bp-text)' }}>
+            {suggestion.title}
+          </div>
+          {suggestion.description && (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginTop: 4 }}>
+              {suggestion.description}
+            </div>
+          )}
+        </div>
+        {val != null && (
+          <div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', letterSpacing: '0.12em', textTransform: 'uppercase' }}>
+              Opportunity
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 800, fontSize: 16, color: 'var(--bp-purple)' }}>
+              {unit}{Math.round(val).toLocaleString()}
+              <span style={{ fontSize: 10, color: 'var(--bp-text-3)', fontWeight: 400 }}>/mo</span>
+            </div>
+          </div>
+        )}
+      </div>
+      {suggestion.barrier && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 6 }}>
+          <strong style={{ color: 'var(--bp-text-2)' }}>Barrier:</strong> {suggestion.barrier}
+        </div>
+      )}
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 10 }}>
+        {suggestion.metric_name} · {suggestion.current_value} → {suggestion.target_value}
+        {suggestion.confidence != null && <> · {Math.round(suggestion.confidence * 100)}% confidence</>}
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button onClick={() => handle(() => acceptGoalSuggestion(businessId, suggestion.id))} disabled={working} className="bp-btn bp-btn-primary" style={{ fontSize: 11 }}>
+          <Check size={11} /> Set this goal
+        </button>
+        <button onClick={() => handle(() => dismissGoalSuggestion(businessId, suggestion.id, prompt('Reason?') ?? ''))} disabled={working} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+          <X size={11} /> Dismiss
+        </button>
+        <button onClick={() => handle(() => snoozeGoalSuggestion(businessId, suggestion.id, 30))} disabled={working} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+          Snooze 30d
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function Goals() {
   const currentBusiness = useStore((s) => s.currentBusiness)
   const [goals, setGoals] = useState([])
+  const [suggestions, setSuggestions] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [proposed, setProposed] = useState(null)
+  const [tab, setTab] = useState('active')
+  const [scanning, setScanning] = useState(false)
 
   const fetchGoals = useCallback(async () => {
     if (!currentBusiness) return
     setGoals(await getGoals(currentBusiness.id) ?? [])
+    try {
+      const { suggestions } = await getGoalSuggestions(currentBusiness.id) ?? {}
+      setSuggestions(suggestions || [])
+    } catch { setSuggestions([]) }
   }, [currentBusiness])
 
   useEffect(() => { fetchGoals() }, [fetchGoals])
+
+  async function handleScan() {
+    setScanning(true)
+    try { await runGoalSuggestionScan(currentBusiness.id); await fetchGoals() }
+    finally { setScanning(false) }
+  }
 
   async function handleAskAI() {
     const context = prompt('What do you want to achieve?')
@@ -312,6 +384,25 @@ export default function Goals() {
         </div>
       </div>
 
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, borderBottom: '1px solid var(--bp-border)', paddingBottom: 10 }}>
+        {[
+          { id: 'active', label: `Active (${goals.filter((g) => g.status === 'active').length})` },
+          { id: 'suggested', label: `Suggested (${suggestions.length})` },
+          { id: 'achieved', label: `Achieved (${goals.filter((g) => g.status === 'achieved').length})` },
+        ].map((t) => (
+          <button key={t.id} onClick={() => setTab(t.id)}
+            className={`bp-pill ${tab === t.id ? 'bp-pill-blue' : 'bp-pill-grey'}`}
+            style={{ cursor: 'pointer', background: 'none', border: tab === t.id ? undefined : '1px solid var(--bp-border)' }}>
+            {t.label}
+          </button>
+        ))}
+        {tab === 'suggested' && (
+          <button onClick={handleScan} disabled={scanning} className="bp-btn bp-btn-secondary" style={{ fontSize: 11, marginLeft: 'auto' }}>
+            <RefreshCw size={11} /> {scanning ? 'Scanning…' : 'Scan for opportunities'}
+          </button>
+        )}
+      </div>
+
       {showForm && (
         <GoalForm
           businessId={currentBusiness.id}
@@ -346,13 +437,29 @@ export default function Goals() {
         </div>
       )}
 
-      {goals.length === 0 && !showForm && !proposed ? (
-        <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)' }}>
-          No goals yet. Click "New goal" or ask AI to propose one.
-        </div>
-      ) : (
-        goals.map((g) => <GoalCard key={g.id} goal={g} businessId={currentBusiness.id} onRefresh={fetchGoals} />)
-      )}
+      {tab === 'suggested' ? (
+        suggestions.length === 0 ? (
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 12 }}>
+            No suggestions yet. Click "Scan for opportunities" to check your business data.
+          </div>
+        ) : (
+          suggestions.map((s) => (
+            <SuggestionCard key={s.id} suggestion={s} businessId={currentBusiness.id} onRefresh={fetchGoals} />
+          ))
+        )
+      ) : (() => {
+        const filteredGoals = goals.filter((g) =>
+          tab === 'active' ? g.status === 'active'
+          : tab === 'achieved' ? g.status === 'achieved'
+          : true)
+        return filteredGoals.length === 0 && !showForm && !proposed ? (
+          <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)' }}>
+            No {tab} goals yet. Click "New goal" or ask AI to propose one.
+          </div>
+        ) : (
+          filteredGoals.map((g) => <GoalCard key={g.id} goal={g} businessId={currentBusiness.id} onRefresh={fetchGoals} />)
+        )
+      })()}
     </div>
   )
 }

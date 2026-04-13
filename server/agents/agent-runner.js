@@ -371,6 +371,39 @@ async function buildUserContext({ agentId, profile, business, signals, metrics, 
       lines.push('');
     }
 
+    // Cross-business shared KB — tactics, patterns, do-not-do filtered by this agent's role.
+    try {
+      const { readSharedKBForAgent } = await import('../kb/shared-kb.js');
+      const sharedDocs = await readSharedKBForAgent(agentId, { limit: 6 });
+      if (sharedDocs.length > 0) {
+        lines.push('## Cross-Business Learnings (apply across all businesses)');
+        for (const d of sharedDocs) {
+          lines.push(`- **${d.title}** — ${d.summary}`);
+        }
+        lines.push('');
+      }
+    } catch {}
+
+    // Latest calibration data for this agent — inject into prompt so the
+    // agent knows to adjust confidence scores going forward.
+    try {
+      const { getLatestCalibration } = await import('../brain/calibration.js');
+      const cal = getLatestCalibration(agentId, business.id);
+      if (cal && cal.tasks_with_outcomes >= 3) {
+        lines.push('## Your Calibration Data (last period)');
+        lines.push(`You stated an average of ${((cal.avg_stated_confidence ?? 0) * 100).toFixed(0)}% confidence. Actual outcome rate: ${((cal.avg_actual_outcome_rate ?? 0) * 100).toFixed(0)}%.`);
+        const errPct = (cal.calibration_error * 100).toFixed(0);
+        if (cal.calibration_error > 0.1) {
+          lines.push(`You are ${errPct}% OVERCONFIDENT. Be more conservative with your confidence scores.`);
+        } else if (cal.calibration_error < -0.1) {
+          lines.push(`You are ${Math.abs(errPct)}% underconfident. You can be more assertive when evidence is strong.`);
+        } else {
+          lines.push('Your confidence is well-calibrated. Continue with the same approach.');
+        }
+        lines.push('');
+      }
+    } catch {}
+
     // Latest retrospective note for this specific agent.
     try {
       const retroRow = db.prepare('SELECT value FROM settings WHERE key = ?')

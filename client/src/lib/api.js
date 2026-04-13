@@ -299,6 +299,14 @@ export const proposeGoal = (businessId, context) => post(`/goals/${businessId}/p
 export const reasonGoal = (businessId, id) => post(`/goals/${businessId}/${id}/reason`)
 
 // ============================================
+// Agent calibration (Feature 5)
+// ============================================
+export const getAgentCalibration = (agentId, businessId) =>
+  get(`/agents/${agentId}/calibration${businessId ? `?business_id=${businessId}` : ''}`)
+export const recalculateAgentCalibration = (agentId, businessId) =>
+  post(`/agents/${agentId}/calibration/recalculate`, { business_id: businessId })
+
+// ============================================
 // Scenarios (Feature 1)
 // ============================================
 export const getScenarios = (businessId) => get(`/scenarios/${businessId}`)

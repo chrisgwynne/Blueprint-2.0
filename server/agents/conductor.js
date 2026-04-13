@@ -1,5 +1,6 @@
 import db from '../db/db.js';
 import { runAgent } from './agent-runner.js';
+import { runAgentWithConstraints } from '../jobs/constraint-check.js';
 import yaml from 'js-yaml';
 import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
@@ -170,7 +171,7 @@ export async function runConductor(businessId) {
 
       try {
         console.log(`[conductor] Running agent '${agent.id}' for scheduled job '${job.id}'`);
-        const result = await runAgent(agent.id, businessId, 'schedule', job.id);
+        const result = await runAgentWithConstraints(agent.id, businessId, 'schedule', job.id);
         runs.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, ...result });
       } catch (err) {
         console.error(`[conductor] Agent '${agent.id}' failed for job '${job.id}':`, err.message);

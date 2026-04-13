@@ -129,6 +129,17 @@ ${detail}
     }
   })();
 
+  // Shared KB — file a proven tactic if the change was large
+  (async () => {
+    try {
+      const { maybeFileProvenTactic } = await import('../kb/shared-kb.js');
+      await maybeFileProvenTactic(task, {
+        verdict, change_pct: changePct, target_metric: task.target_metric,
+        weeks_after: weeksAfter,
+      });
+    } catch {}
+  })();
+
   return { verdict, changePct, detail };
 }
 
@@ -168,6 +179,18 @@ export function runOutcomeChecks() {
   for (const t of fourWeek) {
     checkTaskOutcome(t.id, 4);
     checked++;
+  }
+
+  // Brain — recalculate agent calibration after fresh outcome data
+  if (checked > 0) {
+    try {
+      import('../brain/calibration.js').then(async (m) => {
+        const biz = db.prepare('SELECT id FROM businesses').all();
+        for (const b of biz) {
+          try { m.recalculateCalibrationForBusiness(b.id); } catch {}
+        }
+      }).catch(() => {});
+    } catch {}
   }
 
   return checked;

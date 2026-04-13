@@ -228,9 +228,12 @@ const VALID_TRANSITIONS = {
 
 function parseRow(row) {
   if (!row) return null;
+  let attribution = null;
+  try { attribution = row.attribution_analysis ? JSON.parse(row.attribution_analysis) : null; } catch {}
   return {
     ...row,
     data: row.data ? JSON.parse(row.data) : {},
+    attribution_analysis: attribution,
   };
 }
 

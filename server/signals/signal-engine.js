@@ -138,6 +138,16 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
       console.warn('[brain] causal analysis failed (non-fatal):', err.message);
     }
 
+    // Brain — attribution analysis (fire-and-forget)
+    (async () => {
+      try {
+        const { analyseAndStoreSignalAttribution } = await import('../brain/attribution-engine.js');
+        await analyseAndStoreSignalAttribution(signalId);
+      } catch (err) {
+        console.warn('[brain] attribution failed (non-fatal):', err.message);
+      }
+    })();
+
     // Auto-trigger any workflows configured for this signal rule
     try {
       const triggered = db.prepare(`

@@ -114,4 +114,14 @@ router.post('/:businessId/tasks/:id/override', (req, res) => {
   }
 });
 
+// Shared KB stats (Feature 7) — global, not business-scoped
+router.get('/_shared/stats', async (_req, res) => {
+  try {
+    const { getSharedKBStats } = await import('../kb/shared-kb.js');
+    res.json(await getSharedKBStats());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

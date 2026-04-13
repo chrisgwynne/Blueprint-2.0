@@ -12,6 +12,7 @@ import {
   updateAgentFile, getAgentMemory, clearAgentMemory,
   getLLMProviders, getLLMModels, saveLLMCredentials, testLLMCredentials,
   patchAgentProfile,
+  getAgentCalibration, recalculateAgentCalibration,
 } from '../lib/api.js'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -24,10 +25,11 @@ const SOUL_FILES = [
 ]
 
 const TABS = [
-  { id: 'soul',     label: 'Soul Files' },
-  { id: 'runs',     label: 'Runs' },
-  { id: 'memory',   label: 'Memory' },
-  { id: 'settings', label: 'Settings' },
+  { id: 'soul',        label: 'Soul Files' },
+  { id: 'runs',        label: 'Runs' },
+  { id: 'memory',      label: 'Memory' },
+  { id: 'calibration', label: 'Calibration' },
+  { id: 'settings',    label: 'Settings' },
 ]
 
 const PROVIDER_LABELS = {
@@ -393,6 +395,127 @@ function MemoryTab({ agentId }) {
           {clearing ? <RefreshCw size={11} style={{ animation: 'bp-spin-slow 1s linear infinite' }} /> : <Trash2 size={11} />}
           Clear Memory
         </button>
+      )}
+    </div>
+  )
+}
+
+// ─── Calibration tab (Feature 5) ──────────────────────────────────────────────
+
+function CalibrationTab({ agentId }) {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [data, setData] = useState({ latest: null, history: [] })
+  const [loading, setLoading] = useState(true)
+  const [recalculating, setRecalculating] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const d = await getAgentCalibration(agentId, currentBusiness?.id)
+      setData(d)
+    } catch { setData({ latest: null, history: [] }) }
+    finally { setLoading(false) }
+  }, [agentId, currentBusiness])
+
+  useEffect(() => { load() }, [load])
+
+  async function handleRecalculate() {
+    if (!currentBusiness) return
+    setRecalculating(true)
+    try { await recalculateAgentCalibration(agentId, currentBusiness.id); await load() }
+    finally { setRecalculating(false) }
+  }
+
+  if (loading) return <div style={{ padding: 24 }}><div className="bp-skeleton" style={{ height: 120, borderRadius: 6 }} /></div>
+
+  const latest = data.latest
+  const history = data.history || []
+
+  const scoreColor = latest?.calibration_score >= 0.85 ? 'var(--bp-green)'
+                  : latest?.calibration_score >= 0.7 ? 'var(--bp-amber)' : 'var(--bp-red)'
+
+  return (
+    <div style={{ padding: 20, overflowY: 'auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 14, fontWeight: 700 }}>Calibration</div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginTop: 4 }}>
+            How well this agent's stated confidence predicts actual outcomes
+          </div>
+        </div>
+        <button onClick={handleRecalculate} disabled={recalculating || !currentBusiness} className="bp-btn bp-btn-secondary" style={{ fontSize: 11 }}>
+          {recalculating ? 'Recalculating…' : 'Recalculate now'}
+        </button>
+      </div>
+
+      {!latest && (
+        <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 12 }}>
+          Not enough outcome data yet. Calibration appears after this agent has at least 3 completed tasks with measured outcomes.
+        </div>
+      )}
+
+      {latest && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 10, marginBottom: 20 }}>
+          <StatCard label="Calibration score"
+            value={<span style={{ color: scoreColor }}>{Math.round((latest.calibration_score ?? 0) * 100)}</span>}
+            sub={latest.trend ? `Trend: ${latest.trend}` : null} />
+          <StatCard label="Error"
+            value={`${((latest.calibration_error ?? 0) * 100).toFixed(1)}%`}
+            sub={latest.calibration_error > 0 ? 'Overconfident' : latest.calibration_error < 0 ? 'Underconfident' : 'Balanced'} />
+          <StatCard label="Stated avg"
+            value={`${((latest.avg_stated_confidence ?? 0) * 100).toFixed(0)}%`}
+            sub={`${latest.tasks_with_outcomes ?? 0} outcomes`} />
+          <StatCard label="Actual outcome rate"
+            value={`${((latest.avg_actual_outcome_rate ?? 0) * 100).toFixed(0)}%`}
+            sub={`Offset applied: ${((latest.calibration_offset ?? 0) * 100).toFixed(1)}%`} />
+        </div>
+      )}
+
+      {history.length > 1 && (
+        <div className="bp-card" style={{ padding: 16, marginBottom: 14 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 10 }}>
+            History
+          </div>
+          <table style={{ width: '100%', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+            <thead>
+              <tr style={{ color: 'var(--bp-text-3)', borderBottom: '1px solid var(--bp-border)' }}>
+                <th align="left" style={{ padding: '6px 0' }}>Period ending</th>
+                <th align="center">n</th>
+                <th align="center">Stated</th>
+                <th align="center">Actual</th>
+                <th align="center">Error</th>
+                <th align="center">Score</th>
+                <th align="center">Trend</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.id} style={{ borderBottom: '1px solid var(--bp-border)', color: 'var(--bp-text-2)' }}>
+                  <td style={{ padding: '6px 0' }}>{new Date(h.period_end).toLocaleDateString()}</td>
+                  <td align="center">{h.tasks_with_outcomes}</td>
+                  <td align="center">{((h.avg_stated_confidence ?? 0) * 100).toFixed(0)}%</td>
+                  <td align="center">{((h.avg_actual_outcome_rate ?? 0) * 100).toFixed(0)}%</td>
+                  <td align="center" style={{ color: Math.abs(h.calibration_error ?? 0) > 0.1 ? 'var(--bp-red)' : undefined }}>
+                    {((h.calibration_error ?? 0) * 100).toFixed(1)}%
+                  </td>
+                  <td align="center">{Math.round((h.calibration_score ?? 0) * 100)}</td>
+                  <td align="center">{h.trend ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {latest?.notes && (
+        <div className="bp-card" style={{ padding: 16, borderLeft: '3px solid var(--bp-blue)' }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 6 }}>
+            Note
+          </div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text-2)' }}>
+            {latest.notes}
+          </div>
+        </div>
       )}
     </div>
   )
@@ -947,6 +1070,9 @@ export default function AgentDetail() {
             )}
             {activeTab === 'memory' && (
               <MemoryTab agentId={agentId} />
+            )}
+            {activeTab === 'calibration' && (
+              <CalibrationTab agentId={agentId} />
             )}
             {activeTab === 'settings' && (
               <div style={{ overflowY: 'auto', flex: 1 }}>

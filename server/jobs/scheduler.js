@@ -339,6 +339,26 @@ export function startScheduler() {
     }
   });
 
+  // Weekly goal suggestions scan — Wednesday 9am.
+  cron.schedule('0 9 * * 3', async () => {
+    try {
+      const { scanForGoalSuggestions } = await import('../brain/goal-suggester.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all();
+      let total = 0;
+      for (const b of businesses) {
+        try {
+          const s = await scanForGoalSuggestions(b.id);
+          total += s.length;
+        } catch (err) {
+          console.warn(`[scheduler] Goal suggestions failed for ${b.id}:`, err.message);
+        }
+      }
+      if (total > 0) console.log(`[scheduler] Goal suggestions: ${total} new.`);
+    } catch (err) {
+      console.error('[scheduler] Goal suggestions scan failed:', err.message);
+    }
+  });
+
   // Monthly retrospective — 1st of every month at 06:00.
   cron.schedule('0 6 1 * *', async () => {
     try {

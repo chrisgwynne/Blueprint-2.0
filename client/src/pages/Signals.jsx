@@ -331,6 +331,266 @@ function CreateTaskPanel({ signal, onClose, onCreated }) {
   )
 }
 
+// ─── Investigation Modal (Feature 9) ──────────────────────────────────────────
+
+const STEP_LABELS = [
+  'Checking recent actions…',
+  'Analysing seasonal patterns…',
+  'Correlating related metrics…',
+  'Reading external context…',
+  'Generating explanation…',
+]
+
+function InvestigationModal({ open, onClose, signal, metric }) {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [loading, setLoading] = useState(false)
+  const [report, setReport] = useState(null)
+  const [error, setError] = useState(null)
+  const [step, setStep] = useState(0)
+
+  useEffect(() => {
+    if (!open || !currentBusiness) return
+    setReport(null); setError(null); setLoading(true); setStep(0)
+    const timer = setInterval(() => setStep((s) => Math.min(s + 1, STEP_LABELS.length - 1)), 1800)
+    ;(async () => {
+      try {
+        const payload = {}
+        if (signal?.id) payload.signal_id = signal.id
+        if (metric) payload.metric_name = metric
+        const { runInvestigation: callRun } = await import('../lib/api.js')
+        const res = await callRun(currentBusiness.id, payload)
+        setReport(res)
+      } catch (err) {
+        setError(err.message || 'Investigation failed')
+      } finally {
+        clearInterval(timer)
+        setLoading(false)
+        setStep(STEP_LABELS.length - 1)
+      }
+    })()
+    return () => clearInterval(timer)
+  }, [open, signal?.id, metric, currentBusiness])
+
+  if (!open) return null
+
+  const recStyle = RECOMMENDATION_STYLES[report?.recommendation] || RECOMMENDATION_STYLES.investigate
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--bp-surface)', border: '1px solid var(--bp-border)', borderRadius: 8, padding: 28, maxWidth: 720, width: '100%', maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.14em', color: 'var(--bp-text-3)', textTransform: 'uppercase' }}>
+              Investigation
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 800, fontSize: 18, marginTop: 4 }}>
+              Why is this happening?
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--bp-text-3)', cursor: 'pointer' }}>✕</button>
+        </div>
+
+        {loading && !report && (
+          <div style={{ padding: '20px 0' }}>
+            {STEP_LABELS.map((label, i) => (
+              <div key={i} style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 12, padding: '6px 0',
+                color: i < step ? 'var(--bp-green)' : i === step ? 'var(--bp-text)' : 'var(--bp-text-3)',
+              }}>
+                {i < step ? '✓ ' : i === step ? '› ' : '  '}{label}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div style={{ padding: 14, background: 'rgba(248,81,73,0.1)', border: '1px solid var(--bp-red)', borderRadius: 4, color: 'var(--bp-red)', fontFamily: 'var(--bp-font-mono)', fontSize: 12 }}>
+            {error}
+          </div>
+        )}
+
+        {report && (
+          <div>
+            {/* Plain English explanation */}
+            <div style={{ padding: 18, background: 'var(--bp-surface-2)', borderRadius: 6, marginBottom: 16 }}>
+              <div style={{ fontSize: 16, lineHeight: 1.6, color: 'var(--bp-text)', fontFamily: 'var(--bp-font-display)' }}>
+                {report.plain_english}
+              </div>
+              {report.primary_confidence != null && (
+                <div style={{ marginTop: 12, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>
+                  Blueprint is {Math.round(report.primary_confidence * 100)}% confident in this explanation.
+                </div>
+              )}
+              {report.confidence_note && (
+                <div style={{ marginTop: 6, fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', fontStyle: 'italic' }}>
+                  {report.confidence_note}
+                </div>
+              )}
+            </div>
+
+            {/* Recommendation */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, padding: 14, background: recStyle.bg, borderRadius: 4 }}>
+              <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, fontWeight: 800, color: recStyle.color, letterSpacing: '0.12em' }}>
+                {recStyle.label}
+              </span>
+              {report.recommended_action && (
+                <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text)' }}>
+                  {report.recommended_action}
+                </span>
+              )}
+            </div>
+
+            {/* Evidence */}
+            {Array.isArray(report.supporting_evidence) && report.supporting_evidence.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                  Supporting evidence
+                </div>
+                {report.supporting_evidence.map((e, i) => (
+                  <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', padding: '3px 0' }}>
+                    • {e}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Alternatives */}
+            {Array.isArray(report.alternative_causes) && report.alternative_causes.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                  Alternative causes
+                </div>
+                {report.alternative_causes.map((a, i) => (
+                  <div key={i} style={{ padding: '4px 0', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+                    <span style={{ color: 'var(--bp-text)' }}>{a.cause}</span>
+                    <span style={{ color: 'var(--bp-text-3)' }}> ({Math.round((a.confidence ?? 0) * 100)}%)</span>
+                    {a.why_lower && <div style={{ color: 'var(--bp-text-3)', marginTop: 2, fontSize: 10 }}>{a.why_lower}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {Array.isArray(report.what_rules_out) && report.what_rules_out.length > 0 && (
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+                  What rules out other causes
+                </div>
+                {report.what_rules_out.map((r, i) => (
+                  <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', padding: '3px 0' }}>
+                    • {r}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {report.from_cache && (
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', fontStyle: 'italic' }}>
+                Cached result (cached for 6 hours)
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Attribution Block (Feature 4) ────────────────────────────────────────────
+
+const CATEGORY_COLORS = {
+  known_action:      'var(--bp-amber)',
+  seasonal:          'var(--bp-text-3)',
+  external:          'var(--bp-blue)',
+  correlated_metric: 'var(--bp-purple)',
+  unknown:           'var(--bp-surface-3)',
+}
+
+const RECOMMENDATION_STYLES = {
+  act_now:     { bg: 'rgba(46,160,67,0.15)', color: 'var(--bp-green)', label: 'ACT NOW' },
+  wait:        { bg: 'rgba(210,153,34,0.15)', color: 'var(--bp-amber)', label: 'WAIT' },
+  monitor:     { bg: 'rgba(139,148,158,0.15)', color: 'var(--bp-text-3)', label: 'MONITOR' },
+  investigate: { bg: 'rgba(77,166,255,0.15)', color: 'var(--bp-blue)', label: 'INVESTIGATE' },
+  ignore:      { bg: 'rgba(139,148,158,0.08)', color: 'var(--bp-text-3)', label: 'IGNORE' },
+}
+
+function AttributionBlock({ signal }) {
+  const [expanded, setExpanded] = useState(false)
+  const a = signal.attribution_analysis
+  if (!a || !Array.isArray(a.attribution) || a.attribution.length === 0) return null
+
+  const rec = RECOMMENDATION_STYLES[a.recommendation] || RECOMMENDATION_STYLES.investigate
+  const total = a.attribution.reduce((s, x) => s + (x.probability || 0), 0) || 1
+
+  return (
+    <div style={{ marginBottom: 10, padding: 10, background: 'var(--bp-surface-2)', borderRadius: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase' }}>
+          Attribution
+        </span>
+        <span style={{ padding: '2px 6px', borderRadius: 3, fontFamily: 'var(--bp-font-mono)', fontSize: 9, fontWeight: 700, background: rec.bg, color: rec.color }}>
+          {rec.label}
+        </span>
+        {a.primary_confidence != null && (
+          <span style={{ marginLeft: 'auto', fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
+            {Math.round(a.primary_confidence * 100)}% confident
+          </span>
+        )}
+      </div>
+      {/* Probability bar */}
+      <div style={{ display: 'flex', height: 6, borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+        {a.attribution.map((x, i) => (
+          <div key={i} title={`${x.cause}: ${Math.round((x.probability / total) * 100)}%`}
+            style={{
+              width: `${(x.probability / total) * 100}%`,
+              background: CATEGORY_COLORS[x.category] || 'var(--bp-surface-3)',
+            }} />
+        ))}
+      </div>
+      {a.primary_cause && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginBottom: 4 }}>
+          Primary cause: <strong style={{ color: 'var(--bp-text)' }}>{a.primary_cause}</strong>
+        </div>
+      )}
+      {a.do_not_act_until && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-amber)', marginBottom: 4 }}>
+          Do not act until: {a.do_not_act_until}
+        </div>
+      )}
+      {a.plain_english && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginTop: 6 }}>
+          {a.plain_english}
+        </div>
+      )}
+      <button onClick={() => setExpanded(!expanded)}
+        style={{ marginTop: 6, background: 'none', border: 'none', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 10, cursor: 'pointer', padding: 0 }}>
+        {expanded ? 'Hide breakdown' : 'Show full breakdown'}
+      </button>
+      {expanded && (
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--bp-border)' }}>
+          {a.attribution.map((x, i) => (
+            <div key={i} style={{ padding: '4px 0' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>
+                <span style={{ color: CATEGORY_COLORS[x.category] || 'var(--bp-text-3)' }}>
+                  <strong>{x.cause}</strong> <span style={{ color: 'var(--bp-text-3)' }}>({x.category})</span>
+                </span>
+                <span style={{ color: 'var(--bp-text-3)' }}>
+                  {Math.round((x.probability / total) * 100)}%
+                </span>
+              </div>
+              {x.reasoning && (
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginTop: 2 }}>
+                  {x.reasoning}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Signal Card ──────────────────────────────────────────────────────────────
 
 function SignalCard({ signal, onUpdate }) {
@@ -339,6 +599,7 @@ function SignalCard({ signal, onUpdate }) {
   const [snoozeOpen, setSnoozeOpen]   = useState(false)
   const [taskOpen, setTaskOpen]       = useState(false)
   const [acting, setActing]           = useState(false)
+  const [investigating, setInvestigating] = useState(false)
 
   const sev  = SEVERITY_CONFIG[signal.severity] || SEVERITY_CONFIG.info
   const data = parseData(signal)
@@ -457,6 +718,9 @@ function SignalCard({ signal, onUpdate }) {
           </div>
         )}
 
+        {/* Attribution analysis (Feature 4) */}
+        <AttributionBlock signal={signal} />
+
         {/* Evidence (AI signals) */}
         {isAI && data.evidence?.length > 0 && (
           <div style={{ marginBottom: 12 }}>
@@ -520,6 +784,14 @@ function SignalCard({ signal, onUpdate }) {
 
         {/* Actions */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', position: 'relative', alignItems: 'center' }}>
+          <button
+            onClick={() => setInvestigating(true)}
+            disabled={acting}
+            className="bp-btn bp-btn-secondary"
+            style={{ fontSize: 10 }}
+          >
+            <Search size={11} /> Investigate
+          </button>
           <button
             onClick={() => setTaskOpen(!taskOpen)}
             disabled={acting}
@@ -588,6 +860,14 @@ function SignalCard({ signal, onUpdate }) {
             onCreated={onUpdate}
           />
         )}
+
+        {/* Investigation modal (Feature 9) */}
+        <InvestigationModal
+          open={investigating}
+          onClose={() => setInvestigating(false)}
+          signal={signal}
+        />
+
 
         {/* Raw data for non-AI signals */}
         {!isAI && expanded && (

@@ -177,7 +177,14 @@ export function updateTaskStatus(id, newStatus, actor, metadata = {}) {
   if (newStatus === 'complete' || newStatus === 'verified') {
     try {
       import('../brain/action-windows.js').then((m) => {
-        try { m.recordActionMemory(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id)); }
+        try {
+          const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+          m.recordActionMemory(task);
+          // Smart spacing — defer related pending tasks until the window closes
+          import('../jobs/constraint-check.js').then((cc) => {
+            try { cc.applySmartSpacing(task); } catch {}
+          }).catch(() => {});
+        }
         catch (err) { console.warn('[brain] recordActionMemory failed:', err.message); }
       });
     } catch {}
