@@ -65,11 +65,22 @@ async function runStrategy(url, strategy, auth) {
       throw new Error(`PageSpeed API rejected the request (${strategy}): ${hint}`);
     }
 
-    if (res.status === 403 && /quota|rate/i.test(body)) {
-      throw new Error(
-        `PageSpeed quota exceeded (${strategy}). Google's free tier is 25,000 queries/day. `
-        + 'Wait for the quota to reset or add a billing account to your Cloud project.'
-      );
+    if ((res.status === 403 || res.status === 429) && /quota|rate/i.test(body)) {
+      // Project number 583797351490 is Google's PUBLIC anonymous PSI
+      // project — if it appears in the error, the request was treated as
+      // anonymous (no OAuth token, no api key) and we hit the per-IP
+      // shared quota. That means our auth wasn't applied.
+      const anonymous = /583797351490/.test(body);
+      const usedAuth = accessToken ? 'OAuth bearer token' : (apiKey ? 'API key' : 'no auth');
+      const hint = anonymous
+        ? 'Request was treated as anonymous (no OAuth or API key reached PageSpeed). '
+          + 'Most likely cause: no Google connector is connected for this business yet, OR '
+          + 'PageSpeed Insights API is not enabled on your Google Cloud project. '
+          + 'Enable it at https://console.cloud.google.com/apis/library/pagespeedonline.googleapis.com '
+          + 'on the same project that owns your OAuth client (Settings → Google OAuth shows the Client ID).'
+        : `Authenticated as ${usedAuth} but Google still rejected on quota. `
+          + 'Daily limit reset at midnight Pacific. Add a billing account to your Cloud project to raise the limit.';
+      throw new Error(`PageSpeed quota exceeded (${strategy}, status ${res.status}). ${hint}`);
     }
 
     throw new Error(`PageSpeed API error ${res.status} (${strategy}): ${body.substring(0, 300)}`);

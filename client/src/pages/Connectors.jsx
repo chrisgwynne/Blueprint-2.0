@@ -311,6 +311,22 @@ function GSCSetup({ businessId, existing, googleConnected, onSaved, onClose }) {
   const addNotification = useStore((s) => s.addNotification)
   const [siteUrl, setSiteUrl] = useState(existing?.config?.siteUrl || '')
   const [saving, setSaving] = useState(false)
+  const [verifiedSites, setVerifiedSites] = useState(null)
+  const [loadingSites, setLoadingSites] = useState(false)
+
+  // When Google is already connected, fetch the user's verified GSC
+  // properties so they can pick from a dropdown — sidesteps the common
+  // www-vs-apex / http-vs-https mistake that triggers a 403.
+  useEffect(() => {
+    if (!googleConnected || !businessId) return
+    setLoadingSites(true)
+    fetch(`/api/connectors/gsc/sites?businessId=${encodeURIComponent(businessId)}`, { credentials: 'include' })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((data) => setVerifiedSites(Array.isArray(data?.sites) ? data.sites : []))
+      .catch(() => setVerifiedSites([]))
+      .finally(() => setLoadingSites(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [googleConnected, businessId])
 
   async function handleSave() {
     if (!siteUrl) return
@@ -365,14 +381,39 @@ function GSCSetup({ businessId, existing, googleConnected, onSaved, onClose }) {
         Google account connected
       </div>
       <div>
-        <label className="block text-xs text-blueprint-muted mb-1">Site URL</label>
-        <input
-          value={siteUrl}
-          onChange={(e) => setSiteUrl(e.target.value)}
-          className="bp-input"
-          placeholder="https://example.com/"
-        />
-        <p className="text-[10px] text-blueprint-muted mt-1">Must match exactly what's listed in Search Console</p>
+        <label className="block text-xs text-blueprint-muted mb-1">Verified property</label>
+        {loadingSites ? (
+          <div className="text-xs text-blueprint-muted py-2">Loading verified sites from Google…</div>
+        ) : verifiedSites && verifiedSites.length > 0 ? (
+          <select
+            value={siteUrl}
+            onChange={(e) => setSiteUrl(e.target.value)}
+            className="bp-input bp-select w-full"
+          >
+            <option value="">— Pick a verified property —</option>
+            {verifiedSites.map((s) => (
+              <option key={s.siteUrl} value={s.siteUrl}>
+                {s.siteUrl}{s.permissionLevel && s.permissionLevel !== 'siteOwner' ? `  (${s.permissionLevel})` : ''}
+              </option>
+            ))}
+          </select>
+        ) : verifiedSites && verifiedSites.length === 0 ? (
+          <div className="p-2 rounded bg-blueprint-amber/5 border border-blueprint-amber/20 text-[11px] text-blueprint-amber leading-relaxed">
+            No verified properties found for this Google account. Verify your site at{' '}
+            <a href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer" className="underline">Search Console</a>{' '}
+            (use a Domain property to cover all variants), then re-open this dialog.
+          </div>
+        ) : (
+          <input
+            value={siteUrl}
+            onChange={(e) => setSiteUrl(e.target.value)}
+            className="bp-input"
+            placeholder="https://example.com/ or sc-domain:example.com"
+          />
+        )}
+        <p className="text-[10px] text-blueprint-muted mt-1">
+          Search Console treats https/http and www/apex as separate properties. Pick the one you verified.
+        </p>
       </div>
       <div className="flex gap-2">
         <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>

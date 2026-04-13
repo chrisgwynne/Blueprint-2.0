@@ -288,6 +288,39 @@ router.post('/pagespeed/test', async (req, res) => {
 });
 
 /**
+ * GET /api/connectors/gsc/sites?businessId=...
+ * Returns the list of GSC properties (sites + domain properties) the
+ * authorised user has verified, sourced from their existing OAuth token
+ * on any GSC/GA4/GBP connector. Used by the Configure UI to show a
+ * dropdown of valid choices instead of letting the user type the wrong
+ * variant of their URL.
+ */
+router.get('/gsc/sites', async (req, res) => {
+  try {
+    const { businessId } = req.query;
+    if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+    // Find any existing GSC connector for this business — it has the
+    // OAuth refresh token we can borrow. (Falls back to GA4/GBP via
+    // getValidGoogleAccessToken which scans all of them.)
+    const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js');
+    const tok = await getValidGoogleAccessToken(businessId);
+    if (!tok?.accessToken) {
+      return res.status(409).json({ error: 'No connected Google account found for this business. Connect Google first.' });
+    }
+
+    const connector = await getConnector('gsc');
+    if (!connector) return res.status(422).json({ error: 'GSC connector not available.' });
+
+    const data = await connector.fetch('sites', { accessToken: tok.accessToken }, {});
+    return res.json(data);
+  } catch (err) {
+    console.error('[connectors] GSC sites list error:', err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * POST /api/connectors/:id/sync
  * Trigger a manual sync
  */

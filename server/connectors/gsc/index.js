@@ -87,6 +87,9 @@ const connector = {
   async fetch(dataType, credentials, params) {
     const creds = await ensureFreshToken(credentials);
 
+    if (dataType === 'sites') {
+      return fetchSites(creds);
+    }
     if (dataType === 'search_analytics') {
       return fetchSearchAnalytics(creds, params);
     }
@@ -219,6 +222,32 @@ const connector = {
   },
 };
 
+/**
+ * List every site (URL or domain property) the authorised user has
+ * verified in Search Console. Used by the connector setup UI to show a
+ * dropdown of valid choices instead of letting the user type the wrong
+ * variant (http vs https, www vs apex, missing trailing slash etc.).
+ */
+async function fetchSites(creds) {
+  const res = await fetch(`${GSC_BASE}/sites`, {
+    headers: { Authorization: `Bearer ${creds.accessToken}` },
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`GSC sites list error ${res.status}: ${body.substring(0, 200)}`);
+  }
+  const data = await res.json();
+  // Normalise to a clean shape; sort owner/full first so the most useful
+  // properties surface at the top of the dropdown.
+  const out = (data.siteEntry ?? []).map((s) => ({
+    siteUrl: s.siteUrl,
+    permissionLevel: s.permissionLevel,
+  }));
+  const rank = { siteOwner: 0, siteFullUser: 1, siteRestrictedUser: 2, siteUnverifiedUser: 3 };
+  out.sort((a, b) => (rank[a.permissionLevel] ?? 9) - (rank[b.permissionLevel] ?? 9));
+  return { sites: out };
+}
+
 async function fetchSearchAnalytics(creds, params) {
   const siteUrl = params.siteUrl;
   if (!siteUrl) throw new Error('params.siteUrl is required.');
@@ -251,6 +280,18 @@ async function fetchSearchAnalytics(creds, params) {
 
     if (!res.ok) {
       const err = await res.text();
+      // 403 with "User does not have sufficient permission for site" almost
+      // always means the URL variant doesn't match what was verified in
+      // Search Console (http vs https, www vs apex, trailing slash). Help
+      // the user diagnose without reading Google's terse message.
+      if (res.status === 403 && /sufficient permission for site/i.test(err)) {
+        throw new Error(
+          `GSC: this Google account isn't verified for '${siteUrl}'. ` +
+          'Search Console treats http vs https and www vs the apex domain as separate properties. ' +
+          'Open Settings → Connectors → your GSC connector → Configure to pick from your verified sites, ' +
+          'or add a Domain property in Search Console to cover all variants.'
+        );
+      }
       throw new Error(`GSC search analytics error ${res.status}: ${err.substring(0, 300)}`);
     }
 

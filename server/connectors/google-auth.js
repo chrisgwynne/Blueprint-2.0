@@ -73,13 +73,15 @@ async function refreshAccessToken(refreshToken) {
 export async function getValidGoogleAccessToken(businessId) {
   if (!businessId) return null;
 
-  // Prefer the most recently used Google connector — its token is most
-  // likely already fresh.
+  // Pick any Google connector for this business that has tokens. Don't
+  // require status='connected' — a connector can be in 'error' (e.g. wrong
+  // siteUrl) but its OAuth refresh_token is still valid and usable for
+  // sibling APIs like PageSpeed.
   const candidates = db.prepare(
     `SELECT id, type, credentials FROM connectors
      WHERE business_id = ?
        AND type IN ('gsc', 'ga4', 'gbp')
-       AND status = 'connected'
+       AND status != 'disconnected'
      ORDER BY last_sync DESC NULLS LAST, created_at DESC`
   ).all(businessId);
 
