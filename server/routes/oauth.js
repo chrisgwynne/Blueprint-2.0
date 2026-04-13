@@ -29,6 +29,43 @@ function isPlaceholder(v) {
   return PLACEHOLDER_PATTERNS.some((r) => r.test(v));
 }
 
+// Self-heal: an old typo in .env.example shipped /api/auth/google/callback
+// instead of /api/oauth/google/callback. Anyone who installed before the fix
+// has the wrong value in DB and/or process.env. Force-correct on startup so
+// they don't keep hitting redirect_uri_mismatch from Google.
+function healWrongRedirectUri(uri) {
+  if (typeof uri !== 'string') return uri;
+  return uri.replace('/api/auth/google/callback', '/api/oauth/google/callback')
+            .replace('/api/auth/gbp/callback', '/api/oauth/gbp/callback')
+            .replace('/api/auth/google-ads/callback', '/api/oauth/google-ads/callback');
+}
+
+(function autoHealRedirectUri() {
+  try {
+    // Heal env (in-memory only — doesn't write back to .env on disk)
+    if (process.env.GOOGLE_REDIRECT_URI) {
+      const fixed = healWrongRedirectUri(process.env.GOOGLE_REDIRECT_URI);
+      if (fixed !== process.env.GOOGLE_REDIRECT_URI) {
+        console.warn(`[oauth] Auto-corrected GOOGLE_REDIRECT_URI from '${process.env.GOOGLE_REDIRECT_URI}' to '${fixed}' — please update .env to match.`);
+        process.env.GOOGLE_REDIRECT_URI = fixed;
+      }
+    }
+    // Heal DB-stored config
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get();
+    if (row?.value) {
+      const parsed = JSON.parse(row.value);
+      if (parsed.redirect_uri && parsed.redirect_uri.includes('/api/auth/google/callback')) {
+        parsed.redirect_uri = healWrongRedirectUri(parsed.redirect_uri);
+        db.prepare("UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE key = 'google_oauth_config'")
+          .run(JSON.stringify(parsed));
+        console.warn(`[oauth] Auto-corrected stored google_oauth_config.redirect_uri to ${parsed.redirect_uri}`);
+      }
+    }
+  } catch (err) {
+    console.warn('[oauth] auto-heal failed:', err.message);
+  }
+})();
+
 function defaultRedirectUri() {
   // Blueprint lives at PORT (default 4000) on the local machine. Anyone
   // running this on a remote host sets GOOGLE_REDIRECT_URI in .env.
