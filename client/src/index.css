@@ -198,6 +198,35 @@ body {
   box-shadow: 0 0 0 2px rgba(77, 166, 255, 0.12);
 }
 .bp-input::placeholder { color: #4d7a96; }
+
+/* Browser autofill (Chrome/Edge/Safari) defaults to a white background that
+   makes text unreadable on a dark theme. Force the background and text to
+   match the rest of the form. The animation hack is required because
+   autofill doesn't honour `background-color: !important` directly. */
+.bp-input:-webkit-autofill,
+.bp-input:-webkit-autofill:hover,
+.bp-input:-webkit-autofill:focus,
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #c9dff2;
+  -webkit-box-shadow: 0 0 0 1000px #060f1e inset;
+  caret-color: #c9dff2;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Catch any raw <input> not using bp-input either: ensure dark background
+   so the user can read their own typing. */
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="number"],
+input[type="search"],
+textarea,
+select {
+  color-scheme: dark;
+}
 select.bp-input {
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%234d7a96' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
