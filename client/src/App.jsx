@@ -29,38 +29,48 @@ import { getMe, getBusinesses } from './lib/api.js'
 // Protected Route Wrapper
 // ============================================
 function ProtectedRoute({ children }) {
-  // All hooks must be at the top — no hooks after conditional returns.
+  // All hooks at the top — never after a conditional return.
   const user = useStore((s) => s.user)
-  const businesses = useStore((s) => s.businesses)
   const [checking, setChecking] = useState(true)
-  const [onboardingDone, setOnboardingDone] = useState(false)
+  // showOnboarding is set once when checking completes and is only cleared
+  // by onComplete(). It must NOT be re-derived from businesses on every
+  // render — doing so kills the wizard the moment step 1 creates a business
+  // and updates the store.
+  const [showOnboarding, setShowOnboarding] = useState(false)
   const setUser = useStore((s) => s.setUser)
   const setBusinesses = useStore((s) => s.setBusinesses)
   const setCurrentBusiness = useStore((s) => s.setCurrentBusiness)
   const currentBusiness = useStore((s) => s.currentBusiness)
 
   useEffect(() => {
-    if (user) {
-      setChecking(false)
-      return
-    }
-    getMe()
-      .then(async (me) => {
-        setUser(me)
+    async function init() {
+      let me = user
+      if (!me) {
         try {
-          const bs = await getBusinesses()
-          setBusinesses(bs || [])
-          if (bs && bs.length > 0 && !currentBusiness) {
-            setCurrentBusiness(bs[0])
-          }
+          me = await getMe()
+          setUser(me)
         } catch {
-          // ignore
+          setChecking(false)
+          return
         }
-        setChecking(false)
-      })
-      .catch(() => {
-        setChecking(false)
-      })
+      }
+      try {
+        const bs = await getBusinesses()
+        setBusinesses(bs || [])
+        if (bs && bs.length > 0 && !currentBusiness) {
+          setCurrentBusiness(bs[0])
+        }
+        // Decide once whether onboarding is needed.
+        if (!bs || bs.length === 0) {
+          setShowOnboarding(true)
+        }
+      } catch {
+        // Can't load businesses — show onboarding so user can create one.
+        setShowOnboarding(true)
+      }
+      setChecking(false)
+    }
+    init()
   }, [])
 
   if (checking) {
@@ -82,15 +92,16 @@ function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace />
   }
 
-  // Show onboarding if no businesses have been created yet
-  if (!onboardingDone && Array.isArray(businesses) && businesses.length === 0) {
+  if (showOnboarding) {
     return (
       <Onboarding onComplete={() => {
-        setOnboardingDone(true)
+        // Refresh businesses then dismiss the wizard.
         getBusinesses().then((bs) => {
           useStore.getState().setBusinesses(bs ?? [])
           if (bs?.length > 0) useStore.getState().setCurrentBusiness(bs[0])
-        }).catch(() => {})
+        }).catch(() => {}).finally(() => {
+          setShowOnboarding(false)
+        })
       }} />
     )
   }
