@@ -217,10 +217,14 @@ function GSCOverview({ metrics }) {
 }
 
 function GSCKeywords({ metrics }) {
-  const keywords = metrics.latest['top_queries_data']
-    ? (typeof metrics.latest['top_queries_data'] === 'string'
-        ? JSON.parse(metrics.latest['top_queries_data'])
-        : metrics.latest['top_queries_data'])
+  // GSC connector writes 'gsc.keywords' with data = top 100 keyword objects.
+  // Server alias exposes both 'keywords' (scalar count) and 'keywords_data'
+  // (the array). Accept either for backwards compat.
+  const raw = metrics.latest['keywords_data']
+    ?? metrics.latest['top_queries_data']
+    ?? (Array.isArray(metrics.latest['keywords']) ? metrics.latest['keywords'] : null)
+  const keywords = raw
+    ? (typeof raw === 'string' ? JSON.parse(raw) : raw)
     : []
 
   if (!keywords || keywords.length === 0) {
@@ -316,14 +320,37 @@ function GSCKeywords({ metrics }) {
 }
 
 function GSCPages({ metrics }) {
-  const pages = metrics.latest['top_pages_data']
-    ? (typeof metrics.latest['top_pages_data'] === 'string'
-        ? JSON.parse(metrics.latest['top_pages_data'])
-        : metrics.latest['top_pages_data'])
+  // GSC doesn't emit a separate top_pages metric — derive from the same
+  // keyword-level data, grouping by page URL.
+  const rawKeywords = metrics.latest['keywords_data']
+    ?? (Array.isArray(metrics.latest['keywords']) ? metrics.latest['keywords'] : null)
+  const keywords = rawKeywords
+    ? (typeof rawKeywords === 'string' ? JSON.parse(rawKeywords) : rawKeywords)
     : []
 
-  if (!pages || pages.length === 0) {
-    return <EmptyState message="No page data available yet." />
+  // Group by page (each row's `page` field; some rows may not have one).
+  const byPage = new Map()
+  for (const k of keywords) {
+    const url = k.page || k.url || k.keys?.[1]
+    if (!url) continue
+    const acc = byPage.get(url) || { page: url, clicks: 0, impressions: 0, positions: [], queries: 0 }
+    acc.clicks += k.clicks || 0
+    acc.impressions += k.impressions || 0
+    if (k.position) acc.positions.push(k.position)
+    acc.queries += 1
+    byPage.set(url, acc)
+  }
+  const pages = [...byPage.values()].map((p) => ({
+    page: p.page,
+    clicks: p.clicks,
+    impressions: p.impressions,
+    ctr: p.impressions > 0 ? p.clicks / p.impressions : 0,
+    position: p.positions.length > 0 ? p.positions.reduce((a, b) => a + b, 0) / p.positions.length : 0,
+    queries: p.queries,
+  })).sort((a, b) => b.clicks - a.clicks)
+
+  if (pages.length === 0) {
+    return <EmptyState message="No per-page data yet. The Keywords tab shows a richer breakdown." />
   }
 
   return (
@@ -467,17 +494,32 @@ function GA4Traffic({ metrics }) {
 
 function PSOverview({ metrics }) {
   const { latest } = metrics
+  // Defensive scalar coercion: an alias may resolve to an object (the
+  // sibling metric_data) when something upstream is wrong. Strip to a
+  // number so we never end up multiplying an object → NaN.
+  const num = (v) => {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+    if (v && typeof v === 'object') {
+      // pagespeed connector stores the entire scores object as data
+      // (e.g. { performance, accessibility, seo, bestPractices }).
+      // Caller can't know which field they wanted, so return 0.
+      return 0
+    }
+    const n = Number(v)
+    return Number.isFinite(n) ? n : 0
+  }
   const mobile = {
-    performance:   (latest['performance_mobile'] ?? latest['performance_score'] ?? 0) * (latest['performance_mobile'] > 1 ? 1 : 100),
-    accessibility: (latest['accessibility_mobile'] ?? latest['accessibility'] ?? 0) * (latest['accessibility_mobile'] > 1 ? 1 : 100),
-    bestPractices: (latest['best_practices_mobile'] ?? latest['best_practices'] ?? 0) * (latest['best_practices_mobile'] > 1 ? 1 : 100),
-    seo:           (latest['seo_mobile'] ?? latest['seo'] ?? 0) * (latest['seo_mobile'] > 1 ? 1 : 100),
-    lcp:           latest['lcp_mobile'] ?? latest['lcp'] ?? 0,
-    cls:           latest['cls_mobile'] ?? latest['cls'] ?? 0,
-    fcp:           latest['fcp_mobile'] ?? latest['fcp'] ?? 0,
+    performance:   num(latest['performance_mobile'] ?? latest['performance_score'] ?? 0),
+    accessibility: num(latest['accessibility_mobile'] ?? latest['accessibility'] ?? 0),
+    bestPractices: num(latest['best_practices_mobile'] ?? latest['best_practices'] ?? 0),
+    seo:           num(latest['seo_mobile'] ?? latest['seo'] ?? 0),
+    lcp:           num(latest['lcp_mobile'] ?? latest['lcp'] ?? 0),
+    cls:           num(latest['cls_mobile'] ?? latest['cls'] ?? 0),
+    fcp:           num(latest['fcp_mobile'] ?? latest['fcp'] ?? 0),
   }
 
-  // Normalize 0-1 scores to 0-100
+  // Normalize 0-1 scores to 0-100 (the connector now writes 0-100 already
+  // but this stays correct for either scale).
   const norm = (v) => v <= 1 ? Math.round(v * 100) : Math.round(v)
 
   const cwvItems = [
@@ -624,7 +666,12 @@ function PSHistory({ metrics }) {
 function PSOpportunities({ metrics, connector }) {
   const addNotification = useStore((s) => s.addNotification)
   const opportunities = (() => {
-    const raw = metrics.latest['opportunities_data']
+    // Aliases now expose opportunities_mobile_data + opportunities_desktop_data;
+    // the legacy 'opportunities_data' key remains as a fallback.
+    const raw = metrics.latest['opportunities_mobile_data']
+      ?? metrics.latest['opportunities_data']
+      ?? metrics.latest['opportunities_desktop_data']
+      ?? null
     if (!raw) return []
     try { return typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return [] }
   })()
@@ -753,6 +800,79 @@ function BrevoOverview({ metrics, summary }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function BrevoContacts({ metrics }) {
+  const { latest } = metrics
+  const totalContacts = latest['total_contacts'] ?? 0
+  const lists = Array.isArray(latest['lists_data']) ? latest['lists_data'] : []
+  const noisyKeys = new Set(['totalSubscribers', 'totalBlacklisted'])
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <MetricCard label="Total Contacts" value={totalContacts} accent="var(--bp-blue)" />
+        <MetricCard label="Lists" value={lists.length} accent="var(--bp-text-3)" />
+        <MetricCard label="Avg per List" value={lists.length > 0 ? Math.round(totalContacts / lists.length) : 0} accent="var(--bp-text-3)" />
+      </div>
+
+      {lists.length === 0 ? (
+        <EmptyState message="No lists found in this Brevo account yet." />
+      ) : (
+        <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--bp-border)', fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
+            Contact Lists ({lists.length})
+          </div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid var(--bp-border)', color: 'var(--bp-text-3)', textAlign: 'left', fontFamily: 'var(--bp-font-mono)', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                <th style={{ padding: '8px 16px' }}>List name</th>
+                <th style={{ padding: '8px 16px', textAlign: 'right' }}>Total subscribers</th>
+                <th style={{ padding: '8px 16px', textAlign: 'right' }}>Blacklisted</th>
+                <th style={{ padding: '8px 16px', textAlign: 'right' }}>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lists.slice(0, 100).map((l, i) => (
+                <tr key={l.id ?? i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                  <td style={{ padding: '9px 16px', color: 'var(--bp-text)' }}>{l.name ?? `List ${l.id ?? i}`}</td>
+                  <td style={{ padding: '9px 16px', textAlign: 'right', color: 'var(--bp-text-2)', fontFamily: 'var(--bp-font-mono)' }}>{(l.totalSubscribers ?? l.uniqueSubscribers ?? 0).toLocaleString()}</td>
+                  <td style={{ padding: '9px 16px', textAlign: 'right', color: 'var(--bp-amber)', fontFamily: 'var(--bp-font-mono)' }}>{(l.totalBlacklisted ?? 0).toLocaleString()}</td>
+                  <td style={{ padding: '9px 16px', textAlign: 'right', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>{l.createdAt ? format(parseISO(l.createdAt), 'MMM d, yy') : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BrevoTransactional({ metrics, summary }) {
+  const { latest } = metrics
+  const delivered = latest['transactional_delivered_7d'] ?? null
+  const bounceRate = latest['transactional_bounce_rate_7d'] ?? null
+
+  if (delivered == null && bounceRate == null) {
+    return <EmptyState message="Transactional email data isn't being returned by Brevo for this account. Check that SMTP/transactional is enabled in your Brevo account and re-sync." />
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <MetricCard label="Delivered (7d)" value={delivered ?? 0} accent="var(--bp-green)" />
+        <MetricCard label="Bounce Rate (7d)" value={bounceRate ?? 0} format="pct" invertPolarity accent="var(--bp-red)" />
+        <MetricCard label="Estimated daily" value={delivered != null ? Math.round(delivered / 7) : 0} accent="var(--bp-text-3)" />
+      </div>
+      <div className="bp-card" style={{ padding: '14px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.6 }}>
+        These are aggregated 7-day Brevo SMTP statistics. Full transactional logs (per-message
+        delivery status, opens, clicks) require Brevo's Marketing API tier — not surfaced here yet.
+        High bounce rate (&gt;5%) usually means stale recipient lists or DKIM/SPF issues with your
+        sending domain.
+      </div>
     </div>
   )
 }
@@ -1388,10 +1508,11 @@ function ShopifyInventory({ metrics }) {
 // ─── GA4 Pages Tab ────────────────────────────────────────────────────────────
 
 function GA4Pages({ metrics }) {
-  const pages = metrics.latest['pages_data']
-    ? (typeof metrics.latest['pages_data'] === 'string'
-        ? JSON.parse(metrics.latest['pages_data'])
-        : metrics.latest['pages_data'])
+  const raw = metrics.latest['top_pages_data']
+    ?? metrics.latest['pages_data']
+    ?? (Array.isArray(metrics.latest['top_pages']) ? metrics.latest['top_pages'] : null)
+  const pages = raw
+    ? (typeof raw === 'string' ? JSON.parse(raw) : raw)
     : []
 
   if (!pages || pages.length === 0) {
@@ -1454,7 +1575,9 @@ const CHANNEL_COLORS = {
 }
 
 function GA4Acquisition({ metrics }) {
-  const raw = metrics.latest['acquisition_data'] || metrics.latest['traffic_sources_data']
+  const raw = metrics.latest['traffic_sources_data']
+    ?? metrics.latest['acquisition_data']
+    ?? (Array.isArray(metrics.latest['traffic_sources']) ? metrics.latest['traffic_sources'] : null)
   const channels = raw
     ? (typeof raw === 'string' ? JSON.parse(raw) : raw)
     : []
@@ -1746,8 +1869,8 @@ function renderTab(connector, tab, data, range) {
   if (type === 'brevo') {
     if (tab === 'Overview') return <BrevoOverview metrics={metrics} summary={summary} />
     if (tab === 'Campaigns') return <BrevoOverview metrics={metrics} summary={summary} />
-    if (tab === 'Contacts') return <EmptyState message="Detailed contact list coming soon. Total contacts and list breakdown shown on Overview." />
-    if (tab === 'Transactional') return <EmptyState message="Transactional email logs coming soon. 7-day delivered + bounce shown on Overview." />
+    if (tab === 'Contacts') return <BrevoContacts metrics={metrics} />
+    if (tab === 'Transactional') return <BrevoTransactional metrics={metrics} summary={summary} />
   }
 
   return <EmptyState message="This view is coming soon." />

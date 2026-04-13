@@ -99,12 +99,38 @@ router.get('/:connectorId', (req, res) => {
         .map(name => [name, series(current, name)])
     );
     const aliases = ALIASES[connector.type] || {};
+    // For each alias, walk the raw rows to find the underlying metric and
+    // pick the right shape: scalar metric_value if it's a number (so score
+    // and rate aliases resolve to numbers), otherwise the parsed
+    // metric_data (so list aliases like top_pages/keywords resolve to
+    // arrays). The bare 'latest' map keeps the previous behaviour for
+    // legacy callers.
     for (const [shortName, realName] of Object.entries(aliases)) {
-      if (latestObj[shortName] === undefined && latestObj[realName] !== undefined) {
-        latestObj[shortName] = latestObj[realName];
+      if (latestObj[shortName] === undefined) {
+        const row = current.find((m) => m.metric_name === realName);
+        if (row) {
+          // Prefer the scalar value when it's a non-null number — those
+          // are the score/rate/count style metrics. Fall back to the
+          // parsed data blob otherwise (top_pages, campaigns_data, etc.).
+          const v = (row.metric_value !== null && row.metric_value !== undefined)
+            ? row.metric_value
+            : row.metric_data;
+          latestObj[shortName] = v;
+        }
       }
       if (seriesObj[shortName] === undefined && seriesObj[realName] !== undefined) {
         seriesObj[shortName] = seriesObj[realName];
+      }
+    }
+
+    // Also expose array-style data fields under their "_data" suffix names
+    // because some legacy renderers read latest['top_pages_data'] etc. We
+    // give both naming conventions so future cleanup is non-breaking.
+    for (const [shortName, realName] of Object.entries(aliases)) {
+      const row = current.find((m) => m.metric_name === realName);
+      if (row?.metric_data && Array.isArray(row.metric_data)) {
+        const dataAlias = `${shortName}_data`;
+        if (latestObj[dataAlias] === undefined) latestObj[dataAlias] = row.metric_data;
       }
     }
 
@@ -161,7 +187,9 @@ const ALIASES = {
     conversions: 'ga4.conversions',
     conversions_prev: 'ga4.conversions_prev',
     top_pages: 'ga4.top_pages',
+    pages: 'ga4.top_pages',           // renderer reads latest['pages_data']
     traffic_sources: 'ga4.traffic_sources',
+    acquisition: 'ga4.traffic_sources', // renderer reads latest['acquisition_data']
   },
   brevo: {
     total_contacts: 'brevo.total_contacts',
