@@ -18,6 +18,9 @@ data/blueprint.db
 data/blueprint.db-shm
 data/blueprint.db-wal
 data/*.db
+# Stray runtime DB if a process is launched from server/ with the default
+# relative './data/blueprint.db' path (server/index.js fallback).
+server/data/
 
 # Knowledge base — user content stays local
 /kb/
