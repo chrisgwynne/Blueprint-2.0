@@ -286,9 +286,20 @@ function Dashboard() {
   const keywords = (dashboard?.top_keywords || []).slice(0, 8)
   const maxImpressions = keywords.reduce((m, k) => Math.max(m, k.impressions || 0), 1)
   const ps = metrics.pagespeed || {}
-  const lcp = ps.lcp || metrics.lcp
-  const cls = ps.cls || metrics.cls
-  const score = metrics.pagespeed_score ?? ps.score
+  // Some metric fields ship as wrapped { value, prev, trend } objects; some
+  // ship as plain numbers. Coerce to a number so Gauge doesn't render
+  // "[object Object]".
+  const numOf = (v) => {
+    if (v == null) return null
+    if (typeof v === 'number') return v
+    if (typeof v === 'object') return v.value ?? v.current ?? null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const lcp = numOf(ps.lcp ?? metrics.lcp)
+  const cls = numOf(ps.cls ?? metrics.cls)
+  const score = numOf(metrics.pagespeed_score ?? ps.score)
+  const fid = numOf(ps.fid ?? ps.inp ?? metrics.fid)
   const topPages = (dashboard?.top_pages || []).slice(0, 8)
 
   return (
@@ -401,7 +412,7 @@ function Dashboard() {
               <Gauge value={score} max={100} goodThreshold={90} needsWorkThreshold={50} label="Score" />
               <Gauge value={lcp} max={6000} goodThreshold={2500} needsWorkThreshold={4000} label="LCP" unit="ms" invert />
               <Gauge value={cls != null ? cls * 100 : null} max={40} goodThreshold={10} needsWorkThreshold={25} label="CLS" unit="×100" invert />
-              <Gauge value={ps.fid || ps.inp} max={500} goodThreshold={100} needsWorkThreshold={300} label="FID" unit="ms" invert />
+              <Gauge value={fid} max={500} goodThreshold={100} needsWorkThreshold={300} label="FID" unit="ms" invert />
             </div>
           )}
         </div>
