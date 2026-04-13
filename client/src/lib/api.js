@@ -99,6 +99,8 @@ export const createTask = (data) => post('/tasks', data)
 export const approveTask = (id, data) => patch(`/tasks/${id}/approve`, data)
 export const rejectTask = (id, data) => patch(`/tasks/${id}/reject`, data)
 export const updateTask = (id, data) => patch(`/tasks/${id}`, data)
+export const getApprovalPolicies = () => get('/tasks/approval-policies')
+export const saveApprovalPolicies = (policies) => request('PUT', '/tasks/approval-policies', { policies })
 
 // ============================================
 // Agents

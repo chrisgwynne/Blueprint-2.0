@@ -1,4 +1,4 @@
-const API_URL = 'https://generativelanguage.googleapis.com/v1beta';
+const DEFAULT_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 export const KNOWN_MODELS = [
   'gemini-2.0-flash',
@@ -8,7 +8,6 @@ export const KNOWN_MODELS = [
 ];
 
 export function estimateCost(model, inputTokens, outputTokens) {
-  // Gemini pricing (approximate)
   const pricing = {
     'gemini-1.5-pro-latest':  { input: 3.5, output: 10.5 },
     'gemini-1.5-flash-latest':{ input: 0.075, output: 0.3 },
@@ -19,9 +18,10 @@ export function estimateCost(model, inputTokens, outputTokens) {
   return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
 }
 
-export async function complete({ apiKey, model, messages, system, temperature = 0.7, max_tokens = 4096 }) {
+export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 4096 }) {
+  const root = baseUrl || DEFAULT_API_URL;
   const modelId = model || 'gemini-1.5-flash-latest';
-  const url = `${API_URL}/models/${modelId}:generateContent?key=${apiKey}`;
+  const url = `${root}/models/${modelId}:generateContent?key=${apiKey}`;
 
   // Convert Anthropic-style messages to Gemini format
   const contents = messages.map(m => ({
@@ -48,7 +48,7 @@ export async function complete({ apiKey, model, messages, system, temperature = 
 
   if (!response.ok) {
     const err = await response.text();
-    throw new Error(`Google API error ${response.status}: ${err}`);
+    throw new Error(`Google API error ${response.status}: ${err.substring(0, 300)}`);
   }
 
   const data = await response.json();
@@ -63,9 +63,10 @@ export async function complete({ apiKey, model, messages, system, temperature = 
   };
 }
 
-export async function listModels({ apiKey }) {
+export async function listModels({ apiKey, baseUrl }) {
+  const root = baseUrl || DEFAULT_API_URL;
   try {
-    const response = await fetch(`${API_URL}/models?key=${apiKey}`);
+    const response = await fetch(`${root}/models?key=${apiKey}`);
     if (!response.ok) return KNOWN_MODELS;
     const data = await response.json();
     return (data.models ?? [])
@@ -77,9 +78,10 @@ export async function listModels({ apiKey }) {
   }
 }
 
-export async function validateApiKey({ apiKey }) {
+export async function validateApiKey({ apiKey, baseUrl }) {
+  const root = baseUrl || DEFAULT_API_URL;
   try {
-    const response = await fetch(`${API_URL}/models?key=${apiKey}`);
+    const response = await fetch(`${root}/models?key=${apiKey}`);
     return response.ok;
   } catch {
     return false;

@@ -546,6 +546,33 @@ Identify insights and proposed tasks based solely on this data.`;
 
     console.log(`[ai-analysis] Run ${runId} complete: ${insightsCount} insights, ${tasksCreated} tasks created, health: ${healthScore}`);
 
+    // Reflect AI analysis activity on the Conductor agent so the right
+    // sidebar's "last seen X ago" actually moves when AI analysis runs.
+    // Without this, the user sees "Conductor 2hrs ago" even though the
+    // analysis (which is Conductor's job) ran 30 seconds ago.
+    try {
+      const conductorRow = db.prepare("SELECT id FROM agents WHERE id = 'conductor'").get();
+      if (conductorRow) {
+        const agentRunId = generateId();
+        db.prepare(`
+          INSERT INTO agent_runs (
+            id, agent_id, business_id, trigger, trigger_id, status,
+            reasoning, signals_detected, tasks_proposed,
+            prompt_tokens, completion_tokens, cost_usd,
+            started_at, completed_at
+          ) VALUES (?, 'conductor', ?, 'ai_analysis', ?, 'complete', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).run(
+          agentRunId, businessId, runId,
+          summary || `AI analysis: ${insightsCount} insights, ${tasksCreated} tasks`,
+          insightsCount, tasksCreated,
+          usage.input_tokens ?? 0, usage.output_tokens ?? 0, costUsd
+        );
+        db.prepare("UPDATE agents SET last_run = CURRENT_TIMESTAMP WHERE id = 'conductor'").run();
+      }
+    } catch (logErr) {
+      console.warn('[ai-analysis] Failed to log agent_run for conductor:', logErr.message);
+    }
+
     return { runId, insightsCount, tasksCreated, healthScore, summary };
 
   } catch (err) {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -13,6 +13,7 @@ const TABS = [
   { id: 'oauth',     label: 'Google OAuth' },
   { id: 'kb',        label: 'Knowledge Base' },
   { id: 'agents',    label: 'Agent Defaults' },
+  { id: 'approvals', label: 'Approval Policies' },
   { id: 'integrations', label: 'External Agents' },
   { id: 'data',      label: 'Data' },
   { id: 'system',    label: 'System' },
@@ -1645,6 +1646,121 @@ function GoogleOAuthTab() {
 }
 
 // ============================================
+// ============================================
+// Tab: Approval Policies
+// ============================================
+const APPROVAL_ACTION_TYPES = [
+  { id: 'hire_agent',                  label: 'Hire agent',          desc: 'Conductor proposes installing a specialist agent' },
+  { id: 'investigation',               label: 'Investigation',       desc: 'Run a deep diagnostic on a metric or signal' },
+  { id: 'content_draft',               label: 'Content draft',       desc: 'Quill produces a draft article or page' },
+  { id: 'github_issue',                label: 'GitHub issue',        desc: 'Dev opens a new issue in your repo' },
+  { id: 'github_pr',                   label: 'GitHub PR',           desc: 'Dev opens a draft pull request' },
+  { id: 'shopify_product_create',      label: 'Shopify product create', desc: 'Merchant creates a new draft product' },
+  { id: 'shopify_product_update',      label: 'Shopify product update', desc: 'Merchant edits an existing product' },
+  { id: 'shopify_description_update',  label: 'Shopify description', desc: 'Update product/page description' },
+  { id: 'shopify_meta_update',         label: 'Shopify meta tags',   desc: 'Update SEO meta on a page or product' },
+  { id: 'shopify_collection_update',   label: 'Shopify collection',  desc: 'Edit a collection (rename, products, image)' },
+  { id: 'shopify_tag_update',          label: 'Shopify tags',        desc: 'Add or remove product tags' },
+  { id: 'shopify_page_create',         label: 'Shopify page create', desc: 'Create a new shop page' },
+  { id: 'shopify_page_update',         label: 'Shopify page update', desc: 'Edit an existing shop page' },
+  { id: 'shopify_blog_post_create',    label: 'Shopify blog post',   desc: 'Publish a new blog article' },
+]
+
+function ApprovalsTab() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [policies, setPolicies] = useState({})
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    getApprovalPolicies()
+      .then((data) => setPolicies(data?.policies || {}))
+      .catch((err) => addNotification({ type: 'error', message: err.message }))
+      .finally(() => setLoading(false))
+  }, [])
+
+  function setPolicy(actionType, value) {
+    setPolicies((prev) => {
+      const next = { ...prev }
+      if (value === 'inherit') {
+        delete next[actionType]
+      } else {
+        next[actionType] = value
+      }
+      return next
+    })
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      await saveApprovalPolicies(policies)
+      addNotification({ type: 'success', message: 'Approval policies saved' })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) return <div className="text-sm text-blueprint-muted">Loading…</div>
+
+  return (
+    <div className="space-y-4">
+      <Section
+        title="Default policy"
+        description="Used for any action type that doesn't have its own policy below."
+      >
+        <Field label="When an agent proposes a task">
+          <select
+            value={policies.default || 'manual'}
+            onChange={(e) => setPolicy('default', e.target.value)}
+            className="bp-input bp-select w-full"
+          >
+            <option value="manual">Always require my approval (recommended)</option>
+            <option value="auto">Auto-approve everything</option>
+          </select>
+        </Field>
+      </Section>
+
+      <Section
+        title="Per-action overrides"
+        description="Override the default for specific action types. Leave on 'Use default' to keep things simple."
+      >
+        <div className="space-y-2">
+          {APPROVAL_ACTION_TYPES.map((a) => (
+            <div key={a.id} className="bp-card p-3 flex items-center gap-3">
+              <div className="flex-1">
+                <div className="text-sm text-slate-200">{a.label}</div>
+                <div className="text-[11px] text-blueprint-muted">{a.desc}</div>
+              </div>
+              <select
+                value={policies[a.id] || 'inherit'}
+                onChange={(e) => setPolicy(a.id, e.target.value)}
+                className="bp-input bp-select"
+                style={{ width: 180 }}
+              >
+                <option value="inherit">Use default ({(policies.default || 'manual') === 'auto' ? 'auto' : 'approve'})</option>
+                <option value="auto">Auto-approve</option>
+                <option value="manual">Require approval</option>
+              </select>
+            </div>
+          ))}
+        </div>
+
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="bp-btn bp-btn-primary text-xs mt-4"
+        >
+          <Save size={12} />
+          {saving ? 'Saving…' : 'Save policies'}
+        </button>
+      </Section>
+    </div>
+  )
+}
+
 function Settings() {
   const [activeTab, setActiveTab] = useState('business')
 
@@ -1655,6 +1771,7 @@ function Settings() {
     oauth:         <GoogleOAuthTab />,
     kb:            <KBTab />,
     agents:        <AgentDefaultsTab />,
+    approvals:     <ApprovalsTab />,
     integrations:  <IntegrationsTab />,
     data:          <DataTab />,
     system:        <SystemTab />,

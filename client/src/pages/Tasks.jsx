@@ -800,6 +800,7 @@ function Tasks() {
         <TaskKanban
           tasks={statusFilter === 'all' ? tasks : tasks.filter((t) => t.status === statusFilter)}
           onUpdate={() => setRefreshKey((k) => k + 1)}
+          onSelect={setSelectedTaskId}
         />
       )}
 

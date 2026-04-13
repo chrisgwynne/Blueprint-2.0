@@ -182,6 +182,21 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
     } catch {}
   }
 
+  // If we created at least one new signal, kick the Conductor so it can
+  // (a) propose hires for any specialist that would help with the new
+  // signal type, and (b) re-evaluate its strategic plan. Fire-and-forget
+  // — the sync caller doesn't wait for this.
+  if (newSignalIds.length > 0) {
+    (async () => {
+      try {
+        const { analyseAndProposeHires } = await import('../agents/conductor-hiring.js');
+        await analyseAndProposeHires(businessId);
+      } catch (err) {
+        console.warn('[signal-engine] Conductor hiring nudge failed:', err.message);
+      }
+    })();
+  }
+
   return newSignalIds;
 }
 

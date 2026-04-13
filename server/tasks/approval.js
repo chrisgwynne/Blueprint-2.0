@@ -3,9 +3,35 @@ import { approveTask, updateTaskStatus } from './task-queue.js';
 import { sendApprovalRequest as telegramApprovalRequest } from '../notifications/telegram.js';
 
 /**
+ * Read the user-configurable approval policies from the settings table.
+ * Shape: { default?: 'auto' | 'manual', <action_type>?: 'auto' | 'manual' }
+ */
+function readApprovalPolicies() {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'approval_policies'").get();
+    if (!row?.value) return {};
+    const parsed = JSON.parse(row.value);
+    return (typeof parsed === 'object' && parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Determine whether a task should be auto-approved.
+ *
+ * Order of precedence:
+ *   1. Per-action-type policy from Settings → Approval Policies
+ *   2. Default policy from same Settings tab
+ *   3. Legacy fallback: trust_tier === 'green' && approval_mode === 'auto'
  */
 export function shouldAutoApprove(task) {
+  const policies = readApprovalPolicies();
+  const perAction = policies[task.action_type];
+  if (perAction === 'auto') return true;
+  if (perAction === 'manual') return false;
+  if (policies.default === 'auto') return true;
+  if (policies.default === 'manual') return false;
   return task.trust_tier === 'green' && task.approval_mode === 'auto';
 }
 

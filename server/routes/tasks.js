@@ -29,6 +29,41 @@ function parseRow(row) {
 }
 
 /**
+ * GET /api/tasks/approval-policies
+ * Returns the user-configured approval policy map. Per-action-type 'auto'
+ * skips the human approval step; 'manual' forces it.
+ */
+router.get('/approval-policies', (req, res) => {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'approval_policies'").get();
+    let policies = {};
+    try { policies = row?.value ? JSON.parse(row.value) : {}; } catch {}
+    return res.json({ policies });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/tasks/approval-policies
+ * Body: { policies: { default?: 'auto'|'manual', <action_type>?: 'auto'|'manual' } }
+ */
+router.put('/approval-policies', (req, res) => {
+  try {
+    const policies = req.body?.policies ?? {};
+    if (typeof policies !== 'object') return res.status(400).json({ error: 'policies must be an object' });
+    db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ('approval_policies', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(JSON.stringify(policies));
+    return res.json({ ok: true, policies });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
  * GET /api/tasks/:businessId
  * Query: view=kanban|list, status, signal_id, mission_id, page, limit
  */

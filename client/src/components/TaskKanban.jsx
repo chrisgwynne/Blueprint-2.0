@@ -47,7 +47,7 @@ function ConfidenceBar({ value }) {
   )
 }
 
-function TaskCard({ task, isDragging = false, onUpdate }) {
+function TaskCard({ task, isDragging = false, onUpdate, onSelect }) {
   const addNotification = useStore((s) => s.addNotification)
   const [expanded,  setExpanded]  = useState(false)
   const [acting,    setActing]    = useState(false)
@@ -122,10 +122,33 @@ function TaskCard({ task, isDragging = false, onUpdate }) {
               {task.trust_tier}
             </span>
           )}
+          {task.action_type === 'hire_agent' && (
+            <span
+              className="bp-pill"
+              style={{
+                padding: '1px 6px', fontSize: 9, flexShrink: 0,
+                background: 'rgba(168,85,247,0.15)', color: '#c4b5fd',
+                border: '1px solid rgba(168,85,247,0.3)',
+              }}
+            >
+              Conductor recommends
+            </span>
+          )}
         </div>
 
-        {/* Title */}
-        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text)', lineHeight: 1.45, marginBottom: 8 }}>
+        {/* Title — click to open detail drawer (stopPropagation so the
+            drag handler on the card root doesn't fire). */}
+        <div
+          onClick={(e) => { e.stopPropagation(); onSelect?.(task.id) }}
+          onPointerDown={(e) => e.stopPropagation()}
+          style={{
+            fontFamily: 'var(--bp-font-mono)', fontSize: 12,
+            color: 'var(--bp-text)', lineHeight: 1.45, marginBottom: 8,
+            cursor: 'pointer', textDecoration: 'underline',
+            textDecorationColor: 'rgba(255,255,255,0.15)',
+            textUnderlineOffset: 2,
+          }}
+        >
           {task.title}
         </div>
 
@@ -192,7 +215,7 @@ function TaskCard({ task, isDragging = false, onUpdate }) {
   )
 }
 
-function KanbanColumn({ column, tasks, onUpdate }) {
+function KanbanColumn({ column, tasks, onUpdate, onSelect }) {
   const { setNodeRef, isOver } = useSortable ? { setNodeRef: null, isOver: false } : {}
 
   return (
@@ -233,7 +256,7 @@ function KanbanColumn({ column, tasks, onUpdate }) {
       <SortableContext items={tasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {tasks.map(task => (
-            <TaskCard key={task.id} task={task} onUpdate={onUpdate} />
+            <TaskCard key={task.id} task={task} onUpdate={onUpdate} onSelect={onSelect} />
           ))}
           {tasks.length === 0 && (
             <div style={{
@@ -253,7 +276,7 @@ function KanbanColumn({ column, tasks, onUpdate }) {
   )
 }
 
-function TaskKanban({ tasks = [], onUpdate }) {
+function TaskKanban({ tasks = [], onUpdate, onSelect }) {
   const addNotification = useStore((s) => s.addNotification)
   const [activeId, setActiveId] = useState(null)
 
@@ -304,7 +327,7 @@ function TaskKanban({ tasks = [], onUpdate }) {
         minHeight: 400,
       }} className="no-scrollbar">
         {columns.map(col => (
-          <KanbanColumn key={col.id} column={col} tasks={col.tasks} onUpdate={onUpdate} />
+          <KanbanColumn key={col.id} column={col} tasks={col.tasks} onUpdate={onUpdate} onSelect={onSelect} />
         ))}
       </div>
 
