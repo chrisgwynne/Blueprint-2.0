@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { Play, Pause, Settings, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react'
 import clsx from 'clsx'
 import { runAgent, updateAgent } from '../lib/api.js'
@@ -63,7 +64,7 @@ function AgentCard({ agent, onUpdate }) {
   }
 
   const lastRun = agent.last_run
-    ? formatDistanceToNow(new Date(agent.last_run), { addSuffix: true })
+    ? formatDistanceToNow(parseTimestamp(agent.last_run) || new Date(), { addSuffix: true })
     : 'Never'
 
   return (
@@ -149,7 +150,7 @@ function AgentCard({ agent, onUpdate }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>Next run</span>
             <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)' }}>
-              {formatDistanceToNow(new Date(agent.next_run), { addSuffix: true })}
+              {formatDistanceToNow(parseTimestamp(agent.next_run) || new Date(), { addSuffix: true })}
             </span>
           </div>
         )}

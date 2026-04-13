@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   Activity, RefreshCw, Play, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle2, XCircle, Pause, Database,
@@ -31,7 +32,7 @@ const AGENT_STATUS = {
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) }
   catch { return '—' }
 }
 

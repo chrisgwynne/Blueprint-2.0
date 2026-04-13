@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { RefreshCw, Settings, AlertTriangle, Database, CheckCircle, XCircle, Wifi } from 'lucide-react'
 import clsx from 'clsx'
 import { syncConnector, healthCheckConnector } from '../lib/api.js'
@@ -66,7 +67,7 @@ function ConnectorCard({ connector, onSync, onConfigure }) {
   }
 
   const lastSyncText = connector.last_sync
-    ? formatDistanceToNow(new Date(connector.last_sync), { addSuffix: true })
+    ? formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })
     : 'Never'
 
   return (

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { FolderOpen, Plus, Sparkles, ArrowRight, X, Check } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
@@ -12,7 +13,7 @@ const ICONS = ['📁', '🔍', '⚡', '🚀', '📊', '🎯', '✍️', '🔬', 
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '—' }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '—' }
 }
 
 function ProjectCard({ project, onOpen }) {

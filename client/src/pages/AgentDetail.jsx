@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { format, formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   ArrowLeft, Play, Pause, RefreshCw, Save, Trash2,
   Cpu, Clock, Zap, TrendingUp, ChevronDown, ChevronRight,
@@ -335,7 +336,7 @@ function MemoryTab({ agentId }) {
           <StatCard label="Total runs" value={memory.stats.total_runs ?? 0} />
           <StatCard label="Tasks proposed" value={memory.stats.total_tasks_proposed ?? 0} />
           {memory.last_updated && (
-            <StatCard label="Last updated" value={formatDistanceToNow(new Date(memory.last_updated), { addSuffix: true })} />
+            <StatCard label="Last updated" value={formatDistanceToNow(parseTimestamp(memory.last_updated) || new Date(), { addSuffix: true })} />
           )}
         </div>
       )}
@@ -971,7 +972,7 @@ export default function AgentDetail() {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>Last run</span>
                   <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
-                    {formatDistanceToNow(new Date(agent.last_run), { addSuffix: true })}
+                    {formatDistanceToNow(parseTimestamp(agent.last_run) || new Date(), { addSuffix: true })}
                   </span>
                 </div>
               )}

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { formatDistanceToNow, format } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { LayoutGrid, List, Plus, X, Check, RefreshCw, Clock, ChevronRight, MessageSquare, Send, User, Cpu, GitBranch } from 'lucide-react'
 import TaskKanban from '../components/TaskKanban.jsx'
 import useStore from '../lib/store.js'
@@ -150,7 +151,7 @@ function TaskListRow({ task, onApprove, onReject, onSelect }) {
   const sc = STATUS_CONFIG[task.status] || STATUS_CONFIG.proposed
   const priorityNum = PRIORITY_NUM[task.priority?.toLowerCase?.()] || parseInt(task.priority) || 3
   const confidence = task.confidence != null ? Math.round(task.confidence * 100) + '%' : '—'
-  const age = task.created_at ? formatDistanceToNow(new Date(task.created_at), { addSuffix: true }) : '—'
+  const age = task.created_at ? formatDistanceToNow(parseTimestamp(task.created_at) || new Date(), { addSuffix: true }) : '—'
 
   async function doApprove() {
     setActing(true)
@@ -451,7 +452,7 @@ function TaskDetailDrawer({ taskId, onClose, onUpdate }) {
                   { label: 'Action Type', value: task.action_type || '—' },
                   { label: 'Trust Tier',  value: task.trust_tier  || '—' },
                   { label: 'Created',     value: task.created_at ? format(new Date(task.created_at), 'MMM d, yyyy HH:mm') : '—' },
-                  { label: 'Updated',     value: task.updated_at ? formatDistanceToNow(new Date(task.updated_at), { addSuffix: true }) : '—' },
+                  { label: 'Updated',     value: task.updated_at ? formatDistanceToNow(parseTimestamp(task.updated_at) || new Date(), { addSuffix: true }) : '—' },
                 ].map(({ label, value }) => (
                   <div key={label} style={{ padding: '10px 12px', background: 'var(--bp-base)', borderRadius: 4, border: '1px solid var(--bp-border)' }}>
                     <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>{label}</div>

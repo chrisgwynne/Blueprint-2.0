@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   Play, Pause, RefreshCw, Download, ChevronRight, Cpu, AlertCircle,
   Clock, Zap, TrendingUp, Package,
@@ -129,7 +130,7 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }) {
             <Clock size={10} />Last run
           </span>
           <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)' }}>
-            {agent.last_run ? formatDistanceToNow(new Date(agent.last_run), { addSuffix: true }) : 'Never'}
+            {agent.last_run ? formatDistanceToNow(parseTimestamp(agent.last_run) || new Date(), { addSuffix: true }) : 'Never'}
           </span>
         </div>
 

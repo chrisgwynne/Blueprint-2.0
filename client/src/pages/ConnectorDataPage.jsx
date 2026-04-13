@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   RefreshCw, ArrowLeft, ExternalLink,
   Search, BarChart2, Zap, ShoppingBag, MapPin, Database,
@@ -1689,7 +1690,7 @@ function ConnectorDataPage() {
   const navigate = useNavigate()
   const addNotification = useStore((s) => s.addNotification)
 
-  const range = searchParams.get('range') || '30d'
+  const range = searchParams.get('range') || 'today'
   const [activeTab, setActiveTab] = useState(null)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -1800,7 +1801,7 @@ function ConnectorDataPage() {
                 <>
                   <span style={{ color: 'var(--bp-border)' }}>·</span>
                   <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
-                    synced {formatDistanceToNow(new Date(connector.last_sync), { addSuffix: true })}
+                    synced {formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })}
                   </span>
                 </>
               )}

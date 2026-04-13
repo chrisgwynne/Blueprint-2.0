@@ -29,19 +29,32 @@ const SCOPES = [
  */
 router.get('/google', (req, res) => {
   const { businessId, types = 'gsc,ga4' } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 
   if (!businessId) {
     return res.status(400).json({ error: 'businessId is required.' });
   }
 
   const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI;
 
-  if (!clientId) {
-    return res.status(500).json({ error: 'GOOGLE_CLIENT_ID is not configured on the server.' });
-  }
-  if (!redirectUri) {
-    return res.status(500).json({ error: 'GOOGLE_REDIRECT_URI is not configured on the server.' });
+  // Detect both missing values AND the placeholder values that ship in
+  // .env.example, so the user gets a clear message instead of being bounced
+  // to Google which returns a cryptic "invalid_client" 401.
+  const isPlaceholder = (v) =>
+    !v ||
+    v.startsWith('your-') ||
+    v === 'GOCSPX-your-client-secret' ||
+    v.includes('your-client');
+
+  if (isPlaceholder(clientId) || isPlaceholder(clientSecret) || isPlaceholder(redirectUri)) {
+    const msg = 'google_oauth_not_configured';
+    return res.redirect(
+      `${clientUrl}/connectors?error=${msg}&detail=${encodeURIComponent(
+        'GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI must be set in your .env before connecting Google. See .env.example for the required fields and https://console.cloud.google.com/apis/credentials to create an OAuth client.'
+      )}`
+    );
   }
 
   const state = Buffer.from(JSON.stringify({ businessId, types })).toString('base64url');

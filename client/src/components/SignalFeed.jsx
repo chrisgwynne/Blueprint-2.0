@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { Check, Clock, ArrowRight, Plus } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -28,7 +29,7 @@ function SignalRow({ signal, onSignalClick, onAcknowledge, onSnooze, onCreateTas
   const [hovered, setHovered] = useState(false)
   const sev = SEVERITY[signal.severity] || SEVERITY.info
   const age = signal.detected_at || signal.created_at
-    ? formatDistanceToNow(new Date(signal.detected_at || signal.created_at), { addSuffix: true })
+    ? formatDistanceToNow(parseTimestamp(signal.detected_at || signal.created_at) || new Date(), { addSuffix: true })
     : '—'
 
   return (

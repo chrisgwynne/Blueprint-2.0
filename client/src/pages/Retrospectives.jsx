@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { BookMarked, Play, ArrowLeft, CheckCircle2, XCircle, Lightbulb } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import useStore from '../lib/store.js'
 import { getRetrospectives, getRetrospective, runRetrospective } from '../lib/api.js'
 
@@ -229,7 +230,7 @@ export default function Retrospectives() {
               </div>
             )}
             <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
-              {formatDistanceToNow(new Date(r.created_at), { addSuffix: true })} · {r.triggered_by}
+              {formatDistanceToNow(parseTimestamp(r.created_at) || new Date(), { addSuffix: true })} · {r.triggered_by}
             </div>
           </div>
         ))

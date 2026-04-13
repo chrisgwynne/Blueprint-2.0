@@ -99,6 +99,25 @@ function assembleChatSystemPrompt(agentId, business, history, recentSignals) {
 
   parts.push(`## Current Business\nName: ${business.name}\nType: ${business.type ?? 'business'}`);
 
+  // Tell the agent what is ACTUALLY connected so it cannot invent data sources.
+  try {
+    const connectors = db.prepare(
+      `SELECT type, name, status FROM connectors
+       WHERE business_id = ?
+       ORDER BY created_at ASC`
+    ).all(business.id);
+    if (connectors.length === 0) {
+      parts.push(`## Connected Data Sources\nNone. The user has not connected any data source yet. Do NOT claim they have Shopify, Google, GitHub, or any other integration. If asked about data, say you cannot see any yet and point them at the Connectors page.`);
+    } else {
+      const lines = connectors.map(c =>
+        `- ${c.type} (${c.name})${c.status && c.status !== 'active' ? ` [${c.status}]` : ''}`
+      ).join('\n');
+      parts.push(`## Connected Data Sources\nThese are the ONLY data sources connected to this business. Do not reference any other integrations:\n${lines}`);
+    }
+  } catch (err) {
+    parts.push(`## Connected Data Sources\n(Unable to query connectors — do not assume any are connected.)`);
+  }
+
   if (recentSignals?.length > 0) {
     parts.push(`## Recent open signals (${recentSignals.length})\n` + recentSignals.slice(0, 5).map(s =>
       `- [${s.severity}] ${s.title}${s.description ? ': ' + s.description.slice(0, 140) : ''}`
@@ -123,7 +142,14 @@ If you propose a task, say so explicitly:
 If you need another agent's help, @mention them naturally:
   "I'll ask @quill to draft this" or "@velocity can fix the LCP issue"
 
-Never invent data you don't have. If you lack context, say so.
+CRITICAL — Grounding rules:
+- ONLY reference data sources listed under "Connected Data Sources" above.
+- Do NOT claim the user has connected anything that isn't on that list.
+- Do NOT invent progress on SEO, content, integrations, or any other work.
+- On a first "hello", keep it brief (under 80 words). Do not summarise business
+  status unless the user asks — you have no data to summarise yet.
+- If the list is empty, suggest they connect a data source first.
+
 Respond as ${displayName} — do not include a "Name:" prefix; the UI shows that.`);
 
   return parts.join('\n\n---\n\n');

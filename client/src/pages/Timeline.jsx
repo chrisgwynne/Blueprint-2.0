@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { formatDistanceToNow, format, startOfDay, isToday, isYesterday } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   Bot, CheckSquare, Radio, GitBranch, Target, Zap,
   Clock, AlertCircle, CheckCircle2, XCircle,
@@ -28,7 +29,7 @@ const FILTERS = [
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '—' }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '—' }
 }
 
 function dayLabel(iso) {

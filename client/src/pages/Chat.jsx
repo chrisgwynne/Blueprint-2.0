@@ -2,6 +2,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   MessageSquare, Send, Plus, Archive, AtSign,
 } from 'lucide-react'
@@ -28,7 +29,7 @@ const AGENT_ICONS = {
 
 function fmtTime(iso) {
   if (!iso) return ''
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) }
   catch { return '' }
 }
 

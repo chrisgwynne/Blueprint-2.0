@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
@@ -1010,7 +1011,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
               <p className="text-xs text-blueprint-muted mb-1">Last Sync</p>
               <p className="text-sm mono text-slate-200">
                 {connector.last_sync
-                  ? formatDistanceToNow(new Date(connector.last_sync), { addSuffix: true })
+                  ? formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })
                   : 'Never'}
               </p>
             </div>
@@ -1167,7 +1168,7 @@ function ConnectorCard({ connector, onClick }) {
         </div>
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
           {connector.last_sync
-            ? `Synced ${formatDistanceToNow(new Date(connector.last_sync), { addSuffix: true })}`
+            ? `Synced ${formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })}`
             : 'Never synced'}
         </div>
         {connector.last_error && (
@@ -1222,7 +1223,18 @@ function Connectors() {
           .catch(() => {})
       }
     } else if (error) {
-      addNotification({ type: 'error', message: `OAuth error: ${decodeURIComponent(error)}` })
+      const detail = searchParams.get('detail')
+      let message
+      if (error === 'google_oauth_not_configured') {
+        message = detail
+          ? decodeURIComponent(detail)
+          : 'Google OAuth is not configured. Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI in .env, then restart Blueprint.'
+      } else if (detail) {
+        message = `${decodeURIComponent(error)} — ${decodeURIComponent(detail)}`
+      } else {
+        message = `OAuth error: ${decodeURIComponent(error)}`
+      }
+      addNotification({ type: 'error', message })
       setSearchParams({}, { replace: true })
     }
   }, [searchParams])

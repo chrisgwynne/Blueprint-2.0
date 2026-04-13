@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { AlertTriangle, CheckCircle2, X, RefreshCw } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import useStore from '../lib/store.js'
 import {
   getConflicts, resolveConflict, dismissConflict, auditConflicts,
@@ -48,7 +49,7 @@ function ConflictCard({ conflict, businessId, onRefresh }) {
           {TYPE_LABELS[conflict.conflict_type] ?? conflict.conflict_type}
         </span>
         <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginLeft: 'auto' }}>
-          {formatDistanceToNow(new Date(conflict.detected_at), { addSuffix: true })}
+          {formatDistanceToNow(parseTimestamp(conflict.detected_at) || new Date(), { addSuffix: true })}
         </span>
       </div>
       <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text)', marginBottom: 10, lineHeight: 1.5 }}>

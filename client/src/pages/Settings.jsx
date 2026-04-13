@@ -5,6 +5,7 @@ import useStore from '../lib/store.js'
 import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
+import { parseTimestamp } from '../lib/time.js'
 const TABS = [
   { id: 'business',  label: 'Business Profile' },
   { id: 'notifications', label: 'Notifications' },
@@ -1287,7 +1288,7 @@ function IntegrationsTab() {
                 <div className="grid grid-cols-2 gap-2 text-[10px] text-blueprint-muted">
                   <div>API Key: <span className="text-slate-300 font-mono">{agent.api_key_prefix}••••</span></div>
                   <div>Total calls: <span className="text-slate-300">{agent.total_calls?.toLocaleString()}</span></div>
-                  <div>Last seen: <span className="text-slate-300">{agent.last_seen ? formatDistanceToNow(new Date(agent.last_seen), { addSuffix: true }) : 'never'}</span></div>
+                  <div>Last seen: <span className="text-slate-300">{agent.last_seen ? formatDistanceToNow(parseTimestamp(agent.last_seen) || new Date(), { addSuffix: true }) : 'never'}</span></div>
                   <div>Webhook: <span className="text-slate-300">{agent.webhook_url ? '✅ configured' : '—'}</span></div>
                   <div className="col-span-2">
                     Permissions: <span className="text-slate-300">
@@ -1323,7 +1324,7 @@ function IntegrationsTab() {
                           <span className="text-slate-300 flex-1 truncate">{call.endpoint}</span>
                           <span className="text-blueprint-muted">{call.duration_ms}ms</span>
                           <span className="text-blueprint-muted">
-                            {formatDistanceToNow(new Date(call.created_at), { addSuffix: true })}
+                            {formatDistanceToNow(parseTimestamp(call.created_at) || new Date(), { addSuffix: true })}
                           </span>
                         </div>
                       ))}

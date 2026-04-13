@@ -24,13 +24,23 @@ const VALID_TRANSITIONS = {
   deferred: ['proposed', 'rejected'],  // Brain may defer; resurface on schedule
 };
 
+function safeJSON(raw, fallback) {
+  if (raw == null) return fallback;
+  if (typeof raw === 'object') return raw;
+  try { return JSON.parse(raw); }
+  catch {
+    console.warn('[task-queue] Failed to parse JSON field, using fallback. Raw:', String(raw).slice(0, 120));
+    return fallback;
+  }
+}
+
 function parseRow(row) {
   if (!row) return null;
   return {
     ...row,
-    action_payload: row.action_payload ? JSON.parse(row.action_payload) : {},
-    outcome_data: row.outcome_data ? JSON.parse(row.outcome_data) : null,
-    rollback_data: row.rollback_data ? JSON.parse(row.rollback_data) : null,
+    action_payload: safeJSON(row.action_payload, {}),
+    outcome_data: safeJSON(row.outcome_data, null),
+    rollback_data: safeJSON(row.rollback_data, null),
   };
 }
 

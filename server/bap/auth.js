@@ -92,6 +92,11 @@ export function hasPermission(agent, permission, businessId = null) {
  * logs the call to bap_audit on response finish.
  */
 export async function bapAuth(req, res, next) {
+  // Admin UI routes are mounted alongside BAP on the same router but use
+  // session auth (isAuthenticated), not BAP-Key. Skip BAP auth for them so
+  // the Settings → External Agents page can load without a BAP key.
+  if (req.path.startsWith('/agents-admin')) return next();
+
   const rawKey =
     req.headers['bap-key'] ||
     req.headers['authorization']?.replace(/^Bearer\s+/i, '');

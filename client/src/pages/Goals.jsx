@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { Target, Plus, Sparkles, Check, X, Pause, Edit2, RefreshCw } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
@@ -30,7 +31,7 @@ const METRIC_OPTIONS = [
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '—' }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '—' }
 }
 
 function daysUntil(iso) {

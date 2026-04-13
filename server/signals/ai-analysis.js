@@ -406,11 +406,20 @@ Identify insights and proposed tasks based solely on this data.`;
 
     // 3. Parse JSON response — multi-strategy parser, robust against truncation,
     //    fenced code blocks, and prose-wrapped JSON.
-    const parsed = extractJSON(rawContent) ?? {
-      summary: 'Analysis failed to parse.',
-      health_score: null,
-      insights: [],
-    };
+    let parsed = extractJSON(rawContent);
+    if (!parsed) {
+      let summary;
+      if (!rawContent || rawContent.length === 0) {
+        summary = `The LLM returned an empty response. Check that your '${analysisProvider}' provider is configured correctly in Settings → Providers, and that the selected model is available.`;
+      } else {
+        summary = `The LLM responded but the output was not valid JSON. First 200 chars: ${rawContent.slice(0, 200)}`;
+      }
+      parsed = {
+        summary,
+        health_score: null,
+        insights: [],
+      };
+    }
 
     const insights = Array.isArray(parsed.insights) ? parsed.insights : [];
     const healthScore = parsed.health_score ?? null;

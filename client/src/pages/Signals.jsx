@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   RefreshCw, Check, Clock, Plus, X,
   Brain, Zap, TrendingUp, AlertTriangle,
@@ -65,7 +66,7 @@ function healthColor(score) {
 
 function fmt(dt) {
   if (!dt) return '—'
-  return formatDistanceToNow(new Date(dt), { addSuffix: true })
+  return formatDistanceToNow(parseTimestamp(dt) || new Date(), { addSuffix: true })
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -888,7 +889,7 @@ function SignalCard({ signal, onUpdate }) {
 function ClusterCard({ cluster, onDismiss, onUpdate }) {
   const [acting, setActing] = useState(false)
   const sev = SEVERITY_CONFIG[cluster.severity] ?? SEVERITY_CONFIG.warning
-  const age = formatDistanceToNow(new Date(cluster.created_at), { addSuffix: true })
+  const age = formatDistanceToNow(parseTimestamp(cluster.created_at) || new Date(), { addSuffix: true })
 
   async function handleDismiss() {
     setActing(true)

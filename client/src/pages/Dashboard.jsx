@@ -14,6 +14,7 @@ import {
   Plug,
 } from 'lucide-react'
 import { formatDistanceToNow, format, subDays } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import clsx from 'clsx'
 import {
   ResponsiveContainer,
@@ -143,7 +144,7 @@ function AgentRow({ agent }) {
         </div>
         {agent.last_run && (
           <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
-            {formatDistanceToNow(new Date(agent.last_run), { addSuffix: true })}
+            {formatDistanceToNow(parseTimestamp(agent.last_run) || new Date(), { addSuffix: true })}
           </span>
         )}
       </div>

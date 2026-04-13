@@ -2,12 +2,13 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { ChevronRight, ChevronLeft, Play, Settings } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import useStore from '../lib/store.js'
 import { getAgentStatuses, runAgent } from '../lib/api.js'
 
 function fmtRel(iso) {
   if (!iso) return ''
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '' }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '' }
 }
 
 function StatusDot({ status }) {

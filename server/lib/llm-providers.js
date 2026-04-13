@@ -179,16 +179,64 @@ export function listProviders() {
 // ─── Resolve provider + model from profile ────────────────────────────────────
 
 /**
+ * Returns true if the given provider has usable credentials (either in DB or
+ * environment, or is a keyless local provider like ollama/claude-cli).
+ */
+function isProviderConfigured(providerId) {
+  if (providerId === 'ollama' || providerId === 'lmstudio' || providerId === 'claude-cli') {
+    return true; // local / CLI — no key required
+  }
+  const creds = getProviderCredentials(providerId);
+  if (creds?.apiKey || creds?.baseUrl) return true;
+  if (providerId === 'anthropic' && process.env.ANTHROPIC_API_KEY) return true;
+  if (providerId === 'openai' && process.env.OPENAI_API_KEY) return true;
+  if (providerId === 'google' && process.env.GOOGLE_API_KEY) return true;
+  return false;
+}
+
+/**
+ * Pick a provider that IS configured. Honours 'llm_default_provider' setting
+ * first, then falls back to the first provider with credentials. Never returns
+ * 'anthropic' unless it actually has a key.
+ */
+function pickConfiguredProvider() {
+  const stored = db.prepare("SELECT value FROM settings WHERE key = 'llm_default_provider'").get();
+  if (stored?.value) {
+    try {
+      const { provider } = JSON.parse(stored.value);
+      if (provider && isProviderConfigured(provider)) return provider;
+    } catch {}
+  }
+  if (process.env.LLM_DEFAULT_PROVIDER && isProviderConfigured(process.env.LLM_DEFAULT_PROVIDER)) {
+    return process.env.LLM_DEFAULT_PROVIDER;
+  }
+  for (const p of PROVIDERS_CATALOG) {
+    if (isProviderConfigured(p.id)) return p.id;
+  }
+  return null;
+}
+
+const DEFAULT_MODEL_BY_PROVIDER = {
+  anthropic: 'claude-sonnet-4-20250514',
+  'claude-cli': 'claude-sonnet-4-20250514',
+  openai: 'gpt-4o-mini',
+  google: 'gemini-1.5-flash',
+  ollama: 'llama3',
+  lmstudio: 'local-model',
+  custom: 'custom',
+};
+
+/**
  * Given a profile's llm config, return { providerId, model, temperature, max_tokens }.
- * Falls back to env ANTHROPIC_API_KEY if anthropic creds not stored.
+ * Falls back to ANY configured provider if the requested one has no credentials.
  */
 export function resolveProfileLLM(profileLLM) {
-  const providerId = profileLLM?.provider ?? 'anthropic';
-  const model = profileLLM?.model ?? 'claude-sonnet-4-20250514';
+  let providerId = profileLLM?.provider ?? 'anthropic';
+  let model = profileLLM?.model ?? DEFAULT_MODEL_BY_PROVIDER[providerId] ?? 'claude-sonnet-4-20250514';
   const temperature = profileLLM?.temperature ?? 0.7;
   const max_tokens = profileLLM?.max_tokens ?? 4096;
 
-  // For anthropic, inject env key if not stored in DB
+  // Inject ANTHROPIC_API_KEY from env into DB if anthropic was requested
   if (providerId === 'anthropic') {
     const creds = getProviderCredentials('anthropic');
     if (!creds?.apiKey && process.env.ANTHROPIC_API_KEY) {
@@ -196,9 +244,18 @@ export function resolveProfileLLM(profileLLM) {
     }
   }
 
-  // claude-cli needs no credentials — it uses the Claude Code CLI auth
-  if (providerId === 'claude-cli') {
-    return { providerId, model, temperature, max_tokens };
+  // If the requested provider is not configured, fall back to one that is.
+  if (!isProviderConfigured(providerId)) {
+    const fallback = pickConfiguredProvider();
+    if (fallback && fallback !== providerId) {
+      console.warn(`[llm] Requested provider '${providerId}' has no credentials — falling back to '${fallback}'.`);
+      providerId = fallback;
+      // If the caller pinned a model that only makes sense for the original
+      // provider, swap to a sensible default for the fallback provider.
+      if (!profileLLM?.model || profileLLM.provider !== providerId) {
+        model = DEFAULT_MODEL_BY_PROVIDER[providerId] ?? model;
+      }
+    }
   }
 
   return { providerId, model, temperature, max_tokens };

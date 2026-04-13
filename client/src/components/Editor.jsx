@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import {
@@ -72,6 +72,19 @@ function Editor({ content = '', onChange, readOnly = false, placeholder = 'Start
       },
     },
   })
+
+  // TipTap's useEditor only consumes `content` on initial mount. When the
+  // parent swaps which document is selected, we need to explicitly reset the
+  // editor's content — otherwise the second doc the user clicks never appears.
+  useEffect(() => {
+    if (!editor) return
+    // Avoid a feedback loop: only sync when the incoming prop differs from
+    // what the editor currently has.
+    const current = editor.getHTML()
+    if (content !== current) {
+      editor.commands.setContent(content || '', false)
+    }
+  }, [content, editor])
 
   function toggleMarkdown() {
     if (!editor) return

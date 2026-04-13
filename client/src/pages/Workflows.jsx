@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import {
   GitBranch, Play, Edit2, Plus, Sparkles, Clock, Check, X,
   ArrowRight, Lock, PauseCircle, AlertCircle, Trash2,
@@ -19,7 +20,7 @@ const AVAILABLE_AGENTS = [
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) } catch { return '—' }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '—' }
 }
 
 function StatusBadge({ status }) {

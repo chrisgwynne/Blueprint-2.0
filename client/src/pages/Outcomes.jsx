@@ -4,6 +4,7 @@ import {
   CartesianGrid, Scatter, ReferenceDot,
 } from 'recharts'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { Target, TrendingUp, TrendingDown, ArrowRight, Circle } from 'lucide-react'
 import useStore from '../lib/store.js'
 import { getOutcomes, getAgentOutcomePerformance, getOutcomeTimeline } from '../lib/api.js'
@@ -26,7 +27,7 @@ const METRIC_OPTIONS = [
 
 function fmtRel(iso) {
   if (!iso) return '—'
-  try { return formatDistanceToNow(new Date(iso), { addSuffix: true }) }
+  try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) }
   catch { return '—' }
 }
 

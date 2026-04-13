@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import { Check, X, ChevronDown, ChevronUp, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -59,7 +60,7 @@ function TaskCard({ task, isDragging = false, onUpdate }) {
 
   const isExecuting = task.status === 'executing'
   const age = task.created_at
-    ? formatDistanceToNow(new Date(task.created_at), { addSuffix: true })
+    ? formatDistanceToNow(parseTimestamp(task.created_at) || new Date(), { addSuffix: true })
     : '—'
 
   async function handleApprove() {

@@ -14,6 +14,7 @@ import {
   Brain, Clock, Check, ExternalLink,
 } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
+import { parseTimestamp } from '../lib/time.js'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import Editor from '../components/Editor.jsx'
@@ -34,7 +35,7 @@ const SPECIAL_FILE_ICONS = {
 
 function fmt(dt) {
   if (!dt) return '—'
-  try { return formatDistanceToNow(new Date(dt), { addSuffix: true }) }
+  try { return formatDistanceToNow(parseTimestamp(dt) || new Date(), { addSuffix: true }) }
   catch { return '—' }
 }
 
