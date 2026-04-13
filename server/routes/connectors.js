@@ -237,6 +237,23 @@ router.post('/:id/sync', async (req, res) => {
         db.prepare(`UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?`).run(row.id);
         console.log(`[connectors] Sync complete for ${row.name}`);
 
+        // Record this sync so readiness checks can see it
+        try {
+          db.prepare(
+            `INSERT INTO connector_syncs (id, connector_id, status, created_at)
+             VALUES (lower(hex(randomblob(16))), ?, 'complete', CURRENT_TIMESTAMP)`
+          ).run(row.id);
+        } catch {}
+
+        // Post-sync orchestration: promote pending agents, hiring analysis,
+        // queue data-ready agent runs. Fire-and-forget — sync is done.
+        try {
+          const { onConnectorSyncSuccess } = await import('../connectors/post-sync.js');
+          onConnectorSyncSuccess(row.type, row.business_id);
+        } catch (err) {
+          console.warn('[connectors] post-sync hook failed:', err.message);
+        }
+
         // Run signal engine
         try {
           const { runSignalEngine } = await import('../signals/signal-engine.js');

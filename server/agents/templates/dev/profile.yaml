@@ -1,11 +1,10 @@
 id: dev
-name: "Dev"
-title: "Technical Implementation & GitHub"
-avatar: "⚙️"
-version: "1.0.0"
+name: Dev
+title: Technical Implementation & GitHub
+avatar: ⚙️
+version: 1.0.0
 status: active
-created_at: "2026-01-01"
-
+created_at: '2026-01-01'
 llm:
   provider: anthropic
   model: claude-sonnet-4-20250514
@@ -13,20 +12,22 @@ llm:
   max_tokens: 3000
   fallback_provider: ollama
   fallback_model: gemma3:12b
-  cost_cap_daily_usd: 1.00
-
-connectors_required: []
+  cost_cap_daily_usd: 1
+connectors_required:
+  - github
 connectors_optional: []
-
 schedule:
   - id: daily-issue-triage
-    cron: "0 9 * * 1-5"
-    task: "Review pending technical tasks in the queue. For each task requiring a GitHub issue or technical implementation brief, produce the technical specification. Triage by priority and dependency order."
-
+    cron: 0 9 * * 1-5
+    task: >-
+      Review pending technical tasks in the queue. For each task requiring a GitHub issue or
+      technical implementation brief, produce the technical specification. Triage by priority and
+      dependency order.
 trust_tier: yellow
 approval_mode: requires_approval
-
 notification_channels:
   - dashboard
-
 memory_docs: []
+required_connectors:
+  - github
+preferred_connectors: []

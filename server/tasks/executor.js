@@ -34,6 +34,7 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'shopify_meta_update',
   'shopify_collection_update',
   'shopify_tag_update',
+  'hire_agent',
 ]);
 
 export function isExecutable(actionType) {
@@ -441,6 +442,47 @@ export async function rollbackTask(taskId) {
   throw new Error(`Unknown rollback action: ${rollback.action}`);
 }
 
+// ─── Agent hire action ────────────────────────────────────────────────────────
+
+/**
+ * Install a specialist agent from a template. Created by Conductor via
+ * analyseAndProposeHires() when connector data justifies it; this executor
+ * runs after a human approves the hire proposal.
+ *
+ * action_payload: { template_id: string }
+ */
+async function executeHireAgent(task) {
+  const payload = task.action_payload ?? {};
+  const templateId = payload.template_id;
+  if (!templateId) throw new Error('hire_agent requires action_payload.template_id');
+
+  const { installAgent } = await import('../agents/installer.js');
+  const result = installAgent(templateId, task.business_id, 'human');
+
+  // Fire-and-forget first run if ready — gives the "wow" moment post-approval.
+  if (result.status === 'active') {
+    (async () => {
+      try {
+        const { runAgent } = await import('../agents/agent-runner.js');
+        await runAgent(templateId, task.business_id, 'post_hire_initial_run', task.id);
+      } catch (err) {
+        console.warn(`[hire_agent] post-hire run of ${templateId} failed:`, err.message);
+      }
+    })();
+  }
+
+  return {
+    outcome: result.status === 'active'
+      ? `Hired ${templateId}. Running initial analysis now.`
+      : `Hired ${templateId}. Waiting for: ${(result.readiness.missing_required || []).join(', ') || 'required connectors'} before first run.`,
+    outcome_data: {
+      agent_id: templateId,
+      status: result.status,
+      readiness: result.readiness,
+    },
+  };
+}
+
 // ─── Main entrypoint ──────────────────────────────────────────────────────────
 
 /**
@@ -501,6 +543,7 @@ export async function executeTask(taskId) {
       case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task); break;
       case 'shopify_collection_update': result = await executeShopifyCollectionUpdate(task); break;
       case 'shopify_tag_update':        result = await executeShopifyTagUpdate(task); break;
+      case 'hire_agent':                result = await executeHireAgent(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }

@@ -330,7 +330,15 @@ export default function Agents() {
     return a.name.localeCompare(b.name)
   })
 
-  const activeCount = agents.filter(a => a.status === 'active' || a.status === 'running').length
+  // Lifecycle buckets:
+  //   active  — installed, connectors ready, running normally
+  //   pending — installed, waiting for a required connector
+  //   retired — archived
+  const activeAgents = sortedAgents.filter(a => a.status === 'active' || a.status === 'running')
+  const pendingAgents = sortedAgents.filter(a => a.status === 'pending')
+  const pausedAgents = sortedAgents.filter(a => a.status === 'paused' || a.status === 'disabled')
+  const retiredAgents = sortedAgents.filter(a => a.status === 'retired')
+  const activeCount = activeAgents.length
 
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1400, margin: '0 auto' }}>
@@ -389,14 +397,73 @@ export default function Agents() {
         </div>
       )}
 
-      {/* Installed agents */}
-      {!loading && sortedAgents.length > 0 && (
+      {/* Active agents */}
+      {!loading && activeAgents.length > 0 && (
         <>
           <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 12 }}>
-            Installed — {sortedAgents.length} agent{sortedAgents.length !== 1 ? 's' : ''}
+            Active — {activeAgents.length} agent{activeAgents.length !== 1 ? 's' : ''}
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginBottom: 36 }}>
-            {sortedAgents.map(agent => (
+            {activeAgents.map(agent => (
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                onNavigate={(id) => navigate(`/agents/${id}`)}
+                onRun={handleRun}
+                onToggle={handleToggle}
+              />
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Pending agents — installed but waiting for a required connector */}
+      {!loading && pendingAgents.length > 0 && (
+        <>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 12 }}>
+            Pending — {pendingAgents.length} agent{pendingAgents.length !== 1 ? 's' : ''} waiting for connectors
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginBottom: 36 }}>
+            {pendingAgents.map(agent => {
+              const required = agent.connectors_required ?? agent.required_connectors ?? []
+              return (
+                <div key={agent.id} className="bp-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(250,204,21,0.12)', color: 'var(--bp-amber)', fontSize: 16 }}>
+                      {agent.avatar ?? '⏳'}
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 13 }}>{agent.name}</div>
+                      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-amber)' }}>Pending — waiting for connector</div>
+                    </div>
+                  </div>
+                  <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+                    {required.length > 0
+                      ? <>Requires <strong>{required.join(', ')}</strong>. Connect {required.length > 1 ? 'these connectors' : 'it'} and this agent activates automatically.</>
+                      : 'Waiting for initial readiness check.'}
+                  </div>
+                  <button
+                    onClick={() => navigate('/connectors')}
+                    className="bp-btn bp-btn-secondary"
+                    style={{ fontSize: 11, alignSelf: 'flex-start' }}
+                  >
+                    Go to Connectors →
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Paused agents (if any) */}
+      {!loading && pausedAgents.length > 0 && (
+        <>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 12 }}>
+            Paused — {pausedAgents.length}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, marginBottom: 36 }}>
+            {pausedAgents.map(agent => (
               <AgentCard
                 key={agent.id}
                 agent={agent}
@@ -414,7 +481,7 @@ export default function Agents() {
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
             <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
-              Available Templates — {uninstalledTemplates.length}
+              Available to hire — {uninstalledTemplates.length}
             </div>
             <div style={{ flex: 1, height: 1, background: 'var(--bp-border)' }} />
           </div>

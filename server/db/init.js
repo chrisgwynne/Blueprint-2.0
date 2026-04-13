@@ -61,46 +61,23 @@ function seedSettings() {
 }
 
 function seedAgentProfiles() {
-  // All 12 agents — core 4 pre-installed, rest available as templates
-  const agents = [
-    // ── Core agents (pre-installed) ──────────────────────────────────────────
-    { id: 'conductor',     name: 'Conductor',     core: true  },
-    { id: 'seo-sentinel',  name: 'SEO Sentinel',  core: true  },
-    { id: 'quill',         name: 'Quill',         core: true  },
-    { id: 'trend-spotter', name: 'Trend Spotter', core: true  },
-    // ── Optional agents (install from templates) ─────────────────────────────
-    { id: 'velocity',      name: 'Velocity',      core: false },
-    { id: 'ledger',        name: 'Ledger',        core: false },
-    { id: 'merchant',      name: 'Merchant',      core: false },
-    { id: 'sentinel',      name: 'Sentinel',      core: false },
-    { id: 'researcher',    name: 'Researcher',    core: false },
-    { id: 'reporter',      name: 'Reporter',      core: false },
-    { id: 'dev',           name: 'Dev',           core: false },
-    { id: 'outreach',      name: 'Outreach',      core: false },
-  ];
-
+  // Only Conductor is seeded on fresh install. Every other agent must be
+  // explicitly hired through the Conductor hiring flow once its required
+  // connectors are connected. Seeding speculative agents caused them to run
+  // against empty data and pollute the KB.
   const upsert = db.prepare(`
     INSERT INTO agents (id, profile_path, name, status, created_at)
     VALUES (?, ?, ?, 'active', CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO NOTHING
   `);
-
-  const seedAll = db.transaction(() => {
-    for (const agent of agents) {
-      upsert.run(
-        agent.id,
-        `server/agents/${agent.id}/profile.yaml`,
-        agent.name,
-      );
-    }
-  });
-
-  seedAll();
-  console.log('[db:init] Agent profiles seeded (12 total).');
+  upsert.run('conductor', 'server/agents/conductor/profile.yaml', 'Conductor');
+  console.log('[db:init] Conductor seeded (only agent on fresh install).');
 }
 
 function preInstallCoreAgents() {
-  const coreAgents = ['conductor', 'seo-sentinel', 'quill', 'trend-spotter'];
+  // Only Conductor is pre-installed. Templates remain available for hiring
+  // via installAgent() once Conductor recommends them.
+  const coreAgents = ['conductor'];
 
   for (const agentId of coreAgents) {
     const liveDir = join(AGENTS_DIR, agentId);

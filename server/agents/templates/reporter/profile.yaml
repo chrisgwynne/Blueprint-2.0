@@ -1,30 +1,24 @@
 id: reporter
-name: "Reporter"
-title: "Business Intelligence Briefing Specialist"
-avatar: "📰"
-version: "1.0.0"
+name: Reporter
+title: Business Intelligence Briefing Specialist
+avatar: 📰
+version: 1.0.0
 status: active
-created_at: "2026-01-01"
-
+created_at: '2026-01-01'
 llm:
   provider: claude-cli
   model: claude-sonnet-4-20250514
   temperature: 0.4
   max_tokens: 8192
-  cost_cap_daily_usd: 2.00
-
+  cost_cap_daily_usd: 2
 connectors_required: []
 connectors_optional:
-  - gsc
   - ga4
   - shopify
-  - pagespeed
   - stripe
-  - uptimerobot
-
 scheduled_jobs:
   - id: weekly-monday-briefing
-    cron: "0 7 * * 1"
+    cron: 0 7 * * 1
     task: |
       Generate weekly business performance briefing.
       Structure:
@@ -36,21 +30,22 @@ scheduled_jobs:
       6. Coming week priorities: exactly 3, no more
       7. Cost summary: LLM spend this week
       Keep under 600 words. Lead with what matters most.
-
   - id: monthly-deep-report
-    cron: "0 8 1 * *"
+    cron: 0 8 1 * *
     task: |
       Generate monthly business analysis report.
       Month vs previous month. Trend lines for key metrics.
       Agent performance review (acceptance rate, outcome rate).
       KB health. Cost breakdown by agent. Strategic observations.
       File the report to KB under reports/monthly-{date}.md
-
 trust_tier: green
 approval_mode: auto
-
 notification_channels:
   - dashboard
   - telegram
-
 memory_docs: []
+required_connectors: []
+preferred_connectors:
+  - ga4
+  - shopify
+  - stripe

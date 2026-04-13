@@ -22,6 +22,28 @@ function agentLiveDir(agentId) {
   return join(AGENTS_DIR, agentId);
 }
 
+/**
+ * Record a skipped run in agent_runs. Skipped runs are purely observational —
+ * they never create signals, tasks, KB entries, or notifications. The row
+ * exists so /agents/status and /system-health can show "ran but skipped
+ * because GSC hasn't synced yet", and audits can reconstruct intent.
+ */
+function recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, reason) {
+  try {
+    db.prepare(`
+      INSERT INTO agent_runs (
+        id, agent_id, business_id, trigger, trigger_id,
+        status, reasoning, started_at, completed_at,
+        prompt_tokens, completion_tokens, cost_usd,
+        signals_detected, tasks_proposed
+      ) VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0)
+    `).run(runId, agentId, businessId, trigger, triggerId, reason, startedAt);
+  } catch (err) {
+    console.warn(`[agent-runner] Failed to record skipped run for '${agentId}':`, err.message);
+  }
+  console.log(`[agent-runner] Skipped '${agentId}' — ${reason}`);
+}
+
 function loadProfile(agentId) {
   const dir = agentLiveDir(agentId);
   const profilePath = join(dir, 'profile.yaml');
@@ -509,7 +531,32 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   // 1. Load agent from DB
   const agentRow = db.prepare('SELECT * FROM agents WHERE id = ?').get(agentId);
   if (!agentRow) throw new Error(`Agent '${agentId}' not found in database.`);
-  if (agentRow.status !== 'active') throw new Error(`Agent '${agentId}' is not active (status: ${agentRow.status}).`);
+
+  // 1a. Soft-skip if agent is not active (pending, paused, retired). We used
+  // to throw here, but throwing from the scheduler would surface as a
+  // notification — pending/paused agents should simply not run quietly.
+  if (agentRow.status !== 'active') {
+    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt,
+      `Agent status is '${agentRow.status}'; only 'active' agents run.`);
+    return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: `status_${agentRow.status}` };
+  }
+
+  // 1b. Readiness gate — required connectors must be connected AND have
+  // synced at least once within the staleness window. If not ready, record
+  // a skipped run and return. Do NOT file to KB, create signals, or tasks.
+  const { checkAgentReadiness } = await import('./readiness.js');
+  const readiness = checkAgentReadiness(agentId, businessId);
+  if (!readiness.ready) {
+    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason);
+    return {
+      runId,
+      tasksProposed: 0,
+      signalsDetected: 0,
+      skipped: true,
+      reason: readiness.status,
+      readiness,
+    };
+  }
 
   // 2. Load profile (live dir → canonical profiles/ → legacy DB profile_path)
   let profile;

@@ -5,7 +5,7 @@
  */
 import React, { useState, useEffect } from 'react'
 import {
-  ArrowRight, ArrowLeft, Zap, Search, ShoppingBag, Check, Bot,
+  ArrowRight, ArrowLeft, Zap, Search, ShoppingBag, Check, Bot, Clock,
   RefreshCw, Send, X, ExternalLink,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -288,44 +288,58 @@ export default function Onboarding({ onComplete }) {
           </div>
         )}
 
-        {/* ── STEP 3: Enable agents ────────────────────────────────────── */}
+        {/* ── STEP 3: How agents work ──────────────────────────────────── */}
         {step === 3 && (
           <div>
             <h2 style={{ fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 20, color: 'var(--bp-text)', margin: '0 0 4px' }}>
-              Enable your AI agents
+              Your AI team
             </h2>
-            <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 6 }}>
-              Conductor runs automatically. Select additional specialists.
+            <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 16 }}>
+              Blueprint hires specialists for you based on the data you connect — no speculation.
             </p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8, marginTop: 16 }}>
-              {agents.filter((a) => ['conductor', 'seo-sentinel', 'quill', 'trend-spotter'].includes(a.id)).map((agent) => {
-                const checked = enabledAgents.has(agent.id)
-                const isCondutor = agent.id === 'conductor'
-                return (
-                  <label key={agent.id} className={clsx('bp-card cursor-pointer', checked && 'border-blueprint-blue/50')} style={{ padding: 12, display: 'flex', alignItems: 'start', gap: 8 }}>
-                    <input type="checkbox" checked={checked} disabled={isCondutor} onChange={() => {
-                      if (isCondutor) return
-                      setEnabledAgents((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(agent.id)) next.delete(agent.id)
-                        else next.add(agent.id)
-                        return next
-                      })
-                    }} style={{ marginTop: 2 }} />
-                    <div>
-                      <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 12, color: 'var(--bp-text)' }}>
-                        {agent.name} {isCondutor && <span style={{ fontSize: 9, color: 'var(--bp-text-3)' }}>(always on)</span>}
-                      </div>
-                    </div>
-                  </label>
-                )
-              })}
+            <div className="bp-card" style={{ padding: 14, marginBottom: 10, display: 'flex', gap: 10 }}>
+              <Bot size={18} style={{ color: 'var(--bp-blue)', flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+                  Conductor is always on
+                </div>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+                  The Conductor orchestrates everything. It watches every connector sync and
+                  proposes hiring a specialist agent when it spots useful data — for example,
+                  hiring the Merchant agent after you connect Shopify, or the SEO Sentinel
+                  once Search Console is live.
+                </div>
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+            <div className="bp-card" style={{ padding: 14, marginBottom: 10, display: 'flex', gap: 10 }}>
+              <Check size={18} style={{ color: 'var(--bp-green)', flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+                  Hires appear in your Tasks inbox
+                </div>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+                  Each hire is a proposed task with Conductor's reasoning. One click approves
+                  the hire, the agent runs its first analysis, and its findings show up on
+                  your dashboard.
+                </div>
+              </div>
+            </div>
+            <div className="bp-card" style={{ padding: 14, marginBottom: 16, display: 'flex', gap: 10 }}>
+              <Clock size={18} style={{ color: 'var(--bp-amber)', flexShrink: 0, marginTop: 1 }} />
+              <div>
+                <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+                  No connectors = no agents
+                </div>
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+                  An agent only runs once the data it depends on is connected and syncing.
+                  You'll never see agents producing findings from absent data.
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={() => setStep(2)} className="bp-btn bp-btn-ghost text-xs"><ArrowLeft size={12} /> Back</button>
-              <button onClick={handleEnableAgents} disabled={saving} className="bp-btn bp-btn-primary text-xs ml-auto" style={{ padding: '10px 24px' }}>
-                {saving ? <RefreshCw size={12} className="animate-spin" /> : <Bot size={12} />}
-                Enable agents <ArrowRight size={12} />
+              <button onClick={() => setStep(4)} className="bp-btn bp-btn-primary text-xs ml-auto" style={{ padding: '10px 24px' }}>
+                Got it <ArrowRight size={12} />
               </button>
             </div>
           </div>

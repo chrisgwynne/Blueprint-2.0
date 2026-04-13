@@ -406,6 +406,52 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 }
 
+// ─── One-off data migration: agent lifecycle redesign ───────────────────────
+// Marks non-conductor agents as 'pending' if their required connectors have
+// never successfully synced, so they don't keep running against absent data
+// and polluting the KB. Idempotent via a marker in settings.
+(function applyAgentLifecycleMigration() {
+  try {
+    const marker = db.prepare(
+      "SELECT value FROM settings WHERE key = 'migration_agent_lifecycle_v1'"
+    ).get();
+    if (marker) return;
+
+    const nonConductor = db.prepare(
+      "SELECT id FROM agents WHERE id != 'conductor' AND status = 'active'"
+    ).all();
+
+    let reset = 0;
+    for (const row of nonConductor) {
+      // Has this agent's agent_runs ever produced tasks or signals? If yes
+      // we preserve 'active' — it has presumably been running productively.
+      // If it has only produced zeros, reset to 'pending' so the new
+      // readiness gate controls whether it runs.
+      const productiveRun = db.prepare(
+        `SELECT 1 FROM agent_runs
+         WHERE agent_id = ? AND status = 'complete'
+           AND (COALESCE(tasks_proposed, 0) > 0 OR COALESCE(signals_detected, 0) > 0)
+         LIMIT 1`
+      ).get(row.id);
+      if (productiveRun) continue;
+
+      db.prepare("UPDATE agents SET status = 'pending' WHERE id = ?").run(row.id);
+      reset++;
+    }
+
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES ('migration_agent_lifecycle_v1', ?, CURRENT_TIMESTAMP)`
+    ).run(JSON.stringify({ ran_at: new Date().toISOString(), non_conductor_reset: reset }));
+
+    if (reset > 0) {
+      console.log(`[db] Agent lifecycle migration: reset ${reset} unproductive agents to 'pending'.`);
+    }
+  } catch (err) {
+    console.warn('[db] agent lifecycle migration skipped:', err.message);
+  }
+})();
+
 export function generateId() {
   return crypto.randomUUID();
 }

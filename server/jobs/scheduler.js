@@ -137,6 +137,15 @@ async function syncConnector(connector) {
         .run(Date.now() - syncStart, syncId);
     } catch {}
 
+    // Post-sync orchestration: promote pending agents, hiring analysis,
+    // queue data-ready agent runs.
+    try {
+      const { onConnectorSyncSuccess } = await import('../connectors/post-sync.js');
+      onConnectorSyncSuccess(connector.type, connector.business_id);
+    } catch (err) {
+      console.warn(`[scheduler] post-sync hook failed for '${connector.name}':`, err.message);
+    }
+
     return { ok: true, newSignals };
   } catch (err) {
     // Update connector_syncs on failure
