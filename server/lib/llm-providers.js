@@ -13,6 +13,7 @@ import * as ollamaProvider from './providers/ollama.js';
 import * as lmstudioProvider from './providers/lmstudio.js';
 import * as customProvider from './providers/custom.js';
 import * as claudeCliProvider from './providers/claude-cli.js';
+import * as minimaxProvider from './providers/minimax.js';
 
 // ─── Provider Catalog ─────────────────────────────────────────────────────────
 
@@ -82,6 +83,15 @@ export const PROVIDERS_CATALOG = [
     requires_base_url: false,
     default_models: claudeCliProvider.KNOWN_MODELS,
     adapter: claudeCliProvider,
+  },
+  {
+    id: 'minimax',
+    name: 'MiniMax',
+    description: 'MiniMax-M2, M1, abab models (OpenAI-compatible endpoint)',
+    requires_key: true,
+    requires_base_url: false,
+    default_models: minimaxProvider.KNOWN_MODELS,
+    adapter: minimaxProvider,
   },
 ];
 
@@ -191,6 +201,7 @@ function isProviderConfigured(providerId) {
   if (providerId === 'anthropic' && process.env.ANTHROPIC_API_KEY) return true;
   if (providerId === 'openai' && process.env.OPENAI_API_KEY) return true;
   if (providerId === 'google' && process.env.GOOGLE_API_KEY) return true;
+  if (providerId === 'minimax' && process.env.MINIMAX_API_KEY) return true;
   return false;
 }
 
@@ -224,6 +235,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   ollama: 'llama3',
   lmstudio: 'local-model',
   custom: 'custom',
+  minimax: 'MiniMax-M2',
 };
 
 /**

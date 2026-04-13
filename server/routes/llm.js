@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import {
   listProviders,
@@ -10,6 +11,46 @@ import {
 
 const router = Router();
 router.use(isAuthenticated);
+
+/**
+ * GET /api/llm/default
+ * Returns the currently-default provider id (used when an agent profile
+ * doesn't pin a specific provider).
+ */
+router.get('/default', (req, res) => {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'llm_default_provider'").get();
+    let provider = null;
+    try { provider = row?.value ? JSON.parse(row.value).provider ?? null : null; } catch {}
+    res.json({ provider });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/llm/default
+ * Body: { provider: string }
+ * Sets the default LLM provider used as fallback when an agent profile
+ * doesn't specify one (or specifies one with no credentials).
+ */
+router.put('/default', (req, res) => {
+  try {
+    const { provider } = req.body ?? {};
+    if (!provider) return res.status(400).json({ error: 'provider required' });
+    if (!PROVIDERS_CATALOG.find((p) => p.id === provider)) {
+      return res.status(404).json({ error: `Unknown provider '${provider}'` });
+    }
+    db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES ('llm_default_provider', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `).run(JSON.stringify({ provider }));
+    res.json({ ok: true, provider });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 /**
  * GET /api/llm/providers

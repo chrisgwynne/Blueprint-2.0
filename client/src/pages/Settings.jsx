@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -633,49 +633,32 @@ function ProviderCard({ provider, isDefault, onUpdate, onDelete, onSetDefault })
   )
 }
 
-function LLMTab() {
-  const currentBusiness = useStore((s) => s.currentBusiness)
-  const setCurrentBusiness = useStore((s) => s.setCurrentBusiness)
+function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
   const addNotification = useStore((s) => s.addNotification)
+  const [apiKey, setApiKey] = useState('')
+  const [baseUrl, setBaseUrl] = useState('')
+  const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState(null)
 
-  const [providers, setProviders] = useState(() => {
-    const saved = currentBusiness?.settings?.llm?.providers
-    return saved || [{ id: 'default', type: 'claude-cli', label: 'Claude CLI' }]
-  })
-  const [defaultId, setDefaultId] = useState(() => {
-    return currentBusiness?.settings?.llm?.defaultId || 'default'
-  })
-  const [showAddMenu, setShowAddMenu] = useState(false)
-
-  function addProvider(type) {
-    const tmpl = PROVIDER_TEMPLATES.find((t) => t.type === type)
-    const id = `${type}_${Date.now()}`
-    setProviders((prev) => [...prev, { id, type, label: tmpl.label, model: tmpl.models[0] || '' }])
-    setShowAddMenu(false)
-  }
-
-  function updateProvider(id, patch) {
-    setProviders((prev) => prev.map((p) => p.id === id ? { ...p, ...patch } : p))
-  }
-
-  function deleteProvider(id) {
-    setProviders((prev) => {
-      const next = prev.filter((p) => p.id !== id)
-      if (defaultId === id && next.length > 0) setDefaultId(next[0].id)
-      return next
-    })
-  }
+  const needsKey = provider.id !== 'ollama' && provider.id !== 'lmstudio' && provider.id !== 'claude-cli'
+  const needsBaseUrl = provider.id === 'ollama' || provider.id === 'lmstudio' || provider.id === 'custom'
 
   async function handleSave() {
-    if (!currentBusiness?.id) return
     setSaving(true)
     try {
-      const updated = await updateBusiness(currentBusiness.id, {
-        settings: { ...currentBusiness.settings, llm: { providers, defaultId } },
-      })
-      setCurrentBusiness(updated)
-      addNotification({ type: 'success', message: 'LLM settings saved' })
+      const body = {}
+      if (apiKey.trim()) body.apiKey = apiKey.trim()
+      if (baseUrl.trim()) body.baseUrl = baseUrl.trim()
+      if (Object.keys(body).length === 0) {
+        addNotification({ type: 'warning', message: 'Enter an API key or base URL first.' })
+        return
+      }
+      await saveLLMCredentials(provider.id, body)
+      setApiKey('')
+      addNotification({ type: 'success', message: `${provider.name} saved.` })
+      onSaved?.()
     } catch (err) {
       addNotification({ type: 'error', message: err.message })
     } finally {
@@ -683,49 +666,156 @@ function LLMTab() {
     }
   }
 
+  async function handleTest() {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const body = {}
+      if (apiKey.trim()) body.apiKey = apiKey.trim()
+      if (baseUrl.trim()) body.baseUrl = baseUrl.trim()
+      const r = await testLLMCredentials(provider.id, body)
+      setTestResult({ ok: !!r?.ok, message: r?.message || (r?.ok ? 'OK' : 'Failed') })
+    } catch (err) {
+      setTestResult({ ok: false, message: err.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
   return (
-    <div className="space-y-4">
-      <Section title="LLM Providers" description="Configure AI providers used by Blueprint agents">
-        <div className="space-y-3">
-          {providers.map((p) => (
-            <ProviderCard
-              key={p.id}
-              provider={p}
-              isDefault={p.id === defaultId}
-              onUpdate={(patch) => updateProvider(p.id, patch)}
-              onDelete={() => deleteProvider(p.id)}
-              onSetDefault={() => setDefaultId(p.id)}
-            />
-          ))}
+    <div className="bp-card p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-slate-100">{provider.name}</span>
+            {provider.configured && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blueprint-green/15 text-blueprint-green font-mono">configured</span>
+            )}
+            {isDefault && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blueprint-blue/15 text-blueprint-blue font-mono">DEFAULT</span>
+            )}
+          </div>
+          <p className="text-xs text-blueprint-muted mt-0.5">{provider.description}</p>
         </div>
-
-        <div className="relative">
-          <button
-            onClick={() => setShowAddMenu(!showAddMenu)}
-            className="bp-btn bp-btn-secondary text-xs w-full"
-          >
-            <Plus size={13} />
-            Add Provider
+        {provider.configured && !isDefault && (
+          <button onClick={() => onSetDefault(provider.id)} className="bp-btn bp-btn-secondary text-xs">
+            Make default
           </button>
-          {showAddMenu && (
-            <div className="absolute top-full mt-1 left-0 right-0 bg-blueprint-card border border-blueprint-border rounded shadow-lg z-10 py-1">
-              {PROVIDER_TEMPLATES.map((t) => (
-                <button
-                  key={t.type}
-                  onClick={() => addProvider(t.type)}
-                  className="w-full text-left px-3 py-2 text-xs text-slate-300 hover:bg-blueprint-border transition-colors"
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        )}
+      </div>
 
+      {needsKey && (
+        <div>
+          <label className="block text-xs text-blueprint-muted mb-1">
+            API Key {provider.configured && <span className="text-blueprint-muted/60">(leave blank to keep existing)</span>}
+          </label>
+          <div className="relative">
+            <input
+              type={showKey ? 'text' : 'password'}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              className="bp-input pr-10"
+              placeholder={provider.configured ? '••••••••••••' : 'Paste your API key'}
+            />
+            <button
+              type="button"
+              onClick={() => setShowKey((v) => !v)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-blueprint-muted hover:text-slate-200"
+              tabIndex={-1}
+            >
+              {showKey ? <EyeOff size={14}/> : <Eye size={14}/>}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {needsBaseUrl && (
+        <div>
+          <label className="block text-xs text-blueprint-muted mb-1">
+            Base URL {!provider.configured && <span className="text-blueprint-muted/60">(optional unless overriding default)</span>}
+          </label>
+          <input
+            type="url"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            className="bp-input"
+            placeholder={provider.id === 'ollama' ? 'http://localhost:11434' : provider.id === 'lmstudio' ? 'http://localhost:1234/v1' : 'https://...'}
+          />
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
         <button onClick={handleSave} disabled={saving} className="bp-btn bp-btn-primary text-xs">
           <Save size={12} />
           {saving ? 'Saving…' : 'Save'}
         </button>
+        {needsKey && (
+          <button onClick={handleTest} disabled={testing} className="bp-btn bp-btn-secondary text-xs">
+            {testing ? 'Testing…' : 'Test'}
+          </button>
+        )}
+        {testResult && (
+          <span className={clsx('text-xs ml-2', testResult.ok ? 'text-blueprint-green' : 'text-blueprint-red')}>
+            {testResult.ok ? '✓' : '✗'} {testResult.message}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function LLMTab() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [providers, setProviders] = useState(null)
+  const [defaultProvider, setDefaultProvider] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  async function refresh() {
+    try {
+      const [list, def] = await Promise.all([
+        getLLMProviders(),
+        getLLMDefault().catch(() => ({ provider: null })),
+      ])
+      setProviders(Array.isArray(list) ? list : [])
+      setDefaultProvider(def?.provider ?? null)
+    } catch (err) {
+      addNotification({ type: 'error', message: 'Failed to load providers: ' + err.message })
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { refresh() }, [])
+
+  async function handleSetDefault(providerId) {
+    try {
+      await setLLMDefault(providerId)
+      setDefaultProvider(providerId)
+      addNotification({ type: 'success', message: `${providerId} is now the default LLM provider.` })
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  if (loading) return <div className="text-sm text-blueprint-muted">Loading providers…</div>
+
+  return (
+    <div className="space-y-4">
+      <Section
+        title="LLM Providers"
+        description="Configure the AI providers Blueprint can use. Set one as the default — it'll be used whenever an agent doesn't pin a specific provider, or when the pinned one has no credentials."
+      >
+        <div className="space-y-3">
+          {(providers ?? []).map((p) => (
+            <LLMProviderRow
+              key={p.id}
+              provider={p}
+              isDefault={defaultProvider === p.id}
+              onSetDefault={handleSetDefault}
+              onSaved={refresh}
+            />
+          ))}
+        </div>
       </Section>
     </div>
   )

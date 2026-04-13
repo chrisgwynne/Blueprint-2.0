@@ -125,6 +125,8 @@ export const getLLMProviders = () => get('/llm/providers')
 export const getLLMModels = (providerId) => get(`/llm/providers/${providerId}/models`)
 export const saveLLMCredentials = (providerId, creds) => request('PUT', `/llm/providers/${providerId}/credentials`, creds)
 export const testLLMCredentials = (providerId, creds) => post(`/llm/providers/${providerId}/test`, creds)
+export const getLLMDefault = () => get('/llm/default')
+export const setLLMDefault = (provider) => request('PUT', '/llm/default', { provider })
 
 // ============================================
 // Connectors
