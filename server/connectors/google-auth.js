@@ -80,7 +80,7 @@ export async function getValidGoogleAccessToken(businessId) {
   const candidates = db.prepare(
     `SELECT id, type, credentials FROM connectors
      WHERE business_id = ?
-       AND type IN ('gsc', 'ga4', 'gbp')
+       AND type IN ('gsc', 'ga4', 'gbp', 'pagespeed')
        AND status != 'disconnected'
      ORDER BY last_sync DESC NULLS LAST, created_at DESC`
   ).all(businessId);

@@ -208,7 +208,7 @@ router.get('/google/callback', async (req, res) => {
   }
 
   const { businessId, types = 'gsc,ga4' } = parsedState;
-  const connectorTypes = types.split(',').map(t => t.trim()).filter(t => ['gsc', 'ga4'].includes(t));
+  const connectorTypes = types.split(',').map(t => t.trim()).filter(t => ['gsc', 'ga4', 'pagespeed'].includes(t));
 
   const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
 
@@ -262,14 +262,23 @@ router.get('/google/callback', async (req, res) => {
     } catch { /* non-fatal */ }
 
     // Upsert connector records for each requested type
-    const CONNECTOR_NAMES = { gsc: 'Google Search Console', ga4: 'Google Analytics 4' };
+    const CONNECTOR_NAMES = { gsc: 'Google Search Console', ga4: 'Google Analytics 4', pagespeed: 'Google PageSpeed' };
 
     for (const type of connectorTypes) {
-      const encryptedCreds = encrypt(JSON.stringify({ ...credentials, userEmail }));
-
       const existing = db.prepare(
-        'SELECT id FROM connectors WHERE business_id = ? AND type = ?'
+        'SELECT id, credentials FROM connectors WHERE business_id = ? AND type = ?'
       ).get(businessId, type);
+
+      // Preserve any non-OAuth fields the existing connector held (e.g.
+      // PageSpeed's apiKey, GSC's userEmail) when merging in the new tokens.
+      let merged = { ...credentials, userEmail };
+      if (existing?.credentials) {
+        try {
+          const prev = JSON.parse(decrypt(existing.credentials));
+          merged = { ...prev, ...merged };
+        } catch {}
+      }
+      const encryptedCreds = encrypt(JSON.stringify(merged));
 
       if (existing) {
         db.prepare(`

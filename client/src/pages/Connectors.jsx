@@ -136,6 +136,19 @@ function PageSpeedSetup({ businessId, existing, onSaved, onClose }) {
         </p>
       </div>
 
+      {/* Direct OAuth path — for users who didn't connect GSC/GA4 but want
+          to give PageSpeed its own Google login (uses your project's quota
+          instead of the shared anonymous one). */}
+      {businessId && (
+        <a
+          href={`/api/oauth/google?businessId=${encodeURIComponent(businessId)}&types=pagespeed`}
+          className="bp-btn bp-btn-secondary text-xs w-full justify-center"
+          style={{ textDecoration: 'none' }}
+        >
+          <ExternalLink size={12} /> Connect with Google (recommended)
+        </a>
+      )}
+
       <button
         onClick={handleTest}
         disabled={testing || !url}
