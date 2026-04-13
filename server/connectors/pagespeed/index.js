@@ -15,6 +15,32 @@ async function runStrategy(url, strategy, apiKey) {
   const res = await fetch(apiUrl);
   if (!res.ok) {
     const body = await res.text();
+
+    // Google's "API key not valid" error is deliberately ambiguous — it
+    // fires for a revoked key, a key for a different project, a wrong
+    // key, OR (most commonly) the PageSpeed Insights API not being
+    // enabled on this key's Cloud project. Surface the real causes so
+    // the user doesn't chase the wrong thing.
+    if (res.status === 400 && /API key not valid/i.test(body)) {
+      const hint = apiKey
+        ? 'An API key was sent but Google rejected it. Most common causes: '
+          + '(1) the PageSpeed Insights API is not enabled on the Google Cloud '
+          + 'project that owns this key — enable it at '
+          + 'https://console.cloud.google.com/apis/library/pagespeedonline.googleapis.com. '
+          + '(2) the key is restricted to other APIs or to specific referrers/IPs. '
+          + '(3) the key was regenerated or revoked. '
+          + 'Create a fresh unrestricted key under APIs & Services → Credentials.'
+        : 'No API key was sent. Add one in Connectors → PageSpeed → Edit.';
+      throw new Error(`PageSpeed API rejected the request (${strategy}): ${hint}`);
+    }
+
+    if (res.status === 403 && /quota|rate/i.test(body)) {
+      throw new Error(
+        `PageSpeed quota exceeded (${strategy}). Google's free tier is 25,000 queries/day. `
+        + 'Wait for the quota to reset or add a billing account to your Cloud project.'
+      );
+    }
+
     throw new Error(`PageSpeed API error ${res.status} (${strategy}): ${body.substring(0, 300)}`);
   }
 
