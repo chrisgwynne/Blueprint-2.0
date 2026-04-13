@@ -1,8 +1,13 @@
-# Blueprint setup — Windows PowerShell wrapper.
+# Blueprint setup - Windows PowerShell wrapper.
 # Delegates to the cross-platform scripts/setup.js so the logic stays in one place.
 #
 # Usage (PowerShell):
 #   .\scripts\setup.ps1
+#
+# NOTE: This file is intentionally ASCII-only. Windows PowerShell reads .ps1
+# files using the system ANSI code page unless they carry a UTF-8 BOM, and
+# non-ASCII characters (em-dash, box-drawing) break the parser on a default
+# Windows install.
 
 $ErrorActionPreference = "Stop"
 
@@ -16,9 +21,9 @@ function Test-Command($name) {
 }
 
 Write-Host ""
-Write-Host "  ╔══════════════════════════════════╗"
-Write-Host "  ║       Blueprint Setup (Windows)  ║"
-Write-Host "  ╚══════════════════════════════════╝"
+Write-Host "  +----------------------------------+"
+Write-Host "  |       Blueprint Setup (Windows)  |"
+Write-Host "  +----------------------------------+"
 Write-Host ""
 
 if (-not (Test-Command "bun")) {
@@ -26,7 +31,7 @@ if (-not (Test-Command "bun")) {
     powershell -c "irm bun.sh/install.ps1 | iex"
     Write-Host ""
     Write-Host "Bun installed. Please close this PowerShell window, open a new one," -ForegroundColor Yellow
-    Write-Host "and re-run .\scripts\setup.ps1" -ForegroundColor Yellow
+    Write-Host "and re-run: .\scripts\setup.ps1" -ForegroundColor Yellow
     exit 0
 }
 

@@ -145,6 +145,14 @@ function ensureDataDir() {
 /* ─── Install ─────────────────────────────────────────────────────────── */
 
 function installDeps() {
+  // Root install pulls in `concurrently` (used by `bun run dev`) plus hoists
+  // the workspaces. Bun workspaces means this also installs server/ and
+  // client/ deps in one pass, but we re-run them explicitly below to be
+  // resilient to workspace edge-cases on Windows.
+  step('Installing root dependencies');
+  run('bun', ['install'], { cwd: ROOT });
+  ok('Root dependencies installed');
+
   step('Installing server dependencies');
   run('bun', ['install'], { cwd: join(ROOT, 'server') });
   ok('Server dependencies installed');
