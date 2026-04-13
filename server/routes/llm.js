@@ -147,9 +147,34 @@ router.post('/providers/:id/test', async (req, res) => {
     const valid = await catalog.adapter.validateApiKey(creds);
 
     if (valid) {
-      res.json({ ok: true, message: 'Credentials are valid.' });
-    } else {
-      res.status(422).json({ ok: false, error: 'Credentials validation failed.' });
+      return res.json({ ok: true, message: 'Credentials are valid.' });
+    }
+
+    // Fall-through: validateApiKey returned false. Do one more real LLM
+    // call ourselves so we can surface the actual server response — the
+    // opaque "Credentials validation failed" is useless for diagnosis
+    // (wrong endpoint? wrong plan? quota? revoked key?).
+    try {
+      await catalog.adapter.complete({
+        ...creds,
+        model: catalog.default_models?.[0],
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+        temperature: 0,
+      });
+      // Shouldn't reach here — complete succeeded but validateApiKey
+      // rejected. Treat as valid.
+      return res.json({ ok: true, message: 'Credentials are valid (via chat).' });
+    } catch (probeErr) {
+      const msg = probeErr?.message || 'Credentials validation failed.';
+      // Add a helpful note for the common MiniMax mistake.
+      const extraHint = (catalog.id === 'minimax' && /401|403|invalid|unauthori[sz]ed/i.test(msg))
+        ? ' Tip: MiniMax has TWO separate platforms. International/token-plan keys use https://api.minimax.io/v1 (Blueprint default). Mainland/CNY keys use https://api.minimaxi.chat/v1 — override via Base URL.'
+        : '';
+      return res.status(422).json({
+        ok: false,
+        error: msg + extraHint,
+      });
     }
   } catch (err) {
     console.error('[llm] test credentials error:', err);

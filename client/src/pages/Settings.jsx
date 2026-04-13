@@ -647,7 +647,13 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
   const [testResult, setTestResult] = useState(null)
 
   const needsKey = provider.id !== 'ollama' && provider.id !== 'lmstudio' && provider.id !== 'claude-cli'
+  // Ollama / LM Studio / Custom require a base URL. For paid remote
+  // providers (anthropic, openai, google, minimax), the field is optional
+  // but visible — useful for proxies, regional endpoints, or MiniMax
+  // switching between the international (api.minimax.io) and Chinese
+  // (api.minimaxi.chat) platforms.
   const needsBaseUrl = provider.id === 'ollama' || provider.id === 'lmstudio' || provider.id === 'custom'
+  const showBaseUrlOptional = !needsBaseUrl && provider.id !== 'claude-cli'
   const models = Array.isArray(provider.default_models) ? provider.default_models : []
 
   async function handleSave() {
@@ -735,18 +741,32 @@ function LLMProviderRow({ provider, isDefault, onSetDefault, onSaved }) {
         </div>
       )}
 
-      {needsBaseUrl && (
+      {(needsBaseUrl || showBaseUrlOptional) && (
         <div>
           <label className="block text-xs text-blueprint-muted mb-1">
-            Base URL {!provider.configured && <span className="text-blueprint-muted/60">(optional unless overriding default)</span>}
+            Base URL {!needsBaseUrl && <span className="text-blueprint-muted/60">(optional — override only if you're on a different endpoint)</span>}
           </label>
           <input
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             className="bp-input"
-            placeholder={provider.id === 'ollama' ? 'http://localhost:11434' : provider.id === 'lmstudio' ? 'http://localhost:1234/v1' : 'https://...'}
+            placeholder={
+              provider.id === 'ollama' ? 'http://localhost:11434'
+              : provider.id === 'lmstudio' ? 'http://localhost:1234/v1'
+              : provider.id === 'minimax' ? (provider.base_url || 'https://api.minimax.io/v1')
+              : provider.id === 'anthropic' ? (provider.base_url || 'https://api.anthropic.com')
+              : provider.id === 'openai' ? (provider.base_url || 'https://api.openai.com/v1')
+              : provider.id === 'google' ? (provider.base_url || 'https://generativelanguage.googleapis.com/v1beta')
+              : 'https://...'
+            }
           />
+          {provider.id === 'minimax' && (
+            <p className="text-[10px] text-blueprint-muted mt-1">
+              MiniMax has two platforms: <code>api.minimax.io</code> (international, token plan) and{' '}
+              <code>api.minimaxi.chat</code> (mainland China, CNY). A key from one is rejected by the other.
+            </p>
+          )}
         </div>
       )}
 
