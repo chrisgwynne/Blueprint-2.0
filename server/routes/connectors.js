@@ -50,6 +50,16 @@ async function runConnectorSync(rowId) {
     row.type === 'ga4' ? 'report' :
     'report'
   );
+  // If the connector itself has no URL configured (e.g. PageSpeed created
+  // by the OAuth callback before the user saved a URL), fall back to the
+  // business's website so syncs don't blow up on first run.
+  if (!config.url) {
+    try {
+      const biz = db.prepare('SELECT settings FROM businesses WHERE id = ?').get(row.business_id);
+      const bizSettings = biz?.settings ? JSON.parse(biz.settings) : {};
+      if (bizSettings.website) config.url = bizSettings.website;
+    } catch {}
+  }
   const params = { ...config, businessId: row.business_id };
 
   try {
@@ -326,113 +336,17 @@ router.get('/gsc/sites', async (req, res) => {
  */
 router.post('/:id/sync', async (req, res) => {
   try {
-    const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(req.params.id);
+    const row = db.prepare('SELECT id, name FROM connectors WHERE id = ?').get(req.params.id);
     if (!row) return res.status(404).json({ error: 'Connector not found.' });
-
-    const connector = await getConnector(row.type);
-    if (!connector) {
-      return res.status(422).json({ error: `Connector type '${row.type}' not supported.` });
-    }
-
-    const parsed = parseRow(row);
-    const config = row.config ? JSON.parse(row.config) : {};
-    const dataType = config.defaultDataType || (
-      row.type === 'pagespeed' ? 'performance' :
-      row.type === 'gsc' ? 'search_analytics' :
-      row.type === 'ga4' ? 'report' :
-      'report'
-    );
-    const params = { ...config, businessId: row.business_id };
 
     res.status(202).json({ ok: true, message: 'Sync started.' });
 
-    // Fire-and-forget sync with individual metric storage
-    (async () => {
-      try {
-        const data = await connector.fetch(dataType, parsed.credentials, params);
-        const now = new Date().toISOString();
-
-        // Write individual named metric rows if connector supports it
-        if (typeof connector.extractMetrics === 'function') {
-          const metrics = connector.extractMetrics(data, now);
-          for (const m of metrics) {
-            db.prepare(`
-              INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_value, metric_data, period_start, period_end, recorded_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-            `).run(
-              crypto.randomUUID(),
-              row.business_id,
-              row.id,
-              m.name,
-              m.value ?? null,
-              m.data ? JSON.stringify(m.data) : null,
-              now,
-              now,
-            );
-          }
-        }
-
-        // Always write a blob summary row for the signal engine + history
-        db.prepare(`
-          INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_data, period_start, period_end, recorded_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        `).run(
-          crypto.randomUUID(),
-          row.business_id,
-          row.id,
-          `${row.type}_sync`,
-          JSON.stringify(data),
-          now,
-          now,
-        );
-
-        db.prepare(`UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?`).run(row.id);
-        console.log(`[connectors] Sync complete for ${row.name}`);
-
-        // Record this sync so readiness checks can see it
-        try {
-          db.prepare(
-            `INSERT INTO connector_syncs (id, connector_id, status, created_at)
-             VALUES (lower(hex(randomblob(16))), ?, 'complete', CURRENT_TIMESTAMP)`
-          ).run(row.id);
-        } catch {}
-
-        // Post-sync orchestration: promote pending agents, hiring analysis,
-        // queue data-ready agent runs. Fire-and-forget — sync is done.
-        try {
-          const { onConnectorSyncSuccess } = await import('../connectors/post-sync.js');
-          onConnectorSyncSuccess(row.type, row.business_id);
-        } catch (err) {
-          console.warn('[connectors] post-sync hook failed:', err.message);
-        }
-
-        // Run signal engine
-        try {
-          const { runSignalEngine } = await import('../signals/signal-engine.js');
-          const prevMetric = db.prepare(`
-            SELECT metric_data FROM metrics
-            WHERE business_id = ? AND connector_id = ? AND metric_name = ?
-            ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
-          `).get(row.business_id, row.id, `${row.type}_sync`);
-
-          let previousData = null;
-          if (prevMetric?.metric_data) {
-            try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
-          }
-
-          // For pagespeed, pass mobile data directly to match signal rule expectations
-          const signalData = (row.type === 'pagespeed' && data.mobile) ? data.mobile : data;
-          const prevSignalData = (row.type === 'pagespeed' && previousData?.mobile) ? previousData.mobile : previousData;
-
-          await runSignalEngine(row.business_id, row.id, signalData, prevSignalData, row.type);
-        } catch (sigErr) {
-          console.error(`[connectors] Signal engine error for ${row.name}:`, sigErr.message);
-        }
-      } catch (err) {
-        db.prepare(`UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?`).run(err.message.substring(0, 500), row.id);
-        console.error(`[connectors] Sync error for ${row.name}:`, err.message);
-      }
-    })();
+    // Fire-and-forget. runConnectorSync owns every step (metric writes,
+    // connector_syncs row, post-sync hooks, signal engine, businessId
+    // fallback) so the explicit sync route stays in lockstep with the
+    // auto-sync path triggered by add/edit.
+    runConnectorSync(row.id).catch((err) =>
+      console.warn(`[connectors] explicit sync failed for ${row.name}:`, err.message));
   } catch (err) {
     console.error('[connectors] Sync trigger error:', err);
     return res.status(500).json({ error: 'Failed to trigger sync.' });

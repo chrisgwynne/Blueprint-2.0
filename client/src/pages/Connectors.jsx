@@ -138,15 +138,42 @@ function PageSpeedSetup({ businessId, existing, onSaved, onClose }) {
 
       {/* Direct OAuth path — for users who didn't connect GSC/GA4 but want
           to give PageSpeed its own Google login (uses your project's quota
-          instead of the shared anonymous one). */}
+          instead of the shared anonymous one). Save URL first so the OAuth
+          callback doesn't land on a config-less connector that can't sync. */}
       {businessId && (
-        <a
-          href={`/api/oauth/google?businessId=${encodeURIComponent(businessId)}&types=pagespeed`}
+        <button
+          type="button"
+          disabled={!url || saving}
+          onClick={async () => {
+            if (!url) {
+              addNotification({ type: 'warning', message: 'Enter a URL above first.' })
+              return
+            }
+            setSaving(true)
+            try {
+              if (existing) {
+                await updateConnector(existing.id, {
+                  config: { url, defaultDataType: 'performance' },
+                })
+              } else {
+                await addConnector({
+                  type: 'pagespeed',
+                  business_id: businessId,
+                  name: 'Google PageSpeed',
+                  config: { url, defaultDataType: 'performance' },
+                  credentials: {},
+                })
+              }
+              window.location.href = `/api/oauth/google?businessId=${encodeURIComponent(businessId)}&types=pagespeed`
+            } catch (err) {
+              addNotification({ type: 'error', message: err.message })
+              setSaving(false)
+            }
+          }}
           className="bp-btn bp-btn-secondary text-xs w-full justify-center"
-          style={{ textDecoration: 'none' }}
         >
           <ExternalLink size={12} /> Connect with Google (recommended)
-        </a>
+        </button>
       )}
 
       <button
