@@ -79,6 +79,17 @@ router.post('/:businessId', (req, res) => {
       JSON.stringify(assigned_agents), strategy ?? null,
       JSON.stringify(milestones), JSON.stringify(tags), project_id
     );
+
+    // Brain — fire-and-forget strategic reasoning pass
+    (async () => {
+      try {
+        const { runGoalReasoning } = await import('../brain/goal-reasoner.js');
+        await runGoalReasoning(id, businessId);
+      } catch (err) {
+        console.warn('[Goals] Reasoning failed:', err.message);
+      }
+    })();
+
     res.status(201).json(parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id)));
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -149,6 +160,20 @@ router.post('/:businessId/:id/check', async (req, res) => {
     const { checkGoalById } = await import('../goals/goal-engine.js');
     const result = await checkGoalById(id);
     res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Re-run strategic reasoning pass
+router.post('/:businessId/:id/reason', async (req, res) => {
+  try {
+    const { id, businessId } = req.params;
+    const goal = db.prepare('SELECT id FROM goals WHERE id=? AND business_id=?').get(id, businessId);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    const { runGoalReasoning } = await import('../brain/goal-reasoner.js');
+    const result = await runGoalReasoning(id, businessId);
+    res.json(result);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

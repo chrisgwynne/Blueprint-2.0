@@ -339,6 +339,30 @@ export function startScheduler() {
     }
   });
 
+  // Weekly strategic goal-reasoning refresh — Monday 6am.
+  // Re-runs the LLM reasoning pass on every active goal so feasibility,
+  // strategy, and agent briefings stay in sync with the latest metrics.
+  cron.schedule('0 6 * * 1', async () => {
+    try {
+      const { runGoalReasoning } = await import('../brain/goal-reasoner.js');
+      const goals = db.prepare(
+        "SELECT id, business_id FROM goals WHERE status = 'active'"
+      ).all();
+      let refreshed = 0;
+      for (const g of goals) {
+        try {
+          const r = await runGoalReasoning(g.id, g.business_id);
+          if (r?.reasoning) refreshed++;
+        } catch (err) {
+          console.warn(`[scheduler] goal reasoning failed for ${g.id}:`, err.message);
+        }
+      }
+      if (refreshed > 0) console.log(`[scheduler] Goal reasoning: refreshed ${refreshed} goals.`);
+    } catch (err) {
+      console.error('[scheduler] Goal reasoning refresh failed:', err.message);
+    }
+  });
+
   // Brain — every morning at 07:00, resurface deferred tasks whose window
   // has closed and mark measurement-ready actions.
   cron.schedule('0 7 * * *', async () => {

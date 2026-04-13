@@ -3,7 +3,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { Target, Plus, Sparkles, Check, X, Pause, Edit2, RefreshCw } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
-  getGoals, createGoal, updateGoal, deleteGoal, checkGoal, proposeGoal,
+  getGoals, createGoal, updateGoal, deleteGoal, checkGoal, proposeGoal, reasonGoal,
 } from '../lib/api.js'
 
 const AGENTS = ['conductor', 'seo-sentinel', 'quill', 'velocity', 'trend-spotter', 'merchant', 'ledger', 'sentinel', 'researcher', 'reporter', 'dev', 'outreach']
@@ -59,6 +59,22 @@ function GoalCard({ goal, businessId, onRefresh }) {
 
   const lastNote = goal.notes?.length > 0 ? goal.notes[goal.notes.length - 1] : null
   const milestones = Array.isArray(goal.milestones) ? goal.milestones : []
+  const reasoningNote = Array.isArray(goal.notes)
+    ? [...goal.notes].reverse().find((n) => n && typeof n === 'object' && n.source === 'goal-reasoner')
+    : null
+  const [reasoning, setReasoning] = useState(false)
+  async function handleReason() {
+    setReasoning(true)
+    try { await reasonGoal(businessId, goal.id); await onRefresh() }
+    finally { setReasoning(false) }
+  }
+
+  const feasibilityColor =
+    reasoningNote?.feasibility === 'achievable' ? 'var(--bp-green)'
+    : reasoningNote?.feasibility === 'ambitious' ? 'var(--bp-amber)'
+    : reasoningNote?.feasibility === 'unlikely' ? 'var(--bp-amber)'
+    : reasoningNote?.feasibility === 'unrealistic' ? 'var(--bp-red)'
+    : 'var(--bp-text-3)'
 
   return (
     <div className="bp-card" style={{ padding: 20, marginBottom: 14, borderLeft: `3px solid ${borderColor}` }}>
@@ -119,9 +135,42 @@ function GoalCard({ goal, businessId, onRefresh }) {
           })}
         </div>
       )}
+      {reasoningNote && (
+        <div style={{ marginTop: 4, marginBottom: 10, padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3, borderLeft: `2px solid ${feasibilityColor}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)' }}>
+              Strategic reasoning
+            </span>
+            {reasoningNote.feasibility && (
+              <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: feasibilityColor, textTransform: 'uppercase' }}>
+                {reasoningNote.feasibility}
+                {reasoningNote.confidence != null && ` · ${Math.round(reasoningNote.confidence * 100)}%`}
+              </span>
+            )}
+          </div>
+          {reasoningNote.text && (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginBottom: 4 }}>
+              {reasoningNote.text}
+            </div>
+          )}
+          {reasoningNote.recommended_path && (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
+              Recommended path: <strong style={{ color: 'var(--bp-text-2)' }}>{reasoningNote.recommended_path}</strong>
+            </div>
+          )}
+          {goal.strategy && (
+            <div style={{ marginTop: 6, fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', whiteSpace: 'pre-wrap' }}>
+              {goal.strategy}
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 6 }}>
         <button onClick={handleCheck} className="bp-btn bp-btn-secondary" style={{ fontSize: 11 }}>
           <RefreshCw size={11} /> Check now
+        </button>
+        <button onClick={handleReason} disabled={reasoning} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+          <Sparkles size={11} /> {reasoning ? 'Reasoning…' : (reasoningNote ? 'Re-run analysis' : 'Analyse strategy')}
         </button>
         <button onClick={handlePause} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
           <Pause size={11} /> {goal.status === 'paused' ? 'Resume' : 'Pause'}

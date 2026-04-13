@@ -296,6 +296,7 @@ export const updateGoal = (businessId, id, data) => request('PUT', `/goals/${bus
 export const deleteGoal = (businessId, id) => del(`/goals/${businessId}/${id}`)
 export const checkGoal = (businessId, id) => post(`/goals/${businessId}/${id}/check`)
 export const proposeGoal = (businessId, context) => post(`/goals/${businessId}/propose`, { context })
+export const reasonGoal = (businessId, id) => post(`/goals/${businessId}/${id}/reason`)
 
 // ============================================
 // Projects (Prompt 3)

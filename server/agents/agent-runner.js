@@ -371,6 +371,26 @@ async function buildUserContext({ agentId, profile, business, signals, metrics, 
       lines.push('');
     }
 
+    // Per-agent goal briefings produced by the Goal Reasoner.
+    // These tell THIS specific agent what to focus on / avoid for each goal.
+    try {
+      const briefingRow = db.prepare('SELECT value FROM settings WHERE key = ?')
+        .get(`agent_goal_briefing_${business.id}_${agentId}`);
+      if (briefingRow?.value) {
+        const briefings = JSON.parse(briefingRow.value);
+        if (Array.isArray(briefings) && briefings.length > 0) {
+          lines.push('## Your Goal Briefings');
+          lines.push('The Goal Reasoner has produced specific guidance for you on each goal:');
+          for (const b of briefings) {
+            lines.push(`- **${b.goal_title}**`);
+            if (b.focus) lines.push(`  Focus: ${b.focus}`);
+            if (b.avoid) lines.push(`  Avoid: ${b.avoid}`);
+          }
+          lines.push('');
+        }
+      }
+    } catch {}
+
     // Active projects
     const activeProjects = db.prepare(`
       SELECT id, name, description, assigned_agents, tags
