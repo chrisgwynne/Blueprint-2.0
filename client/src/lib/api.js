@@ -265,3 +265,55 @@ export const getOutcomeTimeline = (businessId, params) => get(`/outcomes/${busin
 export const getEmailSettings = () => get('/notifications/email/settings')
 export const saveEmailSettings = (data) => post('/notifications/email/settings', data)
 export const sendTestEmail = (data) => post('/notifications/email/test', data)
+
+// ============================================
+// Workflows (Prompt 1)
+// ============================================
+export const getWorkflows = (businessId) => get(`/workflows/${businessId}`)
+export const getWorkflow = (businessId, id) => get(`/workflows/${businessId}/${id}`)
+export const createWorkflow = (businessId, data) => post(`/workflows/${businessId}`, data)
+export const updateWorkflow = (businessId, id, data) => request('PUT', `/workflows/${businessId}/${id}`, data)
+export const deleteWorkflow = (businessId, id) => del(`/workflows/${businessId}/${id}`)
+export const runWorkflow = (businessId, id, data = {}) => post(`/workflows/${businessId}/${id}/run`, data)
+export const getWorkflowRuns = (businessId) => get(`/workflows/${businessId}/runs/all`)
+export const getWorkflowRun = (businessId, runId) => get(`/workflows/${businessId}/runs/${runId}`)
+export const approveWorkflowStep = (businessId, runId, stepIndex, data = {}) =>
+  post(`/workflows/${businessId}/runs/${runId}/steps/${stepIndex}/approve`, data)
+export const rejectWorkflowStep = (businessId, runId, stepIndex, data) =>
+  post(`/workflows/${businessId}/runs/${runId}/steps/${stepIndex}/reject`, data)
+export const cancelWorkflowRun = (businessId, runId) =>
+  post(`/workflows/${businessId}/runs/${runId}/cancel`)
+export const proposeWorkflow = (businessId, trigger) =>
+  post(`/workflows/${businessId}/propose`, { trigger })
+
+// ============================================
+// Goals (Prompt 2)
+// ============================================
+export const getGoals = (businessId) => get(`/goals/${businessId}`)
+export const getGoal = (businessId, id) => get(`/goals/${businessId}/${id}`)
+export const createGoal = (businessId, data) => post(`/goals/${businessId}`, data)
+export const updateGoal = (businessId, id, data) => request('PUT', `/goals/${businessId}/${id}`, data)
+export const deleteGoal = (businessId, id) => del(`/goals/${businessId}/${id}`)
+export const checkGoal = (businessId, id) => post(`/goals/${businessId}/${id}/check`)
+export const proposeGoal = (businessId, context) => post(`/goals/${businessId}/propose`, { context })
+
+// ============================================
+// Projects (Prompt 3)
+// ============================================
+export const getProjects = (businessId) => get(`/projects/${businessId}`)
+export const getProject = (businessId, id) => get(`/projects/${businessId}/${id}`)
+export const createProject = (businessId, data) => post(`/projects/${businessId}`, data)
+export const updateProject = (businessId, id, data) => request('PUT', `/projects/${businessId}/${id}`, data)
+export const deleteProject = (businessId, id) => del(`/projects/${businessId}/${id}`)
+export const linkToProject = (businessId, id, data) => post(`/projects/${businessId}/${id}/link`, data)
+export const proposeProject = (businessId, context) => post(`/projects/${businessId}/propose`, { context })
+
+// ============================================
+// Timeline (Prompt 5)
+// ============================================
+export const getTimeline = (businessId, params) => get(`/timeline/${businessId}`, params)
+
+// ============================================
+// Agent Status (Prompt 4)
+// ============================================
+export const getAgentStatuses = () => get('/agents-status')

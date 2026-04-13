@@ -324,6 +324,21 @@ export function startScheduler() {
     }
   });
 
+  // Weekly goal progress check — Monday 8am (Prompt 2)
+  cron.schedule('0 8 * * 1', async () => {
+    try {
+      const { checkAllGoals } = await import('../goals/goal-engine.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all();
+      let total = 0;
+      for (const b of businesses) {
+        total += await checkAllGoals(b.id);
+      }
+      if (total > 0) console.log(`[scheduler] Goal checks: ${total} goals evaluated.`);
+    } catch (err) {
+      console.error('[scheduler] Goal checks failed:', err.message);
+    }
+  });
+
   // Weekly KB lint — every Monday at 8am
   cron.schedule('0 8 * * 1', async () => {
     console.log('[scheduler] Running weekly KB lint pass...');

@@ -216,7 +216,7 @@ function briefConductor(agentId, parsed, businessId) {
 
 // ─── User context builder ─────────────────────────────────────────────────────
 
-function buildUserContext({ agentId, profile, business, signals, metrics, existingTasks, connectors, trigger, triggerId }) {
+function buildUserContext({ agentId, profile, business, signals, metrics, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
   const lines = [];
 
   lines.push(`## Current Run`);
@@ -291,6 +291,47 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
   }
   lines.push('');
 
+  // Active goals — agents should keep them in mind on every run
+  try {
+    const activeGoals = db.prepare(`
+      SELECT title, description, metric_name, metric_target, metric_current,
+             progress_pct, deadline, strategy
+      FROM goals
+      WHERE business_id = ? AND status = 'active'
+      ORDER BY (deadline IS NULL) ASC, deadline ASC
+      LIMIT 5
+    `).all(business.id);
+    if (activeGoals.length > 0) {
+      lines.push('## Active Business Goals');
+      lines.push('Consider these when proposing tasks — prefer actions that move the needle.');
+      for (const g of activeGoals) {
+        lines.push(`- **${g.title}** (${(g.progress_pct ?? 0).toFixed(0)}% complete)`);
+        if (g.metric_name) lines.push(`  Target: ${g.metric_name} → ${g.metric_target} (current: ${g.metric_current ?? '?'})`);
+        if (g.deadline) lines.push(`  Deadline: ${g.deadline}`);
+        if (g.strategy) lines.push(`  Strategy: ${g.strategy}`);
+      }
+      lines.push('');
+    }
+
+    // Active projects
+    const activeProjects = db.prepare(`
+      SELECT id, name, description, assigned_agents, tags
+      FROM projects
+      WHERE business_id = ? AND status = 'active'
+      ORDER BY updated_at DESC LIMIT 3
+    `).all(business.id);
+    if (activeProjects.length > 0) {
+      lines.push('## Active Projects');
+      for (const p of activeProjects) {
+        let agents = [];
+        try { agents = JSON.parse(p.assigned_agents); } catch {}
+        lines.push(`- **${p.name}**${p.description ? `: ${p.description}` : ''}`);
+        if (agents.length) lines.push(`  Assigned: ${agents.join(', ')}`);
+      }
+      lines.push('');
+    }
+  } catch {}
+
   lines.push(`## Existing Pending Tasks (do not duplicate these)`);
   if (existingTasks.length === 0) {
     lines.push('No pending tasks.');
@@ -302,7 +343,9 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
   lines.push('');
 
   lines.push(`## Your Task`);
-  if (trigger === 'schedule') {
+  if (trigger === 'workflow' && extraUserMessage) {
+    lines.push(extraUserMessage);
+  } else if (trigger === 'schedule') {
     const job = profile.scheduled_jobs?.find(j => j.id === triggerId) ?? profile.scheduled_jobs?.[0];
     if (job) {
       lines.push(job.task);
@@ -323,7 +366,7 @@ function buildUserContext({ agentId, profile, business, signals, metrics, existi
 /**
  * Run an agent against a business context.
  */
-export async function runAgent(agentId, businessId, trigger, triggerId = null) {
+export async function runAgent(agentId, businessId, trigger, triggerId = null, options = {}) {
   const runId = generateId();
   const startedAt = new Date().toISOString();
 
@@ -404,6 +447,11 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
   `).run(runId, agentId, businessId, trigger, triggerId, startedAt);
 
   try {
+    const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+    pushDashboardEvent(businessId, 'agent_run_started', { agentId, runId, trigger });
+  } catch {}
+
+  try {
     // 5. Load business context
     const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId);
     if (!business) throw new Error(`Business '${businessId}' not found.`);
@@ -449,6 +497,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null) {
       connectors,
       trigger,
       triggerId,
+      extraUserMessage: options.extra_user_message,
     });
 
     // 9. Run LLM (with fallback)
@@ -701,6 +750,13 @@ ${signalsDetected} signal(s) reviewed.
 
     console.log(`[agent-runner] '${agentId}' complete. Tasks: ${createdTasks.length}, Cost: $${costUsd.toFixed(6)}`);
 
+    try {
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+      pushDashboardEvent(businessId, 'agent_run_complete', {
+        agentId, runId, tasksProposed: createdTasks.length, costUsd, signalsDetected,
+      });
+    } catch {}
+
     return { runId, tasksProposed: createdTasks.length, signalsDetected, costUsd };
 
   } catch (err) {
@@ -708,6 +764,11 @@ ${signalsDetected} signal(s) reviewed.
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(err.message, runId);
+
+    try {
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
+      pushDashboardEvent(businessId, 'agent_run_failed', { agentId, runId, error: err.message });
+    } catch {}
 
     // Update agent stats even on failure so last_run + run_count reflect reality
     try {

@@ -103,6 +103,23 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
     newSignalIds.push(signalId);
     console.log(`[signal-engine] New signal created: ${signalId} (rule: ${rule.id}, severity: ${rule.severity})`);
 
+    // Auto-trigger any workflows configured for this signal rule
+    try {
+      const triggered = db.prepare(`
+        SELECT id FROM workflows
+        WHERE business_id = ? AND trigger_type = 'signal' AND status = 'active'
+          AND json_extract(trigger_config, '$.signal_rule_id') = ?
+      `).all(businessId, rule.id);
+      if (triggered.length > 0) {
+        const { startWorkflow } = await import('../workflows/workflow-engine.js');
+        for (const wf of triggered) {
+          startWorkflow(wf.id, businessId, 'signal-engine', `Triggered by signal: ${result.title}`).catch(err =>
+            console.warn('[signal-engine] workflow trigger failed:', err.message)
+          );
+        }
+      }
+    } catch {}
+
     // Dispatch BAP webhook events
     try {
       const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');

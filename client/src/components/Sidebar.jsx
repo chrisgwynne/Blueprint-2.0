@@ -29,10 +29,10 @@ import {
   CreditCard,
   GitBranch,
 } from 'lucide-react'
-import { MessageSquare, Target } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth } from '../lib/api.js'
+import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
 
 const CONNECTOR_ICONS = {
   gsc:           Search,
@@ -77,6 +77,9 @@ const NAV_ITEMS = [
   { label: 'Signals',       to: '/signals',    icon: Radio,           badge: 'openSignalCount' },
   { label: 'Tasks',         to: '/tasks',      icon: CheckSquare,     badge: 'pendingTaskCount' },
   { label: 'Chat',          to: '/chat',       icon: MessageSquare },
+  { label: 'Workflows',     to: '/workflows',  icon: Workflow },
+  { label: 'Goals',         to: '/goals',      icon: Target },
+  { label: 'Timeline',      to: '/timeline',   icon: Clock },
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },
   { label: 'Outcomes',      to: '/outcomes',   icon: Target },
@@ -392,6 +395,63 @@ function BusinessSwitcher({ collapsed }) {
 }
 
 // ============================================
+// Projects Section (sidebar)
+// ============================================
+function ProjectsSection({ collapsed }) {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [projects, setProjects] = useState([])
+
+  useEffect(() => {
+    if (!currentBusiness) return
+    getProjects(currentBusiness.id)
+      .then((list) => setProjects((list ?? []).filter(p => p.status === 'active').slice(0, 5)))
+      .catch(() => {})
+  }, [currentBusiness])
+
+  if (projects.length === 0 || collapsed) return null
+
+  return (
+    <div style={{ borderTop: '1px solid var(--bp-border)', flexShrink: 0 }}>
+      <div style={{
+        padding: '8px 16px 4px',
+        fontFamily: 'var(--bp-font-mono)', fontSize: 9,
+        color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase',
+      }}>Projects</div>
+      <div style={{ padding: '4px 8px', display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {projects.map((p) => (
+          <NavLink
+            key={p.id}
+            to={`/projects/${p.id}`}
+            style={({ isActive }) => ({
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 8px',
+              borderRadius: 4,
+              borderLeft: isActive ? `2px solid ${p.color}` : '2px solid transparent',
+              paddingLeft: isActive ? 6 : 8,
+              background: isActive ? `${p.color}10` : 'transparent',
+              color: isActive ? p.color : 'var(--bp-text-3)',
+              textDecoration: 'none',
+              fontFamily: 'var(--bp-font-mono)', fontSize: 11,
+            })}>
+            <span style={{ fontSize: 12 }}>{p.icon}</span>
+            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {p.name}
+            </span>
+            {p.task_count > 0 && (
+              <span style={{ fontSize: 9, color: 'var(--bp-text-3)' }}>{p.task_count}</span>
+            )}
+          </NavLink>
+        ))}
+        <NavLink to="/projects" style={{
+          padding: '4px 8px', fontFamily: 'var(--bp-font-mono)', fontSize: 10,
+          color: 'var(--bp-blue)', textDecoration: 'none',
+        }}>All projects →</NavLink>
+      </div>
+    </div>
+  )
+}
+
+// ============================================
 // Connected Data Section
 // ============================================
 function ConnectedDataSection({ collapsed }) {
@@ -618,6 +678,9 @@ function Sidebar() {
           <NavItem key={item.to} item={item} collapsed={collapsed} healthStatus={healthStatus} />
         ))}
       </nav>
+
+      {/* ── Projects ──────────────────────────── */}
+      <ProjectsSection collapsed={collapsed} />
 
       {/* ── Connected Data ──────────────────────────── */}
       <ConnectedDataSection collapsed={collapsed} />
