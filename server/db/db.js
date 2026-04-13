@@ -196,6 +196,53 @@ const STARTUP_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_projects_business_status ON projects(business_id, status)`,
   `ALTER TABLE tasks ADD COLUMN project_id TEXT`,
   `ALTER TABLE signals ADD COLUMN project_id TEXT`,
+  // Brain — temporal knowledge
+  `CREATE TABLE IF NOT EXISTS action_windows (
+    id TEXT PRIMARY KEY,
+    action_type TEXT NOT NULL UNIQUE,
+    display_name TEXT NOT NULL,
+    min_days INTEGER NOT NULL,
+    expected_days INTEGER NOT NULL,
+    max_days INTEGER NOT NULL,
+    metric_types JSON NOT NULL,
+    measurement_notes TEXT,
+    volatility TEXT DEFAULT 'medium',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS action_memory (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    task_id TEXT,
+    action_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    target_url TEXT,
+    target_entity TEXT,
+    metrics_expected JSON,
+    measurement_window_start DATETIME NOT NULL,
+    measurement_window_end DATETIME NOT NULL,
+    measurement_ready INTEGER DEFAULT 0,
+    do_not_touch_until DATETIME NOT NULL,
+    outcome_measured INTEGER DEFAULT 0,
+    outcome_summary TEXT,
+    related_action_ids JSON DEFAULT '[]',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_action_memory_biz_open ON action_memory(business_id, outcome_measured)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_memory_window ON action_memory(business_id, measurement_window_end)`,
+  `CREATE TABLE IF NOT EXISTS seasonal_patterns (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    pattern_type TEXT NOT NULL,
+    pattern_data JSON NOT NULL,
+    confidence REAL DEFAULT 0.5,
+    data_points INTEGER DEFAULT 0,
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_seasonal_unique ON seasonal_patterns(business_id, metric_name, pattern_type)`,
+  `ALTER TABLE tasks ADD COLUMN deferred_until DATETIME`,
+  `ALTER TABLE tasks ADD COLUMN deferred_reason TEXT`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

@@ -317,3 +317,11 @@ export const getTimeline = (businessId, params) => get(`/timeline/${businessId}`
 // Agent Status (Prompt 4)
 // ============================================
 export const getAgentStatuses = () => get('/agents-status')
+
+// ============================================
+// Brain
+// ============================================
+export const getBrainStatus = (businessId) => get(`/brain/${businessId}`)
+export const getActionWindows = (businessId) => get(`/brain/${businessId}/action-windows`)
+export const getInFlightActions = (businessId) => get(`/brain/${businessId}/in-flight`)
+export const overrideDeferredTask = (businessId, taskId) => post(`/brain/${businessId}/tasks/${taskId}/override`)

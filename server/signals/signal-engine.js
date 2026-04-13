@@ -103,6 +103,41 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
     newSignalIds.push(signalId);
     console.log(`[signal-engine] New signal created: ${signalId} (rule: ${rule.id}, severity: ${rule.severity})`);
 
+    // Brain — causal reasoning on the triggering metric
+    try {
+      const primaryMetric = rule.primaryMetric ?? pickPrimaryMetric(rule, currentData);
+      const currentMetricValue = extractMetricValue(currentData, primaryMetric);
+      const previousMetricValue = extractMetricValue(previousData, primaryMetric);
+      if (primaryMetric && currentMetricValue != null && previousMetricValue != null) {
+        const { analyseMetricChange } = await import('../brain/causal.js');
+        const assessment = await analyseMetricChange(
+          primaryMetric, currentMetricValue, previousMetricValue, businessId
+        );
+        if (assessment?.do_not_change) {
+          // Suppress the signal — a known action is likely causing this
+          db.prepare(`
+            UPDATE signals
+            SET status = 'suppressed',
+                description = COALESCE(description, '') || char(10) || char(10) || '⏳ SUPPRESSED: ' || ?
+            WHERE id = ?
+          `).run(assessment.do_not_change_reason ?? 'recent action pending measurement', signalId);
+          console.log(`[brain] Signal ${signalId.slice(0,8)} suppressed: ${assessment.do_not_change_reason}`);
+        } else if (assessment?.likely_cause && assessment.confidence >= 0.5) {
+          // Enrich the signal with causal context
+          db.prepare(`
+            UPDATE signals
+            SET description = COALESCE(description, '') || char(10) || char(10) || '📊 Causal analysis: ' || ?
+            WHERE id = ?
+          `).run(
+            `${assessment.reasoning} (confidence: ${Math.round(assessment.confidence * 100)}%)`,
+            signalId
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[brain] causal analysis failed (non-fatal):', err.message);
+    }
+
     // Auto-trigger any workflows configured for this signal rule
     try {
       const triggered = db.prepare(`
@@ -138,4 +173,37 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
   }
 
   return newSignalIds;
+}
+
+// Helpers for brain causal analysis — map rule.connectorType to a primary
+// metric path in the current data blob.
+const PRIMARY_METRIC_FOR_CONNECTOR = {
+  ga4: 'ga4.sessions',
+  gsc: 'gsc.total_clicks',
+  pagespeed: 'pagespeed.mobile.performance_score',
+  shopify: 'shopify.conversion_rate',
+  'meta-ads': 'meta-ads.roas',
+  stripe: 'stripe.revenue_30d',
+  gbp: 'gbp.views_total',
+};
+
+function pickPrimaryMetric(rule, currentData) {
+  if (rule.primaryMetric) return rule.primaryMetric;
+  return PRIMARY_METRIC_FOR_CONNECTOR[rule.connectorType] ?? null;
+}
+
+function extractMetricValue(data, metricPath) {
+  if (!data || !metricPath) return null;
+  // Dotted-path lookup (best effort). Fall back to top-level keys.
+  const segments = metricPath.split('.');
+  let cur = data;
+  for (const seg of segments) {
+    if (cur == null || typeof cur !== 'object') return null;
+    if (seg in cur) { cur = cur[seg]; continue; }
+    // try without prefix (e.g. 'ga4.sessions' → data.sessions)
+    return null;
+  }
+  if (typeof cur === 'number') return cur;
+  if (typeof cur === 'string' && !Number.isNaN(parseFloat(cur))) return parseFloat(cur);
+  return null;
 }

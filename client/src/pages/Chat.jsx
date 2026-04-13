@@ -157,6 +157,34 @@ function ConversationsList({ businessId, active, onSelect, onNew, onPickAgent })
 // ─── Message bubble ───────────────────────────────────────────────────────────
 function MessageBubble({ msg }) {
   const isHuman = msg.sender_type === 'human'
+  const isBrain = msg.sender_type === 'system' && msg.sender_id === 'brain'
+
+  // Brain/system messages: subtle, centered, italic
+  if (isBrain) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
+        <div style={{
+          maxWidth: '80%',
+          padding: '8px 14px',
+          background: 'rgba(157,122,255,0.06)',
+          border: '1px solid rgba(157,122,255,0.15)',
+          borderRadius: 4,
+          fontFamily: 'var(--bp-font-mono)',
+          fontSize: 11,
+          color: 'var(--bp-text-2)',
+          fontStyle: 'italic',
+          textAlign: 'center',
+          lineHeight: 1.5,
+        }}>
+          <div style={{ fontSize: 9, letterSpacing: '0.15em', color: 'var(--bp-purple)', marginBottom: 4, fontStyle: 'normal', textTransform: 'uppercase' }}>
+            🧠 Blueprint Brain
+          </div>
+          {msg.content}
+        </div>
+      </div>
+    )
+  }
+
   const avatar = isHuman ? 'You' : getAgentAvatar(msg.sender_id)
 
   return (

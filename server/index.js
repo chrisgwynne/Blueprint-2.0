@@ -177,6 +177,7 @@ const mountRoutes = async () => {
   const { default: projectsRoutes } = await import('./routes/projects.js');
   const { default: timelineRoutes } = await import('./routes/timeline.js');
   const { default: agentStatusRoutes } = await import('./routes/agent-status.js');
+  const { default: brainRoutes } = await import('./routes/brain.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -204,6 +205,7 @@ const mountRoutes = async () => {
   app.use('/api/projects', projectsRoutes);
   app.use('/api/timeline', timelineRoutes);
   app.use('/api/agents-status', agentStatusRoutes);
+  app.use('/api/brain', brainRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });
@@ -435,6 +437,14 @@ async function start() {
       seedAllBusinesses();
     } catch (err) {
       console.warn('[startup] workflow seed skipped:', err.message);
+    }
+
+    // Brain — seed action_windows (idempotent)
+    try {
+      const { seedActionWindows } = await import('./brain/action-windows.js');
+      seedActionWindows();
+    } catch (err) {
+      console.warn('[startup] action-windows seed skipped:', err.message);
     }
 
     // Start scheduler (after routes are ready)

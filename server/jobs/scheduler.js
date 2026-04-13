@@ -339,6 +339,33 @@ export function startScheduler() {
     }
   });
 
+  // Brain — every morning at 07:00, resurface deferred tasks whose window
+  // has closed and mark measurement-ready actions.
+  cron.schedule('0 7 * * *', async () => {
+    try {
+      const { processDeferredTasks } = await import('../brain/restraint.js');
+      const { markMeasurementReady } = await import('../brain/action-windows.js');
+      await processDeferredTasks();
+      const ready = markMeasurementReady();
+      if (ready > 0) console.log(`[brain] ${ready} action(s) are now ready to measure.`);
+    } catch (err) {
+      console.error('[scheduler] brain daily pass failed:', err.message);
+    }
+  });
+
+  // Brain — weekly seasonal pattern detection (Sunday 04:00)
+  cron.schedule('0 4 * * 0', async () => {
+    try {
+      const { detectSeasonalPatterns } = await import('../brain/seasonality.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all();
+      for (const b of businesses) {
+        await detectSeasonalPatterns(b.id);
+      }
+    } catch (err) {
+      console.error('[scheduler] seasonal detection failed:', err.message);
+    }
+  });
+
   // Weekly KB lint — every Monday at 8am
   cron.schedule('0 8 * * 1', async () => {
     console.log('[scheduler] Running weekly KB lint pass...');
