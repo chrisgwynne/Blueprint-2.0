@@ -2,13 +2,13 @@ import fetch from 'node-fetch';
 
 const API_VERSION = '2024-10';
 
-function shopifyFetch(credentials, path, body = null) {
+function shopifyFetch(credentials, path, body = null, method = null) {
   const { shopDomain, accessToken } = credentials;
   if (!shopDomain || !accessToken) throw new Error('shopDomain and accessToken are required.');
 
   const url = `https://${shopDomain}/admin/api/${API_VERSION}${path}`;
   const options = {
-    method: body ? 'POST' : 'GET',
+    method: method ?? (body ? 'POST' : 'GET'),
     headers: {
       'X-Shopify-Access-Token': accessToken,
       'Content-Type': 'application/json',
@@ -400,6 +400,48 @@ const connector = {
       ...addTags.filter((t) => !currentTags.includes(t)),
     ];
     return this.updateProduct(credentials, config, productId, { tags: newTags.join(', ') });
+  },
+
+  // ─── THEME FILE ACCESS ────────────────────────────────────────────────────
+
+  async getActiveThemeId(credentials) {
+    const res = await shopifyFetch(credentials, '/themes.json?role=main');
+    if (!res.ok) throw new Error(`Shopify themes list failed (${res.status})`);
+    const data = await res.json();
+    const main = (data.themes ?? []).find(t => t.role === 'main');
+    if (!main) throw new Error('No active (main) theme found in Shopify store.');
+    return main.id;
+  },
+
+  async readThemeFile(credentials, themeId, fileKey) {
+    const res = await shopifyFetch(credentials, `/themes/${themeId}/assets.json?asset[key]=${encodeURIComponent(fileKey)}`);
+    if (!res.ok) {
+      const err = await res.text().catch(() => '');
+      throw new Error(`Shopify readThemeFile "${fileKey}" failed (${res.status}): ${err.slice(0, 200)}`);
+    }
+    const data = await res.json();
+    const asset = data.asset;
+    if (!asset) throw new Error(`Shopify readThemeFile: no asset returned for "${fileKey}"`);
+    return {
+      key: asset.key,
+      value: asset.value ?? null,
+      attachment: asset.attachment ?? null,
+      content_type: asset.content_type ?? null,
+      size: asset.size ?? null,
+      updated_at: asset.updated_at ?? null,
+    };
+  },
+
+  async writeThemeFile(credentials, themeId, fileKey, content) {
+    const res = await shopifyFetch(credentials, `/themes/${themeId}/assets.json`, {
+      asset: { key: fileKey, value: content },
+    }, 'PUT');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(`Shopify writeThemeFile "${fileKey}" failed (${res.status}): ${JSON.stringify(err.errors ?? err)}`);
+    }
+    const data = await res.json();
+    return data.asset;
   },
 
   async deleteProduct(credentials, config, productId) {

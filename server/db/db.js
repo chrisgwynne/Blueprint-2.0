@@ -437,6 +437,10 @@ const STARTUP_MIGRATIONS = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_investigations_biz_metric ON investigations(business_id, metric_name, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_investigations_signal ON investigations(signal_id)`,
+
+  // Investigation → action loop: link follow-on tasks to their parent investigation task
+  `ALTER TABLE tasks ADD COLUMN parent_task_id TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

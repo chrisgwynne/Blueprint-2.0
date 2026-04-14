@@ -35,6 +35,7 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'shopify_meta_update',
   'shopify_collection_update',
   'shopify_tag_update',
+  'shopify_theme_edit',
   'hire_agent',
   // Wix SEO write-back (page + blog-post SEO fields only, approved)
   'wix_seo_update',
@@ -215,21 +216,99 @@ async function executeInvestigation(task) {
     throw new Error('Investigation engine returned no result.');
   }
 
+  // Spawn follow-on action tasks if the investigation says act_now.
+  let spawnedCount = 0;
+  if (investigation.recommendation === 'act_now' && Array.isArray(investigation.action_tasks) && investigation.action_tasks.length > 0) {
+    spawnedCount = await spawnFollowOnTasks(investigation.action_tasks, task);
+  }
+
+  const outcomeNote = spawnedCount > 0
+    ? ` ${spawnedCount} follow-on task${spawnedCount > 1 ? 's' : ''} queued for approval.`
+    : '';
+
   return {
-    outcome: investigation.explanation
-      ? `Investigation complete. ${String(investigation.explanation).slice(0, 140)}${investigation.explanation.length > 140 ? '…' : ''}`
-      : 'Investigation complete.',
+    outcome: `Investigation complete.${outcomeNote}`,
     outcome_data: {
       type: 'investigation',
       investigation_id: investigation.id,
-      confidence: investigation.confidence ?? null,
       primary_cause: investigation.primary_cause ?? null,
+      primary_confidence: investigation.primary_confidence ?? null,
+      supporting_evidence: investigation.supporting_evidence ?? [],
+      alternative_causes: investigation.alternative_causes ?? [],
       recommendation: investigation.recommendation ?? null,
-      explanation: investigation.explanation ?? null,
-      alternatives: investigation.alternatives ?? null,
-      evidence: investigation.evidence ?? null,
+      recommended_action: investigation.recommended_action ?? null,
+      plain_english: investigation.plain_english ?? null,
+      confidence_note: investigation.confidence_note ?? null,
+      spawned_tasks: spawnedCount,
     },
   };
+}
+
+/**
+ * Spawn follow-on action tasks from investigation action_tasks array.
+ * Each task is created as proposed and an approval notification is sent.
+ * Returns the count of tasks successfully created.
+ */
+async function spawnFollowOnTasks(actionTasks, parentTask) {
+  const { createTask } = await import('./task-queue.js');
+  const { sendApprovalRequest, shouldAutoApprove } = await import('./approval.js');
+
+  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(parentTask.business_id);
+  if (!business) return 0;
+
+  let count = 0;
+  for (const at of actionTasks) {
+    if (!at?.title || !at?.action_type) continue;
+    try {
+      const newTask = createTask({
+        business_id: parentTask.business_id,
+        signal_id: parentTask.signal_id ?? null,
+        title: at.title,
+        description: at.description ?? null,
+        proposed_by: 'conductor:investigation',
+        action_type: at.action_type,
+        action_payload: at.action_payload ?? {},
+        trust_tier: 'yellow',
+        priority: at.priority ?? 'p2',
+        confidence: at.confidence ?? null,
+        estimated_impact: at.estimated_impact ?? null,
+        approval_mode: 'requires_approval',
+      });
+
+      // Link to parent investigation task
+      db.prepare('UPDATE tasks SET parent_task_id = ? WHERE id = ?')
+        .run(parentTask.id, newTask.id);
+
+      if (shouldAutoApprove(newTask)) {
+        const { approveTask } = await import('./task-queue.js');
+        approveTask(newTask.id, 'system:investigation');
+      } else {
+        await sendApprovalRequest(newTask, business);
+      }
+      count++;
+    } catch (err) {
+      console.warn('[executor] Failed to spawn follow-on task:', err.message);
+    }
+  }
+
+  // Single summary dashboard notification when multiple tasks spawned
+  if (count > 0) {
+    try {
+      const { generateId } = await import('../db/db.js');
+      db.prepare(`
+        INSERT INTO notifications (id, business_id, channel, severity, title, body, entity_type, entity_id, created_at)
+        VALUES (?, ?, 'dashboard', 'info', ?, ?, 'task', ?, CURRENT_TIMESTAMP)
+      `).run(
+        generateId(),
+        parentTask.business_id,
+        `Investigation spawned ${count} action task${count > 1 ? 's' : ''}`,
+        `From: "${parentTask.title}". Review and approve the follow-on tasks.`,
+        parentTask.id,
+      );
+    } catch { /* non-fatal */ }
+  }
+
+  return count;
 }
 
 function executeContentDraft(task) {
@@ -449,6 +528,62 @@ async function executeShopifyTagUpdate(task) {
   };
 }
 
+async function executeShopifyThemeEdit(task) {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials } = await getShopify(task);
+
+  const fileKey = payload.file_key;
+  if (!fileKey) throw new Error('shopify_theme_edit requires action_payload.file_key (e.g. "assets/custom.css")');
+  if (typeof payload.new_content !== 'string') throw new Error('shopify_theme_edit requires action_payload.new_content (string)');
+
+  // Resolve theme ID: prefer explicit payload value, otherwise fetch the active theme
+  let themeId = payload.theme_id ?? null;
+  if (!themeId) {
+    themeId = await shopify.getActiveThemeId(credentials);
+  }
+
+  // Backup current content before writing
+  const current = await shopify.readThemeFile(credentials, themeId, fileKey);
+  const previousContent = current.value ?? current.attachment ?? '';
+
+  const backupId = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO file_backups (id, business_id, connector_id, task_id, remote_path, content, content_hash, backed_up_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(
+    backupId, task.business_id,
+    `shopify:${credentials.shopDomain}`, task.id,
+    `theme:${themeId}/${fileKey}`,
+    previousContent,
+    crypto.createHash('sha256').update(previousContent).digest('hex'),
+  );
+
+  // Write the new content
+  const written = await shopify.writeThemeFile(credentials, themeId, fileKey, payload.new_content);
+
+  // Store rollback data
+  db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
+    .run(JSON.stringify({
+      action: 'restore_shopify_theme_file',
+      theme_id: themeId,
+      file_key: fileKey,
+      backup_id: backupId,
+      shop_domain: credentials.shopDomain,
+    }), task.id);
+
+  const shop = credentials.shopDomain;
+  return {
+    outcome: `Shopify theme file updated: "${fileKey}" on theme ${themeId} (backup ${backupId.slice(0, 8)})`,
+    outcome_data: {
+      theme_id: themeId,
+      file_key: fileKey,
+      backup_id: backupId,
+      admin_url: `https://${shop}/admin/themes/${themeId}/editor`,
+      updated_at: written?.updated_at ?? null,
+    },
+  };
+}
+
 // ─── Rollback system ──────────────────────────────────────────────────────────
 
 /**
@@ -477,6 +612,17 @@ export async function rollbackTask(taskId) {
     updateTaskStatus(taskId, 'failed', 'system:rollback', { outcome: 'Rolled back: product restored' });
     createTaskEvent(taskId, 'rolled_back', 'system:rollback', `Product ${rollback.product_id} restored to previous state`, {});
     return { outcome: `Product ${rollback.product_id} restored` };
+  }
+
+  if (rollback.action === 'restore_shopify_theme_file' && rollback.file_key) {
+    const backup = db.prepare('SELECT * FROM file_backups WHERE id = ?').get(rollback.backup_id);
+    if (!backup) throw new Error(`Backup ${rollback.backup_id} not found — cannot rollback theme file.`);
+
+    const { shopify, credentials } = await getShopify(taskRow);
+    await shopify.writeThemeFile(credentials, rollback.theme_id, rollback.file_key, backup.content);
+    updateTaskStatus(taskId, 'failed', 'system:rollback', { outcome: `Rolled back: theme file "${rollback.file_key}" restored` });
+    createTaskEvent(taskId, 'rolled_back', 'system:rollback', `Theme file "${rollback.file_key}" restored from backup ${rollback.backup_id.slice(0, 8)}`, {});
+    return { outcome: `Theme file "${rollback.file_key}" restored from backup` };
   }
 
   throw new Error(`Unknown rollback action: ${rollback.action}`);
@@ -583,6 +729,7 @@ export async function executeTask(taskId) {
       case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task); break;
       case 'shopify_collection_update': result = await executeShopifyCollectionUpdate(task); break;
       case 'shopify_tag_update':        result = await executeShopifyTagUpdate(task); break;
+      case 'shopify_theme_edit':        result = await executeShopifyThemeEdit(task); break;
       case 'hire_agent':                result = await executeHireAgent(task); break;
       case 'wix_seo_update':            result = await executeWixSeoUpdate(task); break;
       case 'server_file_write':         result = await executeServerFileWrite(task); break;
