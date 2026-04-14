@@ -160,7 +160,7 @@ A correlating social post is a candidate cause only when timing AND reach/engage
 Be conservative — only claim a likely_cause with confidence >= 0.7.`;
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5-20251001',
   });
 
   try {

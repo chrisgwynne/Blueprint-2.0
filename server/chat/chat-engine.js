@@ -173,7 +173,6 @@ async function runAgentChat(agentId, userMessage, history, businessId) {
   const systemPrompt = assembleChatSystemPrompt(agentId, business, history, recentSignals);
 
   const llmConfig = profile?.llm ?? {
-    provider: 'anthropic',
     model: 'claude-sonnet-4-20250514',
     temperature: 0.4,
     max_tokens: 2048,

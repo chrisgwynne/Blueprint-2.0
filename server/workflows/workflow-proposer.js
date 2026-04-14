@@ -53,11 +53,11 @@ function extractJSON(content) {
 
 function loadConductorLLM() {
   const path = join(AGENTS_DIR, 'conductor', 'profile.yaml');
-  if (!existsSync(path)) return { provider: 'anthropic', model: 'claude-sonnet-4-20250514', temperature: 0.3, max_tokens: 2048 };
+  if (!existsSync(path)) return { model: 'claude-sonnet-4-20250514', temperature: 0.3, max_tokens: 2048 };
   try {
     const profile = yaml.load(readFileSync(path, 'utf8'));
-    return profile?.llm ?? { provider: 'anthropic', model: 'claude-sonnet-4-20250514' };
-  } catch { return { provider: 'anthropic', model: 'claude-sonnet-4-20250514' }; }
+    return profile?.llm ?? { model: 'claude-sonnet-4-20250514' };
+  } catch { return { model: 'claude-sonnet-4-20250514' }; }
 }
 
 export async function proposeWorkflow(businessId, trigger = 'human request') {

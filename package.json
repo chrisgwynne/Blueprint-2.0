@@ -9,12 +9,10 @@
   "workspaces": ["server", "client"],
   "scripts": {
     "setup": "bun scripts/setup.js",
-    "dev": "concurrently \"bun run --cwd server dev\" \"bun run --cwd client dev\"",
+    "dev": "bun scripts/dev.js",
     "build": "bun run --cwd client build",
     "start": "bun run --cwd server start",
     "db:init": "bun run --cwd server db:init"
   },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
-  }
+  "devDependencies": {}
 }

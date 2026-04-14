@@ -291,6 +291,9 @@ export async function assembleInvestigationContext(task, businessId) {
     task,
     signal,
     relevant_connectors: relevantActive.map(c => c.type),
+    // All connected connector types for this business — used by the prompt
+    // builder to filter the valid action types to only what's executable.
+    all_connected_connectors: activeConnectors.map(c => c.type),
     current_metrics: currentMetrics,
     historical_metrics: historicalMetrics,
     in_flight_actions: inFlight,

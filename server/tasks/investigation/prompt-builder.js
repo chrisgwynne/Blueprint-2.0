@@ -20,6 +20,8 @@ export function buildInvestigationPrompt(task, context) {
   const outcomesBlock = buildOutcomesBlock(context.recent_outcomes);
   const goalsBlock = buildGoalsBlock(context.active_goals);
 
+  const actionTypesBlock = buildActionTypesBlock(context.all_connected_connectors ?? []);
+
   return `Investigate this specific business problem and produce actionable findings.
 
 # INVESTIGATION TASK
@@ -55,6 +57,8 @@ Produce a complete investigation report as JSON.
 Every field must be filled. No null values.
 Every claim must reference specific data from above.
 action_tasks must be specific enough to execute without further research.
+Only use action_types listed in the VALID ACTION TYPES section below — those
+are the only types this business can currently execute.
 If you cannot determine a specific fix, set action_type to 'investigation'
 with a focused scope — not a repeat of this investigation.
 
@@ -117,52 +121,7 @@ with a focused scope — not a repeat of this investigation.
   }
 }
 
-# VALID ACTION TYPES AND THEIR PAYLOADS
-
-meta_update:
-  payload: { url: string, field: "title|description", current: string, proposed: string }
-
-shopify_description_update:
-  payload: { product_id: string, product_title: string, current_description: string, proposed_description: string }
-
-shopify_theme_edit:
-  payload: { file_key: string, change_description: string, change_type: "add_defer|add_async|image_optimization|remove_render_blocking|css_optimization|other" }
-
-shopify_product_create:
-  payload: { title: string, description: string, product_type: string }
-
-shopify_page_create:
-  payload: { title: string, body_html: string, handle: string }
-
-shopify_meta_update:
-  payload: { resource_type: "product|page|collection", resource_id: string, seo_title: string, seo_description: string }
-
-github_issue:
-  payload: { title: string, body: string, labels: string[], assignees: string[] }
-
-github_pr:
-  payload: { title: string, branch: string, description: string, files_to_change: string[] }
-
-content_draft:
-  payload: { content_type: "blog_post|landing_page|product_description|email", title: string, brief: string, target_keyword: string, word_count: number }
-
-investigation:
-  payload: { focus: string, data_needed: string[], hypothesis: string }
-
-server_file_write:
-  payload: { connector_id: string, file_path: string, change_description: string }
-
-wix_seo_update:
-  payload: { page_id: string, field: "title|description", current: string, proposed: string }
-
-gbp_update:
-  payload: { field: "description|hours|category", current: string, proposed: string }
-
-klaviyo_flow_update:
-  payload: { flow_id: string, flow_name: string, change_description: string }
-
-meta_ads_update:
-  payload: { campaign_id: string, change_type: "budget|audience|creative|bid", change_description: string }
+${actionTypesBlock}
 
 # ORDER YOUR action_tasks
 
@@ -226,4 +185,58 @@ function buildGoalsBlock(goals) {
   return goals.map(g =>
     `- ${g.title}: ${(g.progress_pct ?? 0).toFixed(0)}% toward target (${g.metric_name}: ${g.metric_current ?? '?'} → ${g.metric_target ?? '?'})`
   ).join('\n');
+}
+
+// ─── Action types filtered to connected connectors ────────────────────────────
+
+// Maps connector type → action types it enables.
+// Connectors not in this map have no dedicated write-back actions.
+const CONNECTOR_ACTIONS = {
+  shopify:       ['shopify_description_update', 'shopify_theme_edit', 'shopify_product_create', 'shopify_page_create', 'shopify_meta_update'],
+  github:        ['github_issue', 'github_pr'],
+  'server-access': ['server_file_write'],
+  wix:           ['wix_seo_update'],
+  gbp:           ['gbp_update'],
+  klaviyo:       ['klaviyo_flow_update'],
+  'meta-ads':    ['meta_ads_update'],
+};
+
+const ACTION_TYPE_PAYLOADS = {
+  investigation:              'payload: { focus: string, data_needed: string[], hypothesis: string }',
+  content_draft:              'payload: { content_type: "blog_post|landing_page|product_description|email", title: string, brief: string, target_keyword: string, word_count: number }',
+  meta_update:                'payload: { url: string, field: "title|description", current: string, proposed: string }',
+  shopify_description_update: 'payload: { product_id: string, product_title: string, current_description: string, proposed_description: string }',
+  shopify_theme_edit:         'payload: { file_key: string, change_description: string, change_type: "add_defer|add_async|image_optimization|remove_render_blocking|css_optimization|other" }',
+  shopify_product_create:     'payload: { title: string, description: string, product_type: string }',
+  shopify_page_create:        'payload: { title: string, body_html: string, handle: string }',
+  shopify_meta_update:        'payload: { resource_type: "product|page|collection", resource_id: string, seo_title: string, seo_description: string }',
+  github_issue:               'payload: { title: string, body: string, labels: string[], assignees: string[] }',
+  github_pr:                  'payload: { title: string, branch: string, description: string, files_to_change: string[] }',
+  server_file_write:          'payload: { connector_id: string, file_path: string, change_description: string }',
+  wix_seo_update:             'payload: { page_id: string, field: "title|description", current: string, proposed: string }',
+  gbp_update:                 'payload: { field: "description|hours|category", current: string, proposed: string }',
+  klaviyo_flow_update:        'payload: { flow_id: string, flow_name: string, change_description: string }',
+  meta_ads_update:            'payload: { campaign_id: string, change_type: "budget|audience|creative|bid", change_description: string }',
+};
+
+function buildActionTypesBlock(connectedTypes) {
+  const connected = new Set(connectedTypes);
+
+  // Always available regardless of connectors
+  const available = ['investigation', 'content_draft', 'meta_update'];
+
+  // Add connector-specific types
+  for (const [connectorType, actionTypes] of Object.entries(CONNECTOR_ACTIONS)) {
+    if (connected.has(connectorType)) {
+      available.push(...actionTypes);
+    }
+  }
+
+  const lines = ['# VALID ACTION TYPES AND THEIR PAYLOADS', ''];
+  for (const type of available) {
+    const payload = ACTION_TYPE_PAYLOADS[type];
+    if (payload) lines.push(`${type}:\n  ${payload}\n`);
+  }
+
+  return lines.join('\n');
 }

@@ -61,7 +61,7 @@ Context: ${context}
 Propose ONE specific goal.`;
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-20250514',
   });
 
   try {

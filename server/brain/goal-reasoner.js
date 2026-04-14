@@ -251,7 +251,7 @@ Produce the full JSON schema described in the system prompt.`;
 async function reasonAboutGoal(ctx) {
   const user = buildReasoningPrompt(ctx);
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-20250514',
   });
 
   try {

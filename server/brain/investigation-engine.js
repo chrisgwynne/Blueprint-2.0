@@ -210,7 +210,7 @@ export async function runInvestigation({ businessId, metricName = null, signalId
   });
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-20250514',
   });
 
   let rawContent = '';

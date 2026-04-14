@@ -69,7 +69,7 @@ export async function modelScenarios(businessId, question, context = '') {
   const prompt = buildPrompt(question, context, ctx);
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-20250514',
   });
 
   let rawContent = '';

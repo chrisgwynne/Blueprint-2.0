@@ -58,7 +58,7 @@ patient about? Plain text, no markdown.`;
 
   try {
     const { providerId, model } = resolveProfileLLM({
-      provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5-20251001',
     });
     const result = await runLLM(providerId, model, {
       system: 'Write a concise 2-3 sentence temporal health summary. Plain text. No JSON. No markdown.',

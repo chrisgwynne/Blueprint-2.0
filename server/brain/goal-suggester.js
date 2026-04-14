@@ -268,7 +268,7 @@ Pattern details: ${JSON.stringify(pattern)}
 Produce a goal suggestion per the JSON schema. Estimate opportunity value conservatively.`;
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5-20251001',
   });
 
   try {
