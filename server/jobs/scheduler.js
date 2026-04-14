@@ -291,15 +291,97 @@ export function startScheduler() {
     }
   });
 
-  // Every hour at :05: run conductor for all businesses.
-  // Offset by 5 minutes so it doesn't overlap with the daily full sync at 06:00,
-  // and connector poll syncs that fire on the :00 boundary have a chance to complete.
-  cron.schedule('5 * * * *', async () => {
-    console.log('[scheduler] Running hourly conductor pass...');
+  // ─── Safety-net polls (replace the old hourly conductor cron) ───────────
+  //
+  // Agents are primarily event-driven: connector syncs, signals, inbox briefs,
+  // chat @mentions all wake the right agent via dispatchAgentEvent. The
+  // polls below are a fallback for events that were missed. Both polls gate
+  // spending through hasWorkToDo() — a poll that finds nothing to do returns
+  // in milliseconds with zero LLM cost.
+
+  // Conductor safety-net — every 15 minutes, work-gated.
+  // Replaces the old "run conductor every hour regardless" job. Because
+  // hasWorkToDo() is very cheap, we can poll more often AND spend less.
+  cron.schedule('*/15 * * * *', async () => {
     try {
-      await runConductorAllBusinesses();
+      const { hasWorkToDo } = await import('../agents/work-checker.js');
+      const businesses = db.prepare('SELECT id, slug FROM businesses').all();
+      let ran = 0, skipped = 0;
+      for (const biz of businesses) {
+        try {
+          const work = hasWorkToDo('conductor', biz.id);
+          if (!work.hasWork) { skipped += 1; continue; }
+          // Fire-and-forget — don't block the scheduler tick on a long LLM call
+          (async () => {
+            try {
+              const { runAgent } = await import('../agents/agent-runner.js');
+              await runAgent('conductor', biz.id, 'safety_net_poll');
+            } catch (err) {
+              console.warn(`[scheduler] Conductor safety-net run failed for ${biz.slug}:`, err.message);
+            }
+          })();
+          ran += 1;
+        } catch (err) {
+          console.warn(`[scheduler] Conductor safety-net check failed for ${biz.slug}:`, err.message);
+        }
+      }
+      if (ran > 0 || skipped > 0) {
+        console.log(`[scheduler] Conductor safety-net: ${ran} queued, ${skipped} skipped (no work).`);
+      }
     } catch (err) {
-      console.error('[scheduler] Conductor run failed:', err);
+      console.error('[scheduler] Conductor safety-net poll failed:', err);
+    }
+  });
+
+  // Per-agent safety-net — every 5 minutes, but each agent's own poll
+  // interval decides whether it's actually due. 5-min granularity gives
+  // sentinel (5-min interval) true responsiveness; other agents wait N
+  // multiples of 5 min before their interval elapses.
+  cron.schedule('*/5 * * * *', async () => {
+    try {
+      const { hasWorkToDo, _internal } = await import('../agents/work-checker.js');
+      const { getPollInterval } = await import('../agents/poll-intervals.js');
+
+      const businesses = db.prepare('SELECT id, slug FROM businesses').all();
+      // Exclude conductor — it has its own 15-min poll above.
+      const activeAgents = db.prepare(
+        "SELECT id FROM agents WHERE status = 'active' AND id != 'conductor'"
+      ).all();
+
+      let queued = 0;
+      for (const biz of businesses) {
+        for (const agent of activeAgents) {
+          const intervalMin = getPollInterval(agent.id);
+          const lastRun = _internal.getLastSuccessfulRunAt(agent.id, biz.id);
+
+          // Not due yet? Skip.
+          if (lastRun) {
+            const msSince = Date.now() - new Date(lastRun + (lastRun.endsWith('Z') ? '' : 'Z')).getTime();
+            if (Number.isFinite(msSince) && msSince < intervalMin * 60 * 1000) continue;
+          }
+
+          // Due — but is there work? (The runner's gate is belt-and-braces;
+          // checking here avoids recording a skipped_run row for every
+          // quiet poll.)
+          const work = hasWorkToDo(agent.id, biz.id);
+          if (!work.hasWork) continue;
+
+          (async () => {
+            try {
+              const { runAgent } = await import('../agents/agent-runner.js');
+              await runAgent(agent.id, biz.id, 'safety_net_poll');
+            } catch (err) {
+              console.warn(`[scheduler] ${agent.id} safety-net run failed for ${biz.slug}:`, err.message);
+            }
+          })();
+          queued += 1;
+        }
+      }
+      if (queued > 0) {
+        console.log(`[scheduler] Agents safety-net: ${queued} queued.`);
+      }
+    } catch (err) {
+      console.error('[scheduler] Per-agent safety-net poll failed:', err);
     }
   });
 
