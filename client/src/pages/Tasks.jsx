@@ -490,7 +490,78 @@ function TaskDetailDrawer({ taskId, onClose, onUpdate }) {
                       {task.outcome_data.error}
                     </div>
                   )}
-                  {task.outcome_data && !task.outcome_data.error && (
+                  {task.outcome_data && !task.outcome_data.error && task.outcome_data.type === 'investigation' && (
+                    <div style={{ marginTop: 8 }}>
+                      {/* Primary cause */}
+                      {task.outcome_data.primary_cause && (
+                        <div style={{ marginBottom: 8, padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: 3 }}>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>
+                            Primary Cause
+                            {task.outcome_data.primary_confidence != null && (
+                              <span style={{ marginLeft: 6, color: task.outcome_data.primary_confidence >= 0.7 ? 'var(--bp-green)' : task.outcome_data.primary_confidence >= 0.4 ? 'var(--bp-amber)' : 'var(--bp-text-3)' }}>
+                                {Math.round(task.outcome_data.primary_confidence * 100)}% conf
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)', lineHeight: 1.4 }}>
+                            {task.outcome_data.primary_cause}
+                          </div>
+                        </div>
+                      )}
+                      {/* Plain English explanation */}
+                      {task.outcome_data.plain_english && (
+                        <div style={{ marginBottom: 8, padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: 3 }}>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 3 }}>Analysis</div>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.6 }}>
+                            {task.outcome_data.plain_english}
+                          </div>
+                        </div>
+                      )}
+                      {/* Supporting evidence */}
+                      {Array.isArray(task.outcome_data.supporting_evidence) && task.outcome_data.supporting_evidence.length > 0 && (
+                        <div style={{ marginBottom: 8, padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: 3 }}>
+                          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>Evidence</div>
+                          {task.outcome_data.supporting_evidence.map((e, i) => (
+                            <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5, display: 'flex', gap: 6, marginBottom: 2 }}>
+                              <span style={{ color: 'var(--bp-green)', flexShrink: 0 }}>›</span>
+                              <span>{e}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {/* Recommendation badge */}
+                      {task.outcome_data.recommendation && (
+                        <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{
+                            fontFamily: 'var(--bp-font-mono)', fontSize: 9, padding: '3px 8px', borderRadius: 3, letterSpacing: '0.06em', fontWeight: 700, textTransform: 'uppercase',
+                            background: task.outcome_data.recommendation === 'act_now' ? 'rgba(239,68,68,0.15)' : task.outcome_data.recommendation === 'monitor' ? 'rgba(245,158,11,0.15)' : 'rgba(100,116,139,0.15)',
+                            color: task.outcome_data.recommendation === 'act_now' ? 'var(--bp-red)' : task.outcome_data.recommendation === 'monitor' ? 'var(--bp-amber)' : 'var(--bp-text-3)',
+                            border: `1px solid ${task.outcome_data.recommendation === 'act_now' ? 'rgba(239,68,68,0.3)' : task.outcome_data.recommendation === 'monitor' ? 'rgba(245,158,11,0.3)' : 'rgba(100,116,139,0.2)'}`,
+                          }}>
+                            {task.outcome_data.recommendation.replace('_', ' ')}
+                          </span>
+                          {task.outcome_data.recommended_action && (
+                            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)' }}>{task.outcome_data.recommended_action}</span>
+                          )}
+                        </div>
+                      )}
+                      {/* Spawned follow-on tasks count */}
+                      {task.outcome_data.spawned_tasks > 0 && (
+                        <div style={{ padding: '6px 10px', background: 'rgba(34,197,94,0.08)', borderRadius: 3, border: '1px solid rgba(34,197,94,0.2)' }}>
+                          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-green)' }}>
+                            ✓ {task.outcome_data.spawned_tasks} follow-on action task{task.outcome_data.spawned_tasks > 1 ? 's' : ''} queued for approval
+                          </span>
+                        </div>
+                      )}
+                      {/* Confidence note */}
+                      {task.outcome_data.confidence_note && (
+                        <div style={{ marginTop: 6, fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', fontStyle: 'italic' }}>
+                          {task.outcome_data.confidence_note}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {task.outcome_data && !task.outcome_data.error && task.outcome_data.type !== 'investigation' && (
                     <details style={{ marginTop: 6 }}>
                       <summary style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', cursor: 'pointer' }}>
                         Outcome data

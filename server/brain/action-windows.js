@@ -102,6 +102,16 @@ export const ACTION_WINDOWS = [
     measurement_notes: 'GBP posts have immediate but short-lived visibility. Views peak in first week. Measure within 7-14 days.',
     volatility: 'high',
   },
+  {
+    action_type: 'shopify_theme_edit',
+    display_name: 'Shopify theme file edit',
+    min_days: 0,
+    expected_days: 7,
+    max_days: 21,
+    metric_types: ['shopify.conversion_rate', 'ga4.bounce_rate', 'ga4.sessions', 'pagespeed.mobile.performance_score'],
+    measurement_notes: 'Theme changes take effect immediately. Conversion and UX metric changes need 7-14 days of traffic for statistical significance.',
+    volatility: 'medium',
+  },
 ];
 
 /**

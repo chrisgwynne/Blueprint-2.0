@@ -23,6 +23,12 @@ Rules:
 - Be specific. Reference real numbers from the evidence.
 - Quantify uncertainty. If evidence is thin, say so.
 - Give ONE clear recommendation.
+- If recommendation is "act_now", populate action_tasks with 1-3 specific executable tasks.
+  Each task must have a concrete action_type from this list:
+    shopify_description_update, shopify_meta_update, shopify_page_update,
+    shopify_collection_update, shopify_tag_update, shopify_theme_edit,
+    content_draft, github_issue
+  Leave action_tasks as [] for other recommendations.
 
 Return only valid JSON. No prose outside JSON.
 
@@ -38,6 +44,17 @@ Schema:
   "seasonal_factor_pct": <number 0-100 — how much of the change is plausibly seasonal>,
   "recommendation": "act_now|wait|monitor|investigate",
   "recommended_action": "what to do specifically, or null",
+  "action_tasks": [
+    {
+      "title": "short imperative task title",
+      "description": "1-2 sentences explaining exactly what to do and why",
+      "action_type": "one of the allowed action_types above",
+      "priority": "p1|p2|p3",
+      "confidence": 0.0-1.0,
+      "estimated_impact": "brief impact description",
+      "action_payload": {}
+    }
+  ],
   "plain_english": "150-200 words explaining it to a non-technical business owner",
   "confidence_note": "one sentence acknowledging the limits of the analysis"
 }`;

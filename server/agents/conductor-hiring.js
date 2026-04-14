@@ -84,7 +84,7 @@ export async function analyseAndProposeHires(businessId, opts = {}) {
   // 1. Active connectors for this business
   const activeConnectors = db.prepare(
     `SELECT type, name FROM connectors
-     WHERE business_id = ? AND status = 'active'`
+     WHERE business_id = ? AND status = 'connected'`
   ).all(businessId);
   const activeTypes = new Set(activeConnectors.map((c) => c.type));
 
@@ -111,6 +111,7 @@ export async function analyseAndProposeHires(businessId, opts = {}) {
       id,
       name: profile.name ?? id,
       title: profile.title ?? null,
+      avatar: profile.avatar ?? null,
       personality: profile.personality ?? null,
       required,
       preferred,
@@ -161,6 +162,7 @@ export async function analyseAndProposeHires(businessId, opts = {}) {
       ...r,
       name: candidate?.name ?? r.agent_id,
       title: candidate?.title ?? null,
+      avatar: candidate?.avatar ?? null,
       required_connectors: candidate?.required ?? [],
       preferred_connectors: candidate?.preferred ?? [],
       preferred_met: candidate?.preferred_met ?? [],

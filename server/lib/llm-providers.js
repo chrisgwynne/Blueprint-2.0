@@ -266,17 +266,24 @@ export function resolveProfileLLM(profileLLM) {
     }
   }
 
-  // If the requested provider is not configured, fall back to one that is.
+  // If the requested provider is not configured:
+  //   - explicit provider requested → fail with a clear message (no silent fallback)
+  //   - no provider specified (used the 'anthropic' default) → pick any configured one
   if (!isProviderConfigured(providerId)) {
-    const fallback = pickConfiguredProvider();
-    if (fallback && fallback !== providerId) {
-      console.warn(`[llm] Requested provider '${providerId}' has no credentials — falling back to '${fallback}'.`);
-      providerId = fallback;
-      // If the caller pinned a model that only makes sense for the original
-      // provider, swap to a sensible default for the fallback provider.
-      if (!profileLLM?.model || profileLLM.provider !== providerId) {
-        model = DEFAULT_MODEL_BY_PROVIDER[providerId] ?? model;
-      }
+    if (profileLLM?.provider != null) {
+      // Caller explicitly requested this provider but it isn't set up.
+      throw new Error(
+        `LLM provider '${providerId}' is not configured. ` +
+        (providerId === 'anthropic'
+          ? 'Add an API key in Settings → LLM Providers, or set the ANTHROPIC_API_KEY environment variable.'
+          : `Add credentials in Settings → LLM Providers.`)
+      );
+    }
+    // No explicit provider — pick whatever the user has configured.
+    const any = pickConfiguredProvider();
+    if (any && any !== providerId) {
+      providerId = any;
+      model = DEFAULT_MODEL_BY_PROVIDER[any] ?? model;
     }
   }
 
