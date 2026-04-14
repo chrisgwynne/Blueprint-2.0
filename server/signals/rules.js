@@ -2245,6 +2245,206 @@ export const rules = [
       };
     },
   },
+
+  // ─── Wix ──────────────────────────────────────────────────────────────
+
+  {
+    id: 'wix_seo_issues',
+    connectorType: 'wix',
+    type: 'wix_seo_issues',
+    severity: 'warning',
+    name: 'Wix Pages Missing SEO',
+    evaluate(current = {}) {
+      const noTitle = Number(current['wix.pages_no_seo_title'] ?? 0);
+      const noDesc = Number(current['wix.pages_no_meta_description'] ?? 0);
+      const triggered = noTitle > 3 || noDesc > 3;
+      return {
+        triggered,
+        confidence: triggered ? 0.8 : 0,
+        data: { pages_no_seo_title: noTitle, pages_no_meta_description: noDesc },
+        title: triggered ? `${noTitle + noDesc} page(s) missing SEO fields` : '',
+        description: triggered
+          ? `Multiple pages are missing SEO title or meta description — a straightforward opportunity to improve organic visibility.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'wix_pages_noindexed',
+    connectorType: 'wix',
+    type: 'wix_pages_noindexed',
+    severity: 'info',
+    name: 'Wix Pages Noindexed',
+    evaluate(current = {}) {
+      const n = Number(current['wix.pages_noindexed'] ?? 0);
+      const triggered = n > 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.6 : 0,
+        data: { noindexed: n },
+        title: triggered ? `${n} page(s) set to noindex` : '',
+        description: triggered
+          ? `Some pages have noIndex enabled. Verify this is intentional — accidental noindex is a common SEO bug.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'wix_blog_inactive',
+    connectorType: 'wix',
+    type: 'wix_blog_inactive',
+    severity: 'info',
+    name: 'Wix Blog Inactive',
+    evaluate(current = {}) {
+      const total = Number(current['wix.blog_posts_total'] ?? 0);
+      const published30 = Number(current['wix.blog_posts_published_30d'] ?? 0);
+      const triggered = total > 0 && published30 === 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { total, published_30d: published30 },
+        title: triggered ? 'Blog exists but no posts published in 30 days' : '',
+        description: triggered
+          ? `The Wix blog has ${total} post(s) but none published in the last 30 days. Inactive blogs rank worse over time.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'wix_seo_score_drop',
+    connectorType: 'wix',
+    type: 'wix_seo_score_drop',
+    severity: 'warning',
+    name: 'Wix SEO Score Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current['wix.seo_score'] ?? 0);
+      const prev = Number(previous['wix.seo_score'] ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = prev - curr;
+      const triggered = drop > 10;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.4 + drop / 50) : 0,
+        data: { from: prev, to: curr, drop },
+        title: triggered ? `Site SEO score dropped ${drop} points` : '',
+        description: triggered
+          ? `Overall site SEO score fell from ${prev} to ${curr}. Pages may have been edited and lost SEO settings.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'wix_seo_opportunity',
+    connectorType: 'wix',
+    type: 'wix_seo_opportunity',
+    severity: 'info',
+    name: 'Wix SEO Description Opportunity',
+    evaluate(current = {}) {
+      const n = Number(current['wix.pages_no_meta_description'] ?? 0);
+      const triggered = n > 5;
+      return {
+        triggered,
+        confidence: triggered ? 0.75 : 0,
+        data: { pages_no_meta_description: n },
+        title: triggered ? `${n} pages missing meta descriptions` : '',
+        description: triggered
+          ? `Adding meta descriptions to these pages could improve click-through rates from search results.`
+          : '',
+      };
+    },
+  },
+
+  // ─── Server access (SSH/FTP) ──────────────────────────────────────────
+
+  {
+    id: 'server_php_errors_spike',
+    connectorType: 'server-access',
+    type: 'server_php_errors_spike',
+    severity: 'alert',
+    name: 'Server PHP Errors Spike',
+    evaluate(current = {}) {
+      const n = Number(current['server.php_errors_24h'] ?? 0);
+      const triggered = n > 50;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.5 + n / 500) : 0,
+        data: { php_errors_24h: n },
+        title: triggered ? `${n} PHP errors in the last 24h` : '',
+        description: triggered
+          ? `High PHP error count detected. Check the Error Log tab and investigate root cause.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'server_php_fatal_error',
+    connectorType: 'server-access',
+    type: 'server_php_fatal_error',
+    severity: 'critical',
+    name: 'Server PHP Fatal Error',
+    evaluate(current = {}) {
+      const n = Number(current['server.php_fatal_errors_24h'] ?? 0);
+      const triggered = n > 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.95 : 0,
+        data: { php_fatal_errors_24h: n },
+        title: triggered ? `${n} PHP fatal error(s) detected` : '',
+        description: triggered
+          ? `Fatal errors mean at least part of the site is broken for real users. Investigate the error log immediately.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'server_disk_usage_high',
+    connectorType: 'server-access',
+    type: 'server_disk_usage_high',
+    severity: 'warning',
+    name: 'Server Disk Usage High',
+    evaluate(current = {}) {
+      const pct = Number(current['server.disk_usage_pct'] ?? 0);
+      const triggered = pct > 80;
+      return {
+        triggered,
+        confidence: triggered ? 0.85 : 0,
+        data: { disk_usage_pct: pct },
+        title: triggered ? `Disk usage at ${pct}%` : '',
+        description: triggered
+          ? `Disk usage above 80% often leads to upload failures, log truncation, or service outages. Plan cleanup.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'server_unexpected_file_change',
+    connectorType: 'server-access',
+    type: 'server_unexpected_file_change',
+    severity: 'info',
+    name: 'Server File Changed Externally',
+    evaluate(current = {}) {
+      const changes = Array.isArray(current['server.external_changes'])
+        ? current['server.external_changes']
+        : [];
+      const triggered = changes.length > 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { count: changes.length, files: changes.slice(0, 20) },
+        title: triggered ? `${changes.length} file(s) changed outside of Blueprint` : '',
+        description: triggered
+          ? `Blueprint detected file content hashes changing with no corresponding approved write task. This is normal if you're editing directly — it's a security signal if you're not.`
+          : '',
+      };
+    },
+  },
 ];
 
 // ─── Meta Ads helpers ────────────────────────────────────────────────────────

@@ -286,6 +286,34 @@ Top performing platform: ${topPlatLabel}
 Next scheduled post: ${nextMeta?.iso ?? 'none queued'}`;
   }
 
+  if (type === 'wix') {
+    return `### WIX
+Total pages: ${v(latestByName, 'wix.total_pages')}
+Pages missing SEO title: ${v(latestByName, 'wix.pages_no_seo_title')}
+Pages missing meta description: ${v(latestByName, 'wix.pages_no_meta_description')}
+Pages noindexed: ${v(latestByName, 'wix.pages_noindexed')}
+Blog posts total: ${v(latestByName, 'wix.blog_posts_total')}, published last 30d: ${v(latestByName, 'wix.blog_posts_published_30d')}
+Blog posts missing SEO: ${v(latestByName, 'wix.blog_posts_no_seo')}
+Overall SEO score: ${v(latestByName, 'wix.seo_score')}/100
+Sessions (30d): ${v(latestByName, 'wix.sessions_30d')}, pageviews: ${v(latestByName, 'wix.pageviews_30d')}`;
+  }
+
+  if (type === 'server-access') {
+    const errors = vData(latestByName, 'server.recent_errors') ?? [];
+    const fatalNames = Array.isArray(errors)
+      ? errors.filter((e) => e.type === 'fatal').slice(0, 3).map((e) => (e.line || '').slice(0, 120)).join(' | ')
+      : '';
+    const external = vData(latestByName, 'server.external_changes') ?? [];
+    const extCount = Array.isArray(external) ? external.length : 0;
+    return `### SERVER ACCESS
+Tracked files: ${v(latestByName, 'server.files_total')} (${v(latestByName, 'server.template_files_count')} templates, ${v(latestByName, 'server.content_files_count')} content)
+PHP errors 24h: ${v(latestByName, 'server.php_errors_24h')}, fatal: ${v(latestByName, 'server.php_fatal_errors_24h')}
+Disk usage: ${v(latestByName, 'server.disk_usage_pct')}%
+External changes detected: ${extCount}
+Recent fatals: ${fatalNames || 'none'}
+NOTE: any proposed fix must be a server_file_write task with exact before/after and a backup — writes never auto-execute.`;
+  }
+
   return null;
 }
 

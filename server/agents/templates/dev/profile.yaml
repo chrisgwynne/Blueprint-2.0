@@ -15,7 +15,8 @@ llm:
   cost_cap_daily_usd: 1
 connectors_required:
   - github
-connectors_optional: []
+connectors_optional:
+  - server-access
 schedule:
   - id: daily-issue-triage
     cron: 0 9 * * 1-5
@@ -30,4 +31,5 @@ notification_channels:
 memory_docs: []
 required_connectors:
   - github
-preferred_connectors: []
+preferred_connectors:
+  - server-access

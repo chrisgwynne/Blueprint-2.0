@@ -10,6 +10,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",
     "@isomorphic-git/lightning-fs": "^4.6.0",
+    "basic-ftp": "^5.2.2",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -21,6 +22,7 @@
     "js-yaml": "^4.1.0",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
+    "ssh2": "^1.17.0",
     "stripe": "^22.0.1",
     "uuid": "^9.0.1"
   }

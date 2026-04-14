@@ -256,6 +256,35 @@ const STARTUP_MIGRATIONS = [
   `ALTER TABLE kb_docs ADD COLUMN review_reason TEXT`,
   `ALTER TABLE kb_docs ADD COLUMN created_by TEXT`,
 
+  // Server-access connector — every file write backs up the previous
+  // version so Blueprint can roll back without needing server access.
+  // server_file_cache stores content hashes so we can detect unexpected
+  // external changes between syncs.
+  `CREATE TABLE IF NOT EXISTS file_backups (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_id TEXT NOT NULL,
+    task_id TEXT,
+    remote_path TEXT NOT NULL,
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    backed_up_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_file_backups_connector_path ON file_backups(connector_id, remote_path, backed_up_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_file_backups_task ON file_backups(task_id)`,
+  `CREATE TABLE IF NOT EXISTS server_file_cache (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_id TEXT NOT NULL,
+    remote_path TEXT NOT NULL,
+    content TEXT,
+    content_hash TEXT,
+    file_size INTEGER,
+    last_modified DATETIME,
+    cached_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_server_file_cache_unique ON server_file_cache(connector_id, remote_path)`,
+
   // ─── Intelligence layer (9 features) ────────────────────────────────────
   // Feature 1 — Scenarios
   `CREATE TABLE IF NOT EXISTS scenarios (

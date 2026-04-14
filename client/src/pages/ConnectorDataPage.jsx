@@ -41,6 +41,8 @@ const CONNECTOR_META = {
   semrush:       { icon: TrendingUp,  label: 'SEMrush',            color: '#FF642D' },
   social:        { icon: MessageSquare, label: 'Facebook & Instagram', color: '#1877F2' },
   buffer:        { icon: Send,        label: 'Buffer',             color: '#168EEA' },
+  wix:           { icon: Globe,       label: 'Wix',                color: '#0046FF' },
+  'server-access': { icon: Database,  label: 'Server (SSH/FTP)',   color: 'var(--bp-red)' },
   default:       { icon: Database,    label: 'Data Source',        color: 'var(--bp-text-3)' },
 }
 
@@ -64,6 +66,8 @@ const CONNECTOR_TABS = {
   semrush:       ['Overview', 'Keywords', 'Competitors', 'Opportunities', 'Raw Data'],
   social:        ['Overview', 'Facebook', 'Instagram', 'Posts', 'Raw Data'],
   buffer:        ['Overview', 'Queue', 'Recent Posts', 'Raw Data'],
+  wix:           ['Overview', 'Pages', 'Blog', 'SEO Audit', 'Raw Data'],
+  'server-access': ['Overview', 'File Explorer', 'Error Log', 'Changes', 'Backups', 'Raw Data'],
   default:       ['Overview', 'Raw Data'],
 }
 
@@ -1903,6 +1907,19 @@ function renderTab(connector, tab, data, range) {
     if (tab === 'Queue')        return <BufferQueue        metrics={metrics} />
     if (tab === 'Recent Posts') return <BufferRecentPosts  metrics={metrics} />
   }
+  if (type === 'wix') {
+    if (tab === 'Overview')   return <WixOverview   metrics={metrics} />
+    if (tab === 'Pages')      return <WixPages      metrics={metrics} />
+    if (tab === 'Blog')       return <WixBlog       metrics={metrics} />
+    if (tab === 'SEO Audit')  return <WixSeoAudit   metrics={metrics} />
+  }
+  if (type === 'server-access') {
+    if (tab === 'Overview')       return <ServerAccessOverview      connector={connector} metrics={metrics} />
+    if (tab === 'File Explorer')  return <ServerAccessFileExplorer  metrics={metrics} />
+    if (tab === 'Error Log')      return <ServerAccessErrorLog      metrics={metrics} />
+    if (tab === 'Changes')        return <ServerAccessChanges       connector={connector} />
+    if (tab === 'Backups')        return <ServerAccessBackups       connector={connector} />
+  }
 
   return <EmptyState message="This view is coming soon." />
 }
@@ -2327,6 +2344,275 @@ function BufferRecentPosts({ metrics }) {
       </table>
     </div>
   )
+}
+
+// ─── Wix tabs ───────────────────────────────────────────────────────────────
+
+function WixOverview({ metrics }) {
+  const totalPages = latestValue(metrics, 'wix.total_pages')
+  const posts = latestValue(metrics, 'wix.blog_posts_total')
+  const score = latestValue(metrics, 'wix.seo_score')
+  const sessions = latestValue(metrics, 'wix.sessions_30d')
+  const noSeoTitle = latestValue(metrics, 'wix.pages_no_seo_title')
+  const noMetaDesc = latestValue(metrics, 'wix.pages_no_meta_description')
+  const noindex = latestValue(metrics, 'wix.pages_noindexed')
+
+  const scoreColor = score >= 80 ? 'var(--bp-green)'
+                   : score >= 60 ? 'var(--bp-amber)'
+                   : 'var(--bp-red)'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Total Pages" value={totalPages} />
+        <MetricCard label="Blog Posts" value={posts} />
+        <MetricCard label="SEO Score" value={score} accent={scoreColor} />
+        <MetricCard label="Sessions (30d)" value={sessions} />
+      </div>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+          SEO health
+        </div>
+        <div style={{ height: 8, background: 'var(--bp-surface-2)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 }}>
+          <div style={{ width: `${Math.max(0, Math.min(100, score))}%`, height: '100%', background: scoreColor, transition: 'width 0.3s' }} />
+        </div>
+        <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          <div>Missing title: <strong style={{ color: noSeoTitle > 0 ? 'var(--bp-amber)' : 'var(--bp-text)' }}>{noSeoTitle}</strong></div>
+          <div>Missing description: <strong style={{ color: noMetaDesc > 0 ? 'var(--bp-amber)' : 'var(--bp-text)' }}>{noMetaDesc}</strong></div>
+          <div>Noindexed: <strong style={{ color: noindex > 0 ? 'var(--bp-red)' : 'var(--bp-text)' }}>{noindex}</strong></div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function WixPages({ metrics }) {
+  const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
+  if (!audit.length) return <EmptyState message="No pages synced yet." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Page</Th><Th>URL</Th><Th>SEO Title</Th><Th>Meta Desc</Th><Th>Indexed</Th><Th align="right">Score</Th>
+        </tr></thead>
+        <tbody>{audit.map((p, i) => (
+          <tr key={p.pageId || i} style={{ borderBottom: '1px solid var(--bp-border)',
+            background: p.score < 60 ? 'rgba(255,82,82,0.05)' : 'transparent' }}>
+            <Td><strong>{p.pageTitle}</strong></Td>
+            <Td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.pageUrl}</Td>
+            <Td>{p.has_seo_title ? (p.seo_title_ok ? '✓' : '! length') : '✗ missing'}</Td>
+            <Td>{p.has_meta_description ? (p.meta_desc_ok ? '✓' : '! length') : '✗ missing'}</Td>
+            <Td>{p.is_indexed ? '✓' : '✗ noindex'}</Td>
+            <Td align="right"><strong style={{ color: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)' }}>{p.score}</strong></Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function WixBlog({ metrics }) {
+  const posts = latestData(metrics, 'wix.posts_data') ?? []
+  if (!posts.length) return <EmptyState message="No blog posts found." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Title</Th><Th>Published</Th><Th>Status</Th><Th>SEO</Th>
+        </tr></thead>
+        <tbody>{posts.map((p, i) => {
+          const seo = p.seo ?? {}
+          const hasSeo = !!(seo.title && seo.description)
+          return (
+            <tr key={p.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+              <Td><strong>{p.title}</strong></Td>
+              <Td>{p.publishedDate ? format(parseISO(p.publishedDate), 'MMM d yyyy') : '—'}</Td>
+              <Td>{p.status || '—'}</Td>
+              <Td>{hasSeo ? '✓' : <span style={{ color: 'var(--bp-amber)' }}>needs SEO</span>}</Td>
+            </tr>
+          )
+        })}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function WixSeoAudit({ metrics }) {
+  const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
+  if (!audit.length) return <EmptyState message="No SEO audit data yet." />
+  const worst = [...audit].sort((a, b) => a.score - b.score)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {worst.map((p, i) => (
+        <div key={p.pageId || i} className="bp-card" style={{ padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ flex: 1, fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>{p.pageTitle}</div>
+            <div style={{
+              fontFamily: 'var(--bp-font-mono)', fontSize: 14, fontWeight: 700,
+              color: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)',
+            }}>{p.score}</div>
+          </div>
+          <div style={{ height: 4, background: 'var(--bp-surface-2)', borderRadius: 2, overflow: 'hidden', marginBottom: 8 }}>
+            <div style={{
+              width: `${p.score}%`, height: '100%',
+              background: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)',
+            }} />
+          </div>
+          {p.issues.length > 0 ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontFamily: 'var(--bp-font-mono)', fontSize: 9 }}>
+              {p.issues.map((issue, j) => (
+                <span key={j} style={{
+                  padding: '2px 6px', borderRadius: 3,
+                  background: 'rgba(245,158,11,0.15)', color: 'var(--bp-amber)',
+                }}>
+                  {issue.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-green)' }}>No issues</div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Server-access tabs ─────────────────────────────────────────────────────
+
+function ServerAccessOverview({ connector, metrics }) {
+  const phpErrors = latestValue(metrics, 'server.php_errors_24h')
+  const fatalErrors = latestValue(metrics, 'server.php_fatal_errors_24h')
+  const disk = latestValue(metrics, 'server.disk_usage_pct')
+  const totalFiles = latestValue(metrics, 'server.files_total')
+  const siteType = connector?.config?.siteType || 'custom'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="bp-card" style={{ padding: 16, background: 'rgba(255,82,82,0.05)', border: '1px solid rgba(255,82,82,0.3)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <AlertTriangle size={18} style={{ color: 'var(--bp-red)', flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+              Write access is gated
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+              Agents can read files freely but every write creates a task with the exact diff. Writes only execute after you approve the task. Every write takes a backup first — rollback is one click away from the Changes tab.
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Site Type" value={siteType} />
+        <MetricCard label="Files Tracked" value={totalFiles} />
+        <MetricCard label="PHP Errors (24h)" value={phpErrors} accent={phpErrors > 0 ? 'var(--bp-amber)' : undefined} />
+        <MetricCard label="Disk Usage" value={disk} format="pct" accent={disk > 80 ? 'var(--bp-red)' : disk > 60 ? 'var(--bp-amber)' : 'var(--bp-green)'} />
+      </div>
+      {fatalErrors > 0 && (
+        <div className="bp-card" style={{ padding: 14, background: 'rgba(255,82,82,0.08)', border: '1px solid var(--bp-red)' }}>
+          <div style={{ color: 'var(--bp-red)', fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13 }}>
+            {fatalErrors} PHP fatal error(s) in the last 24 hours — check the Error Log tab.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ServerAccessFileExplorer({ metrics }) {
+  const files = latestData(metrics, 'server.site_structure') ?? []
+  if (!files.length) return <EmptyState message="No files indexed yet. Trigger a sync." />
+  const grouped = {}
+  for (const f of files) {
+    const parts = f.path.split('/')
+    const dir = parts.slice(0, -1).join('/')
+    if (!grouped[dir]) grouped[dir] = []
+    grouped[dir].push(f)
+  }
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden', maxHeight: 600, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
+          <Th>Path</Th><Th align="right">Size</Th><Th>Modified</Th>
+        </tr></thead>
+        <tbody>{Object.entries(grouped).map(([dir, groupFiles]) => (
+          <React.Fragment key={dir}>
+            <tr><Td colSpan="3" style={{ background: 'var(--bp-surface-2)', fontWeight: 700, color: 'var(--bp-text-3)' }}>{dir || '/'}</Td></tr>
+            {groupFiles.map((f, i) => (
+              <tr key={f.path} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+                <Td style={{ paddingLeft: 28 }}>{f.name}</Td>
+                <Td align="right">{(f.size / 1024).toFixed(1)} KB</Td>
+                <Td>{f.modified ? format(parseISO(f.modified), 'MMM d HH:mm') : '—'}</Td>
+              </tr>
+            ))}
+          </React.Fragment>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessErrorLog({ metrics }) {
+  const entries = latestData(metrics, 'server.recent_errors') ?? []
+  if (!entries.length) return <EmptyState message="No server errors found (or error log not accessible)." />
+  const TYPE_COLORS = {
+    fatal: 'var(--bp-red)', error: 'var(--bp-red)',
+    '5xx': 'var(--bp-red)', warning: 'var(--bp-amber)',
+    notice: 'var(--bp-text-3)', '404': 'var(--bp-amber)',
+    info: 'var(--bp-text-3)',
+  }
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden', maxHeight: 600, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
+          <Th>Type</Th><Th>Timestamp</Th><Th>Message</Th>
+        </tr></thead>
+        <tbody>{entries.map((e, i) => (
+          <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><span style={{ color: TYPE_COLORS[e.type] || 'var(--bp-text-3)', fontWeight: 600, textTransform: 'uppercase' }}>{e.type}</span></Td>
+            <Td>{e.timestamp || '—'}</Td>
+            <Td style={{ maxWidth: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.line}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessChanges({ connector }) {
+  // Lists every file_write Blueprint has performed via this connector.
+  // Each row shows the resulting backup id so the user can trigger a
+  // rollback task.
+  const [changes, setChanges] = useState([])
+  useEffect(() => {
+    if (!connector?.id) return
+    fetch(`/api/connectors/${connector.id}/file-changes`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : [])
+      .then(setChanges)
+      .catch(() => setChanges([]))
+  }, [connector?.id])
+  if (!changes.length) return <EmptyState message="No file writes yet. Blueprint will record every approved write here, with a one-click rollback." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>File</Th><Th>Task</Th><Th>Written</Th><Th>Backup</Th>
+        </tr></thead>
+        <tbody>{changes.map((c) => (
+          <tr key={c.id} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><strong style={{ fontFamily: 'var(--bp-font-mono)' }}>{c.remote_path}</strong></Td>
+            <Td>{c.task_title ?? c.task_id?.slice(0, 8)}</Td>
+            <Td>{c.backed_up_at ? format(parseISO(c.backed_up_at), 'MMM d HH:mm') : '—'}</Td>
+            <Td>{c.id.slice(0, 8)}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessBackups({ connector }) {
+  return <ServerAccessChanges connector={connector} />
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
