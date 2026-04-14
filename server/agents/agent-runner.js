@@ -32,16 +32,21 @@ function agentLiveDir(agentId) {
  * exists so /agents/status and /system-health can show "ran but skipped
  * because GSC hasn't synced yet", and audits can reconstruct intent.
  */
-function recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, reason) {
+function recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, reason, opts = {}) {
   try {
     db.prepare(`
       INSERT INTO agent_runs (
         id, agent_id, business_id, trigger, trigger_id,
         status, reasoning, started_at, completed_at,
         prompt_tokens, completion_tokens, cost_usd,
-        signals_detected, tasks_proposed
-      ) VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0)
-    `).run(runId, agentId, businessId, trigger, triggerId, reason, startedAt);
+        signals_detected, tasks_proposed,
+        trigger_type, work_reasons
+      ) VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0, ?, ?)
+    `).run(
+      runId, agentId, businessId, trigger, triggerId, reason, startedAt,
+      opts.trigger_type ?? null,
+      opts.work_reasons ? JSON.stringify(opts.work_reasons) : null,
+    );
   } catch (err) {
     console.warn(`[agent-runner] Failed to record skipped run for '${agentId}':`, err.message);
   }
@@ -293,7 +298,7 @@ async function briefConductor(agentId, parsed, businessId, runId) {
 
 // ─── User context builder ─────────────────────────────────────────────────────
 
-async function buildUserContext({ agentId, profile, business, signals, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
+async function buildUserContext({ agentId, profile, business, signals, existingTasks, connectors, trigger, triggerId, extraUserMessage, workResult }) {
   const lines = [];
 
   lines.push(`## Current Run`);
@@ -301,6 +306,21 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   lines.push(`Trigger: ${trigger}${triggerId ? ` (ID: ${triggerId})` : ''}`);
   lines.push(`Timestamp: ${new Date().toISOString()}`);
   lines.push('');
+
+  // Focus context — why this run was gated through, what to address.
+  // Manual runs skip the work check and so may have no reasons here.
+  if (workResult?.reasons?.length && !workResult.reasons.includes('bypass_work_check')) {
+    lines.push('## This run was activated because:');
+    for (const r of workResult.reasons) lines.push(`- ${r}`);
+    lines.push('');
+    lines.push(
+      'Focus on the specific item(s) above. Do not do a general sweep — ' +
+      'address what triggered this run. If these items turn out to already ' +
+      'be handled or non-actionable on closer inspection, return an empty ' +
+      'result (no tasks, no signals). An empty run is a valid outcome.'
+    );
+    lines.push('');
+  }
 
   // Inbox — every agent reads its own inbox so cross-agent briefs surface
   // in the system prompt. Unread briefs are shown; entries are marked read
@@ -822,6 +842,10 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   const runId = generateId();
   const startedAt = new Date().toISOString();
 
+  // Import lazy to avoid top-of-file import chain growth
+  const { categoriseTrigger, hasWorkToDo } = await import('./work-checker.js');
+  const triggerType = categoriseTrigger(trigger);
+
   // 0. Check global kill switch
   const globallyPaused = db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get();
   if (globallyPaused && JSON.parse(globallyPaused.value ?? 'false') === true) {
@@ -838,7 +862,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   // notification — pending/paused agents should simply not run quietly.
   if (agentRow.status !== 'active') {
     recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt,
-      `Agent status is '${agentRow.status}'; only 'active' agents run.`);
+      `Agent status is '${agentRow.status}'; only 'active' agents run.`,
+      { trigger_type: triggerType });
     return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: `status_${agentRow.status}` };
   }
 
@@ -848,7 +873,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   const { checkAgentReadiness } = await import('./readiness.js');
   const readiness = checkAgentReadiness(agentId, businessId);
   if (!readiness.ready) {
-    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason);
+    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason,
+      { trigger_type: triggerType });
     return {
       runId,
       tasksProposed: 0,
@@ -856,6 +882,33 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       skipped: true,
       reason: readiness.status,
       readiness,
+    };
+  }
+
+  // 1c. Work-check gate — even if the agent CAN run (readiness passed), is
+  // there actually anything for it to do? This is the cheap pre-LLM gate
+  // that makes event-driven architecture actually save tokens: when an event
+  // woke the agent but the work has already been addressed (or was never
+  // material to this agent's domain), we skip cleanly with zero LLM cost.
+  //
+  // Manual runs bypass the gate — the user explicitly asked, so run.
+  const bypassWorkCheck = trigger === 'manual' || options.bypass_work_check === true;
+  const workResult = bypassWorkCheck
+    ? { hasWork: true, reasons: ['bypass_work_check'], lastRunAt: null }
+    : hasWorkToDo(agentId, businessId);
+  if (!bypassWorkCheck && !workResult.hasWork) {
+    recordSkippedRun(
+      runId, agentId, businessId, trigger, triggerId, startedAt,
+      `Nothing to do at run time (trigger=${trigger}).`,
+      { trigger_type: triggerType, work_reasons: [] },
+    );
+    return {
+      runId,
+      tasksProposed: 0,
+      signalsDetected: 0,
+      skipped: true,
+      reason: 'no_work',
+      work_reasons: [],
     };
   }
 
@@ -918,9 +971,15 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
 
   // Create the run record
   db.prepare(`
-    INSERT INTO agent_runs (id, agent_id, business_id, trigger, trigger_id, status, started_at)
-    VALUES (?, ?, ?, ?, ?, 'running', ?)
-  `).run(runId, agentId, businessId, trigger, triggerId, startedAt);
+    INSERT INTO agent_runs (
+      id, agent_id, business_id, trigger, trigger_id, status, started_at,
+      trigger_type, work_reasons
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)
+  `).run(
+    runId, agentId, businessId, trigger, triggerId, startedAt,
+    triggerType,
+    workResult.reasons?.length ? JSON.stringify(workResult.reasons) : null,
+  );
 
   try {
     const { pushDashboardEvent } = await import('../lib/sse-bus.js');
@@ -955,7 +1014,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     // 7. Assemble system prompt from soul files
     const systemPrompt = assembleSystemPrompt(agentId, profile);
 
-    // 8. Build user context message
+    // 8. Build user context message (with the work-check reasons so the agent
+    // knows exactly why it was activated and what to focus on)
     const userContext = await buildUserContext({
       agentId,
       profile,
@@ -966,6 +1026,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       trigger,
       triggerId,
       extraUserMessage: options.extra_user_message,
+      workResult,
     });
 
     // 9. Run LLM (with fallback)

@@ -555,6 +555,17 @@ const STARTUP_MIGRATIONS = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_gaps_unique ON connector_gaps(business_id, connector_name)`,
   `CREATE INDEX IF NOT EXISTS idx_connector_gaps_last_surfaced ON connector_gaps(business_id, last_surfaced_at DESC)`,
 
+  // ─── Work-check columns on agent_runs ────────────────────────────────────
+  // trigger_type: categorical bucket derived from the freeform `trigger`
+  //   string — 'event' | 'poll' | 'schedule' | 'manual' | 'unknown'.
+  //   Lets the UI show "X event-triggered, Y poll-triggered, Z skipped".
+  // work_reasons: JSON array of strings from hasWorkToDo(). Populated on
+  //   non-skipped runs to explain WHY the agent was allowed to spend tokens
+  //   (populated on skipped runs too, as an empty array, for clarity).
+  `ALTER TABLE agent_runs ADD COLUMN trigger_type TEXT`,
+  `ALTER TABLE agent_runs ADD COLUMN work_reasons TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger_type ON agent_runs(trigger_type, started_at DESC)`,
+
   // ─── Prompt-injection defence ────────────────────────────────────────────
   // Every outbound HTTP call from an agent-driven code path is logged here.
   // See server/lib/safe-fetch.js + server/lib/outbound-allowlist.js.
