@@ -1,7 +1,8 @@
 import { Database } from 'bun:sqlite';
 import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { mkdirSync } from 'fs';
+import { mkdirSync, readFileSync } from 'fs';
 
 // Resolve relative to cwd (project root when run via `bun server/...` or from server/)
 const _root = process.env.DATABASE_PATH
@@ -19,6 +20,18 @@ const db = new Database(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 db.exec('PRAGMA busy_timeout = 5000');
+
+// Auto-apply base schema on first boot (no separate db:init needed).
+// Check for any core table; if missing, the db is fresh and needs schema.sql.
+const needsSchema = !db.prepare(
+  "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'"
+).get();
+if (needsSchema) {
+  const __dbdir = dirname(fileURLToPath(import.meta.url));
+  const schema = readFileSync(resolve(__dbdir, 'schema.sql'), 'utf8');
+  db.exec(schema);
+  console.log('[db] Fresh database — base schema applied automatically.');
+}
 
 // ─── Idempotent additive migrations (safe on every startup) ──────────────────
 // Silently applies columns/tables added after initial schema.sql deployment.
