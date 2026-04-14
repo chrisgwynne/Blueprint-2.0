@@ -6,7 +6,7 @@ import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
   Activity, CheckSquare, Mail, Send, Globe, FileText, TrendingUp,
-  CreditCard, GitBranch, MapPin, Settings2, MessageSquare,
+  CreditCard, GitBranch, MapPin, Settings2, MessageSquare, Database,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
