@@ -421,4 +421,101 @@ router.get('/health/full', async (req, res) => {
   }
 });
 
+// ─── GET /api/system/agent-efficiency ─────────────────────────────────────
+// Token-efficiency view for the System Health page.
+// Shows the impact of Tranche 6A's work-check gate: how many runs were
+// triggered by events vs polls, how many skipped cleanly (zero LLM cost),
+// and an estimate of what was saved.
+router.get('/agent-efficiency', (req, res) => {
+  try {
+    const windowDays = Math.max(1, Math.min(90, parseInt(req.query.days, 10) || 7));
+    const sinceCutoff = `datetime('now', '-${windowDays} days')`;
+
+    // Count runs by trigger_type. trigger_type was added in 6A; older rows
+    // have NULL and are bucketed as 'unknown'.
+    const byType = db.prepare(`
+      SELECT COALESCE(trigger_type, 'unknown') as trigger_type,
+             COUNT(*) as count,
+             COALESCE(SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END), 0) as skipped,
+             COALESCE(SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END), 0) as complete,
+             COALESCE(SUM(CASE WHEN status = 'failed'   THEN 1 ELSE 0 END), 0) as failed,
+             COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens_used,
+             COALESCE(SUM(cost_usd), 0) as cost_usd
+        FROM agent_runs
+       WHERE started_at > ${sinceCutoff}
+       GROUP BY trigger_type
+       ORDER BY count DESC
+    `).all();
+
+    const totalRuns = byType.reduce((a, r) => a + r.count, 0);
+    const totalSkipped = byType.reduce((a, r) => a + r.skipped, 0);
+    const totalComplete = byType.reduce((a, r) => a + r.complete, 0);
+    const totalCost = byType.reduce((a, r) => a + r.cost_usd, 0);
+
+    // Estimate tokens + cost saved by the work-check gate.
+    // Average tokens per complete run in the window:
+    const avg = db.prepare(`
+      SELECT COALESCE(AVG(prompt_tokens + completion_tokens), 0) as avg_tokens,
+             COALESCE(AVG(cost_usd), 0) as avg_cost
+        FROM agent_runs
+       WHERE status = 'complete'
+         AND started_at > ${sinceCutoff}
+    `).get();
+
+    const estimatedSavings = {
+      tokens: Math.round((avg.avg_tokens || 0) * totalSkipped),
+      cost_usd: Number(((avg.avg_cost || 0) * totalSkipped).toFixed(4)),
+      basis: `${totalSkipped} skipped run(s) × avg ${Math.round(avg.avg_tokens || 0)} tokens per complete run`,
+    };
+
+    // Per-agent summary: which agents spent most time sleeping?
+    const perAgent = db.prepare(`
+      SELECT agent_id,
+             COUNT(*) as runs,
+             SUM(CASE WHEN status = 'skipped' THEN 1 ELSE 0 END) as skipped,
+             SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) as complete,
+             SUM(CASE WHEN trigger_type = 'event' THEN 1 ELSE 0 END) as event_runs,
+             SUM(CASE WHEN trigger_type = 'poll'  THEN 1 ELSE 0 END) as poll_runs
+        FROM agent_runs
+       WHERE started_at > ${sinceCutoff}
+       GROUP BY agent_id
+       ORDER BY skipped DESC
+    `).all();
+
+    // Most active event trigger (raw trigger string)
+    const topTriggers = db.prepare(`
+      SELECT trigger, COUNT(*) as count
+        FROM agent_runs
+       WHERE started_at > ${sinceCutoff}
+         AND trigger_type = 'event'
+       GROUP BY trigger
+       ORDER BY count DESC
+       LIMIT 5
+    `).all();
+
+    res.json({
+      window_days: windowDays,
+      total_runs: totalRuns,
+      total_complete: totalComplete,
+      total_skipped: totalSkipped,
+      total_cost_usd: Number(totalCost.toFixed(4)),
+      skip_rate: totalRuns > 0 ? Number((totalSkipped / totalRuns).toFixed(3)) : 0,
+      by_trigger_type: byType.map(r => ({
+        trigger_type: r.trigger_type,
+        count: r.count,
+        skipped: r.skipped,
+        complete: r.complete,
+        failed: r.failed,
+        cost_usd: Number(r.cost_usd.toFixed(4)),
+      })),
+      per_agent: perAgent,
+      top_event_triggers: topTriggers,
+      estimated_savings: estimatedSavings,
+    });
+  } catch (err) {
+    console.error('[system-health/agent-efficiency] error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

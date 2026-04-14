@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -882,6 +882,135 @@ function LLMTab() {
 }
 
 // ============================================
+// Poll-interval section (Tranche 6D) — controls how often each agent's
+// safety-net poll fires when no event has woken it. Primary triggers are
+// still event-based; this is the "fallback in case an event was missed".
+// ============================================
+function PollIntervalsSection() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [rows, setRows] = useState([])
+  const [bounds, setBounds] = useState({ min: 1, max: 20160 })
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState({}) // agentId -> minutes being edited
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await getAgentPollIntervals()
+      setRows(res?.agents ?? [])
+      if (res?.bounds) setBounds(res.bounds)
+      setPending({})
+    } catch (err) {
+      addNotification({ type: 'error', message: `Failed to load poll intervals: ${err.message}` })
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (agentId) => {
+    const minutes = Number(pending[agentId])
+    if (!Number.isFinite(minutes) || minutes < bounds.min || minutes > bounds.max) {
+      addNotification({ type: 'error', message: `Interval must be between ${bounds.min} and ${bounds.max} minutes` })
+      return
+    }
+    try {
+      await setAgentPollInterval(agentId, minutes)
+      addNotification({ type: 'success', message: `${agentId} poll interval set to ${minutes} min` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+  const reset = async (agentId) => {
+    try {
+      await resetAgentPollInterval(agentId)
+      addNotification({ type: 'success', message: `${agentId} reverted to default` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  return (
+    <Section
+      title="Poll Intervals"
+      description="How often each agent's safety-net poll fires. Primary triggers are events (connector syncs, signals, chat mentions). This controls the fallback when events are missed."
+    >
+      {loading && (
+        <div className="text-xs text-blueprint-muted">Loading…</div>
+      )}
+      {!loading && rows.length === 0 && (
+        <div className="text-xs text-blueprint-muted">No agents installed.</div>
+      )}
+      {!loading && rows.length > 0 && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_110px_90px_110px] gap-2 text-[10px] uppercase tracking-wider text-blueprint-muted font-mono pb-1 border-b border-blueprint-border">
+            <div>Agent</div>
+            <div>Current</div>
+            <div>Default</div>
+            <div>Actions</div>
+          </div>
+          {rows.map((r) => {
+            const isOverridden = r.is_overridden
+            const effective = pending[r.agent_id] ?? r.current_minutes
+            const warnLowInterval = Number(effective) < 15 && r.agent_id !== 'sentinel'
+            return (
+              <div key={r.agent_id} className="grid grid-cols-[1fr_110px_90px_110px] gap-2 items-center text-xs font-mono">
+                <div className="flex flex-col">
+                  <span className="text-slate-300">{r.name}</span>
+                  <span className="text-blueprint-muted text-[10px]">{r.agent_id}</span>
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min={bounds.min}
+                    max={bounds.max}
+                    value={effective}
+                    onChange={(e) => setPending({ ...pending, [r.agent_id]: e.target.value })}
+                    className="bp-input text-xs w-24 font-mono"
+                  />
+                  <span className="text-[10px] text-blueprint-muted ml-1">min</span>
+                </div>
+                <div className="text-[10px] text-blueprint-muted">
+                  {r.default_minutes} min
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => save(r.agent_id)}
+                    disabled={Number(effective) === r.current_minutes}
+                    className="bp-btn bp-btn-secondary text-[10px] px-2 py-0.5"
+                  >
+                    Save
+                  </button>
+                  {isOverridden && (
+                    <button
+                      onClick={() => reset(r.agent_id)}
+                      className="bp-btn bp-btn-ghost text-[10px] px-2 py-0.5"
+                      title="Revert to default"
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {warnLowInterval && (
+                    <span title="Frequent runs can be costly" className="text-[10px] text-amber-400">⚠</span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+          <p className="text-[10px] text-blueprint-muted mt-2">
+            Intervals below 15 min for non-uptime agents can produce real LLM
+            cost — the work-check gate limits wasted runs but tight loops on
+            genuinely new data will still fire. Conductor is polled every 15
+            min on its own schedule.
+          </p>
+        </div>
+      )}
+    </Section>
+  )
+}
+
 // Tab: Agent Defaults
 // ============================================
 function AgentDefaultsTab() {
@@ -896,6 +1025,7 @@ function AgentDefaultsTab() {
 
   return (
     <div className="space-y-4">
+      <PollIntervalsSection />
       <Section title="Cost Controls" description="Prevent runaway agent spend">
         <Field label="Global Daily Cost Cap (USD)" hint="Agents will stop running when this limit is hit">
           <div className="relative w-36">

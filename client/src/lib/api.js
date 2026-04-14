@@ -403,6 +403,16 @@ export const getTimelineIntelligence = (businessId, params) =>
 export const getProducedByEvent = (businessId, sourceType, sourceId, params) =>
   get(`/timeline/${businessId}/produced/${sourceType}/${encodeURIComponent(sourceId)}`, params)
 
+// ─── Agent settings (per-agent poll intervals, Tranche 6D) ──────────────────
+export const getAgentPollIntervals = () => get('/agent-settings/poll-intervals')
+export const setAgentPollInterval = (agentId, minutes) =>
+  request('PUT', `/agent-settings/poll-intervals/${agentId}`, { minutes })
+export const resetAgentPollInterval = (agentId) =>
+  del(`/agent-settings/poll-intervals/${agentId}`)
+
+// ─── Token-efficiency stats (System Health) ──────────────────────────────────
+export const getAgentEfficiency = (params) => get('/system/agent-efficiency', params)
+
 // ─── Blueprint system GitHub (self-healing + connector discovery) ─────────────
 // Separate from business GitHub connectors — targets chrisgwynne/Blueprint only.
 export const getBlueprintGitHubStatus   = ()     => get('/settings/blueprint-github/status')

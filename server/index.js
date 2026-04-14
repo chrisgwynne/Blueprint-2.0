@@ -181,6 +181,7 @@ const mountRoutes = async () => {
   const { default: projectsRoutes } = await import('./routes/projects.js');
   const { default: timelineRoutes } = await import('./routes/timeline.js');
   const { default: agentStatusRoutes } = await import('./routes/agent-status.js');
+  const { default: agentSettingsRoutes } = await import('./routes/agent-settings.js');
   const { default: brainRoutes } = await import('./routes/brain.js');
   const { default: scenariosRoutes } = await import('./routes/scenarios.js');
   const { default: conflictsRoutes } = await import('./routes/conflicts.js');
@@ -215,6 +216,7 @@ const mountRoutes = async () => {
   app.use('/api/projects', projectsRoutes);
   app.use('/api/timeline', timelineRoutes);
   app.use('/api/agents-status', agentStatusRoutes);
+  app.use('/api/agent-settings', agentSettingsRoutes);
   app.use('/api/brain', brainRoutes);
   app.use('/api/scenarios', scenariosRoutes);
   app.use('/api/conflicts', conflictsRoutes);

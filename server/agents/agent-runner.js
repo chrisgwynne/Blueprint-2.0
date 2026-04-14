@@ -931,15 +931,29 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     profile = yaml.load(readFileSync(found, 'utf8'));
   }
 
-  // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model)
-  const llmConfig = profile.llm ?? {
-    model: profile.model?.primary ?? 'claude-sonnet-4-20250514',
-    temperature: 0.7,
-    max_tokens: profile.model?.max_tokens ?? 4096,
-    fallback_provider: null,
-    fallback_model: profile.model?.fallback ?? null,
-    cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
-  };
+  // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model).
+  // Conductor has a dual-model setup: a cheap triage model for event + poll
+  // runs (routing decisions, no deep analysis) and a full model for manual
+  // + scheduled runs. Any agent can add an `llm_triage` block to its profile
+  // to opt into the same two-tier behaviour.
+  const wantsTriage = (triggerType === 'event' || triggerType === 'poll');
+  const llmConfig = (wantsTriage && profile.llm_triage)
+    ? { ...profile.llm_triage, _tier: 'triage' }
+    : (profile.llm ? { ...profile.llm, _tier: 'full' } : {
+        model: profile.model?.primary ?? 'claude-sonnet-4-20250514',
+        temperature: 0.7,
+        max_tokens: profile.model?.max_tokens ?? 4096,
+        fallback_provider: null,
+        fallback_model: profile.model?.fallback ?? null,
+        cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
+        _tier: 'full',
+      });
+  if (profile.llm_triage) {
+    console.log(
+      `[agent-runner] ${agentId} using ${llmConfig._tier} model ` +
+      `(trigger_type=${triggerType}, model=${llmConfig.model})`
+    );
+  }
 
   // 3b. Check global monthly budget
   const monthlyBudget = JSON.parse(

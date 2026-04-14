@@ -29,7 +29,7 @@ const AVATARS = {
 // 30s cache
 let cache = { expires: 0, payload: null };
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   try {
     if (cache.payload && Date.now() < cache.expires) {
       return res.json(cache.payload);
@@ -42,13 +42,29 @@ router.get('/', (req, res) => {
     const agents = allAgents.filter((a) => agentIsInstalled(a.id));
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
 
+    // Lazy import — these Tranche 6A/6B modules are available only after
+    // migrations run, so failure-to-import must not kill the status route.
+    let getPollInterval = null;
+    try {
+      ({ getPollInterval } = await import('../agents/poll-intervals.js'));
+    } catch {}
+
     const out = agents.map((a) => {
       const runningRun = db.prepare(`
         SELECT id, started_at FROM agent_runs
         WHERE agent_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1
       `).get(a.id);
-      // Skipped runs (readiness gate blocked them) are not meaningful for
-      // "is this agent healthy" — exclude so we don't conclude an agent is
+
+      // Last run of any kind (including skipped) — for the "sleeping since X"
+      // timestamp shown in the panel.
+      const lastAnyRun = db.prepare(`
+        SELECT status, started_at, trigger, trigger_type FROM agent_runs
+         WHERE agent_id = ?
+         ORDER BY started_at DESC LIMIT 1
+      `).get(a.id);
+
+      // Skipped runs (readiness/work-check gate blocked them) are not meaningful
+      // for "is this agent healthy" — exclude so we don't conclude an agent is
       // fine just because it skipped cleanly N times in a row.
       const recentRuns = db.prepare(`
         SELECT status FROM agent_runs
@@ -66,11 +82,32 @@ router.get('/', (req, res) => {
         WHERE agent_id = ? AND started_at >= ?
       `).get(a.id, todayStart.toISOString())?.t ?? 0;
 
+      // Derive status — order matters, more specific states first.
+      //   pending_hire: template exists but agent is pending (needs connector)
+      //   paused:       user or system paused
+      //   running:      currently executing
+      //   error:        3+ consecutive non-skipped failures
+      //   stale:        no completed run in 2× its configured poll interval
+      //   sleeping:     last non-skipped run recent OR last run was a skip
+      //                 (work-check returned false — conserving tokens)
+      //   idle:         default — has completed runs, no work right now
       let status;
-      if (a.status === 'paused' || a.status === 'disabled') status = 'paused';
+      const pollIntervalMin = getPollInterval ? getPollInterval(a.id) : 60;
+      const msSinceAny = lastAnyRun?.started_at
+        ? Date.now() - new Date(lastAnyRun.started_at + (lastAnyRun.started_at.endsWith('Z') ? '' : 'Z')).getTime()
+        : Infinity;
+
+      if (a.status === 'pending') status = 'pending_hire';
+      else if (a.status === 'paused' || a.status === 'disabled') status = 'paused';
       else if (runningRun) status = 'running';
       else if (failing >= 3) status = 'error';
+      else if (Number.isFinite(msSinceAny) && msSinceAny > pollIntervalMin * 2 * 60 * 1000) status = 'stale';
+      else if (lastAnyRun?.status === 'skipped') status = 'sleeping';
       else status = 'idle';
+
+      // Surface why the agent is sleeping / what triggered the last run so
+      // the panel can render a useful subtitle ("Waiting for pagespeed sync")
+      const lastTriggerReason = lastAnyRun?.trigger ?? null;
 
       return {
         id: a.id,
@@ -78,7 +115,10 @@ router.get('/', (req, res) => {
         avatar: AVATARS[a.id] ?? '🤖',
         status,
         last_run: a.last_run,
+        last_run_trigger: lastTriggerReason,
+        last_run_trigger_type: lastAnyRun?.trigger_type ?? null,
         next_run: null,
+        poll_interval_minutes: pollIntervalMin,
         current_task: runningRun ? `Running since ${runningRun.started_at}` : null,
         tasks_proposed_today: tasksToday,
         cost_today_usd: Math.round(costToday * 10000) / 10000,
