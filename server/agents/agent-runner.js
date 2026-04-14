@@ -11,6 +11,7 @@ import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { buildMetricsContext } from './context-builders.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -238,7 +239,7 @@ function briefConductor(agentId, parsed, businessId) {
 
 // ─── User context builder ─────────────────────────────────────────────────────
 
-async function buildUserContext({ agentId, profile, business, signals, metrics, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
+async function buildUserContext({ agentId, profile, business, signals, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
   const lines = [];
 
   lines.push(`## Current Run`);
@@ -298,18 +299,12 @@ async function buildUserContext({ agentId, profile, business, signals, metrics, 
     }
   }
 
-  lines.push(`## Recent Metrics (last 14 days)`);
-  if (metrics.length === 0) {
-    lines.push('No recent metrics available.');
+  // Metrics — use shared builder so chat and scheduled runs see identical data
+  const metricsContext = buildMetricsContext(business.id, db);
+  if (metricsContext) {
+    lines.push(metricsContext);
   } else {
-    const grouped = {};
-    for (const m of metrics) {
-      if (!grouped[m.metric_name]) grouped[m.metric_name] = [];
-      grouped[m.metric_name].push(m);
-    }
-    for (const [name, rows] of Object.entries(grouped)) {
-      lines.push(`- ${name}: ${rows[0].metric_value ?? 'N/A'} (as of ${rows[0].recorded_at})`);
-    }
+    lines.push('## Current Business Data\nNo recent metrics available — connectors may not have synced yet.');
   }
   lines.push('');
 
@@ -641,13 +636,6 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       ? openSignals.filter(s => signalTriggers.includes(s.rule_id))
       : openSignals;
 
-    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
-    const recentMetrics = db.prepare(`
-      SELECT metric_name, metric_value, metric_data, recorded_at, connector_id
-      FROM metrics WHERE business_id = ? AND recorded_at >= ?
-      ORDER BY recorded_at DESC LIMIT 100
-    `).all(businessId, fourteenDaysAgo);
-
     const existingTasks = db.prepare(`
       SELECT id, title, status, proposed_by, created_at FROM tasks
       WHERE business_id = ? AND status IN ('proposed', 'approved', 'executing')
@@ -667,7 +655,6 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       profile,
       business,
       signals: relevantSignals,
-      metrics: recentMetrics,
       existingTasks,
       connectors,
       trigger,

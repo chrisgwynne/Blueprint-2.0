@@ -16,6 +16,7 @@ import yaml from 'js-yaml';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import { recordAgentActivity } from '../agents/activity.js';
+import { buildMetricsContext } from '../agents/context-builders.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -118,6 +119,13 @@ function assembleChatSystemPrompt(agentId, business, history, recentSignals) {
   } catch (err) {
     parts.push(`## Connected Data Sources\n(Unable to query connectors — do not assume any are connected.)`);
   }
+
+  // Inject real metric values so agents can answer data questions without
+  // asking the user to share numbers Blueprint already has.
+  try {
+    const metricsSection = buildMetricsContext(business.id, db);
+    if (metricsSection) parts.push(metricsSection);
+  } catch {}
 
   if (recentSignals?.length > 0) {
     parts.push(`## Recent open signals (${recentSignals.length})\n` + recentSignals.slice(0, 5).map(s =>
@@ -330,7 +338,40 @@ export async function processMessage(message, conversationId, businessId) {
       const extractions = await extractIntent(message.content, history, businessId);
       if (extractions.length === 0) return;
       const actions = await actOnExtractions(extractions, businessId, conversationId);
-      const messages = actions.map((a) => a?.message).filter(Boolean);
+
+      // Filter: if an agent already responded after the human message, skip Brain
+      // actions that merely duplicate or contradict that response. Actions that
+      // create durable objects (goals, KB decisions, concerns, context) are always
+      // posted — they represent side effects, not commentary.
+      const ALWAYS_POST_TYPES = new Set([
+        'goal_created', 'decision_recorded', 'concern_flagged', 'context_noted', 'task_created',
+      ]);
+      const AGENT_COVERED_TYPES = new Set([
+        'scenario_modelled', 'investigation_ran',
+      ]);
+
+      let filteredActions = actions.filter(Boolean);
+
+      const hasCoverableActions = filteredActions.some((a) => AGENT_COVERED_TYPES.has(a?.type));
+      if (hasCoverableActions) {
+        // Check if an agent replied since the human message was stored
+        const agentReplied = db.prepare(`
+          SELECT 1 FROM chat_messages
+          WHERE conversation_id = ?
+            AND sender_type = 'agent'
+            AND created_at >= (
+              SELECT created_at FROM chat_messages WHERE id = ? LIMIT 1
+            )
+          LIMIT 1
+        `).get(conversationId, humanMsgId);
+
+        if (agentReplied) {
+          // Suppress investigation/scenario messages — agent already covered it
+          filteredActions = filteredActions.filter((a) => !AGENT_COVERED_TYPES.has(a?.type));
+        }
+      }
+
+      const messages = filteredActions.map((a) => a?.message).filter(Boolean);
       if (messages.length === 0) return;
       const combined = messages.join(' ');
       db.prepare(`
@@ -340,7 +381,7 @@ export async function processMessage(message, conversationId, businessId) {
       `).run(
         crypto.randomUUID(), conversationId, businessId,
         combined,
-        JSON.stringify({ intent_extractions: extractions.length, actions: actions.map((a) => a?.type) })
+        JSON.stringify({ intent_extractions: extractions.length, actions: filteredActions.map((a) => a?.type) })
       );
     } catch (err) {
       console.warn('[brain] intent extraction failed (non-fatal):', err.message);
