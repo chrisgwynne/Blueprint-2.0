@@ -5,6 +5,8 @@
  * that concurrently's spawn-command dependency emits on Node 20+.
  */
 
+import { join } from 'path';
+
 const RESET  = '\x1b[0m';
 const BLUE   = '\x1b[34m';
 const YELLOW = '\x1b[33m';
@@ -50,12 +52,14 @@ async function runProcess(label, color, cmd, args, cwd) {
   return code;
 }
 
-const ROOT = new URL('..', import.meta.url).pathname;
+// import.meta.dir is Bun's cross-platform path to the current file's directory.
+// path.join handles Windows drive letters and separators correctly.
+const ROOT = join(import.meta.dir, '..');
 
 // Start both in parallel
 const results = await Promise.allSettled([
-  runProcess('server', BLUE,   'bun', ['run', 'dev'], `${ROOT}server`),
-  runProcess('client', YELLOW, 'bun', ['run', 'dev'], `${ROOT}client`),
+  runProcess('server', BLUE,   'bun', ['run', 'dev'], join(ROOT, 'server')),
+  runProcess('client', YELLOW, 'bun', ['run', 'dev'], join(ROOT, 'client')),
 ]);
 
 process.exit(results.some(r => r.status === 'rejected' || r.value) ? 1 : 0);
