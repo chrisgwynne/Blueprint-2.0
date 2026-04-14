@@ -20,6 +20,7 @@
     "gray-matter": "^4.0.3",
     "isomorphic-git": "^1.25.6",
     "js-yaml": "^4.1.0",
+    "marked": "^18.0.0",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "ssh2": "^1.17.0",
