@@ -224,6 +224,68 @@ Bounce rate: ${(parseFloat(v(latestByName, 'ga4.bounce_rate', 0)) * 100).toFixed
 Conversions: ${v(latestByName, 'ga4.conversions')} (prev: ${v(latestByName, 'ga4.conversions_prev')})`;
   }
 
+  if (type === 'klaviyo') {
+    const openRate = parseFloat(v(latestByName, 'klaviyo.campaign_open_rate', 0));
+    const clickRate = parseFloat(v(latestByName, 'klaviyo.campaign_click_rate', 0));
+    const unsubRate = parseFloat(v(latestByName, 'klaviyo.unsubscribe_rate_30d', 0));
+    return `### KLAVIYO EMAIL
+Total attributed revenue (30d): £${v(latestByName, 'klaviyo.total_attributed_revenue_30d')}
+Revenue per email sent: £${v(latestByName, 'klaviyo.revenue_per_email_sent')}
+Campaigns sent (30d): ${v(latestByName, 'klaviyo.campaigns_sent_30d')}
+Campaign open rate: ${(openRate * 100).toFixed(1)}%
+Campaign click rate: ${(clickRate * 100).toFixed(1)}%
+Unsubscribe rate: ${(unsubRate * 100).toFixed(2)}%
+Flow revenue (30d): £${v(latestByName, 'klaviyo.flow_revenue_30d')}
+Abandoned cart flow revenue: £${v(latestByName, 'klaviyo.flow_abandoned_cart_revenue')}
+Welcome flow revenue: £${v(latestByName, 'klaviyo.flow_welcome_revenue')}
+Win-back flow revenue: £${v(latestByName, 'klaviyo.flow_winback_revenue')}
+Total subscribers: ${v(latestByName, 'klaviyo.total_subscribers')}
+Live flows: ${v(latestByName, 'klaviyo.flows_live_count')}`;
+  }
+
+  if (type === 'semrush') {
+    const opsData = vData(latestByName, 'semrush.opportunities_data') ?? [];
+    const topOps = Array.isArray(opsData)
+      ? opsData.slice(0, 5).map((k) => `${k.keyword} (pos ${k.position}, vol ${k.search_volume})`).join('; ')
+      : '';
+    return `### SEMRUSH
+Domain rank: ${v(latestByName, 'semrush.domain_rank')}
+Organic keywords: ${v(latestByName, 'semrush.organic_keywords_total')}
+Estimated monthly traffic: ${v(latestByName, 'semrush.organic_traffic_estimate')}
+Organic traffic value: £${v(latestByName, 'semrush.organic_cost_estimate')}
+Top 3 keywords: ${v(latestByName, 'semrush.keywords_top3')}, Top 10: ${v(latestByName, 'semrush.keywords_top10')}, Top 20 (page 2): ${v(latestByName, 'semrush.keywords_top20')}
+Keywords gained (7d): ${v(latestByName, 'semrush.keywords_positions_gained_7d')} | Lost (7d): ${v(latestByName, 'semrush.keywords_positions_lost_7d')}
+Backlinks: ${v(latestByName, 'semrush.backlinks_total')} from ${v(latestByName, 'semrush.referring_domains')} referring domains
+Top page-2 opportunities: ${topOps || 'none'}`;
+  }
+
+  if (type === 'social') {
+    const fbEng = parseFloat(v(latestByName, 'fb.page_engagement_rate', 0));
+    const igEng = parseFloat(v(latestByName, 'ig.avg_post_engagement_rate', 0));
+    return `### FACEBOOK + INSTAGRAM (organic)
+Facebook followers: ${v(latestByName, 'fb.page_followers')}
+Facebook reach (30d): ${v(latestByName, 'fb.page_reach_30d')}, engagement rate: ${(fbEng * 100).toFixed(2)}%
+Facebook posts (30d): ${v(latestByName, 'fb.posts_published_30d')} (avg reach ${v(latestByName, 'fb.avg_post_reach')})
+Instagram followers: ${v(latestByName, 'ig.followers')}
+Instagram reach (30d): ${v(latestByName, 'ig.reach_30d')}, engagement rate: ${(igEng * 100).toFixed(2)}%
+Instagram posts (30d): ${v(latestByName, 'ig.posts_published_30d')} (avg reach ${v(latestByName, 'ig.avg_post_reach')})
+Instagram profile views (30d): ${v(latestByName, 'ig.profile_views_30d')} → website clicks: ${v(latestByName, 'ig.website_clicks_30d')}`;
+  }
+
+  if (type === 'buffer') {
+    const topPlatMeta = vData(latestByName, 'buffer.top_performing_platform');
+    const topPlatLabel = topPlatMeta?.platform ? `${topPlatMeta.platform} (avg ${topPlatMeta.avg_engagement})` : 'none';
+    const nextMeta = vData(latestByName, 'buffer.next_scheduled_post');
+    return `### BUFFER SCHEDULING
+Connected profiles: ${v(latestByName, 'buffer.profiles_connected')}
+Posts published (30d): ${v(latestByName, 'buffer.posts_published_30d')}
+Posts scheduled / queued: ${v(latestByName, 'buffer.posts_scheduled_pending')}
+Avg engagement per post (30d): ${v(latestByName, 'buffer.avg_post_engagement_30d')}
+Posting frequency (last 7d): ${v(latestByName, 'buffer.posting_frequency_7d')}
+Top performing platform: ${topPlatLabel}
+Next scheduled post: ${nextMeta?.iso ?? 'none queued'}`;
+  }
+
   return null;
 }
 

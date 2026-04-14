@@ -668,6 +668,134 @@ router.delete('/meta/:businessId', isAuthenticated, (req, res) => {
 });
 
 /**
+ * GET /api/oauth/social
+ * Initiates Facebook/Instagram (organic social) OAuth flow. Shares the
+ * Meta app (META_APP_ID/SECRET) but requests a different scope set than
+ * meta-ads.
+ */
+router.get('/social', async (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+  try {
+    const { default: socialConnector } = await import('../connectors/social/index.js');
+    const state = Buffer.from(JSON.stringify({ businessId, type: 'social' })).toString('base64url');
+    const authUrl = await socialConnector.getAuthUrl(state);
+    return res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth] Social init error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/oauth/social/callback
+ * OAuth callback from Facebook for the social connector.
+ */
+router.get('/social/callback', async (req, res) => {
+  const { code, state, error, error_description } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error_description || error)}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+  try {
+    const { default: socialConnector } = await import('../connectors/social/index.js');
+    const credentials = await socialConnector.exchangeCode(code);
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'social'"
+    ).get(businessId);
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'social', 'Facebook & Instagram', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+    return res.redirect(`${clientUrl}/connectors?connected=social`);
+  } catch (err) {
+    console.error('[oauth] Social callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+router.delete('/social/:businessId', isAuthenticated, (req, res) => {
+  const { businessId } = req.params;
+  db.prepare(`
+    UPDATE connectors SET status = 'disconnected', credentials = ?, last_error = NULL
+    WHERE business_id = ? AND type = 'social'
+  `).run(encrypt(JSON.stringify({})), businessId);
+  return res.json({ ok: true });
+});
+
+/**
+ * GET /api/oauth/buffer
+ * Initiates Buffer OAuth flow.
+ */
+router.get('/buffer', async (req, res) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+  try {
+    const { default: bufferConnector } = await import('../connectors/buffer/index.js');
+    const state = Buffer.from(JSON.stringify({ businessId, type: 'buffer' })).toString('base64url');
+    const authUrl = await bufferConnector.getAuthUrl(state);
+    return res.redirect(authUrl);
+  } catch (err) {
+    console.error('[oauth] Buffer init error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/oauth/buffer/callback
+ */
+router.get('/buffer/callback', async (req, res) => {
+  const { code, state, error } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(error)}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+  let parsedState;
+  try {
+    parsedState = JSON.parse(Buffer.from(state, 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+  try {
+    const { default: bufferConnector } = await import('../connectors/buffer/index.js');
+    const credentials = await bufferConnector.exchangeCode(code);
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'buffer'"
+    ).get(businessId);
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'buffer', 'Buffer', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+    return res.redirect(`${clientUrl}/connectors?connected=buffer`);
+  } catch (err) {
+    console.error('[oauth] Buffer callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(err.message.substring(0, 100))}`);
+  }
+});
+
+/**
  * DELETE /api/oauth/google/:businessId
  * Revokes Google access and sets GSC + GA4 connectors to disconnected.
  */

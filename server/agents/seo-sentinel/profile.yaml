@@ -20,6 +20,7 @@ connectors_required:
 connectors_optional:
   - ga4
   - pagespeed
+  - semrush
 
 schedule:
   - id: daily-scan

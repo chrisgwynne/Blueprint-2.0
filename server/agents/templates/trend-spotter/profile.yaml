@@ -18,6 +18,8 @@ connectors_required:
 connectors_optional:
   - gsc
   - shopify
+  - social
+  - buffer
 schedule:
   - id: weekly-opportunity-scan
     cron: 0 10 * * 1
@@ -41,3 +43,5 @@ required_connectors:
 preferred_connectors:
   - gsc
   - shopify
+  - social
+  - buffer

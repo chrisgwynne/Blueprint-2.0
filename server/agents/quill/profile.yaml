@@ -17,6 +17,11 @@ connectors_required: []
 connectors_optional:
   - gsc
   - ga4
+  - shopify
+  - klaviyo
+  - social
+  - buffer
+  - semrush
 
 schedule:
   - id: weekly-content-audit

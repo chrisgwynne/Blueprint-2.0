@@ -1676,6 +1676,575 @@ export const rules = [
       };
     },
   },
+
+  // ─── Klaviyo ───────────────────────────────────────────────────────────
+  // Rules operate on per-fetch summary payloads — guard every field access
+  // so they never throw on empty/missing data.
+
+  {
+    id: 'klaviyo_open_rate_drop',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_open_rate_drop',
+    severity: 'warning',
+    name: 'Klaviyo Open Rate Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current.campaign_open_rate ?? 0);
+      const prev = Number(previous.campaign_open_rate ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.2;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.5 + (drop - 0.2) * 2) : 0,
+        data: { from: +(prev * 100).toFixed(2) + '%', to: +(curr * 100).toFixed(2) + '%', drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Klaviyo open rate dropped ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Average open rate fell from ${(prev * 100).toFixed(1)}% to ${(curr * 100).toFixed(1)}%. Possible deliverability issue or list fatigue.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'klaviyo_unsubscribe_spike',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_unsubscribe_spike',
+    severity: 'alert',
+    name: 'Klaviyo Unsubscribe Spike',
+    evaluate(current = {}) {
+      const rate = Number(current.unsubscribe_rate_30d ?? 0);
+      const triggered = rate > 0.005;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.95, 0.6 + rate * 40) : 0,
+        data: { unsubscribe_rate: +(rate * 100).toFixed(3) + '%' },
+        title: triggered ? `Unsubscribe rate ${(rate * 100).toFixed(2)}% (above 0.5% threshold)` : '',
+        description: triggered
+          ? `Unsubscribe rate above 0.5% risks deliverability damage. Review recent campaign targeting and content.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'klaviyo_abandoned_cart_opportunity',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_abandoned_cart_opportunity',
+    severity: 'info',
+    name: 'Klaviyo Abandoned Cart Gap',
+    evaluate(current = {}) {
+      const acRevenue = Number(current.flow_abandoned_cart_revenue ?? 0);
+      const subs = Number(current.total_subscribers ?? 0);
+      const triggered = acRevenue === 0 && subs > 100;
+      return {
+        triggered,
+        confidence: triggered ? 0.85 : 0,
+        data: { subscribers: subs, abandoned_cart_revenue: acRevenue },
+        title: triggered ? 'No abandoned cart flow revenue detected' : '',
+        description: triggered
+          ? `With ${subs} subscribers you have audience, but your abandoned cart flow has produced £0 in the last 30 days. The flow may be inactive, misconfigured, or not triggering.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'klaviyo_revenue_drop',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_revenue_drop',
+    severity: 'alert',
+    name: 'Klaviyo Attributed Revenue Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current.total_attributed_revenue_30d ?? 0);
+      const prev = Number(previous.total_attributed_revenue_30d ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.25;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.5 + drop) : 0,
+        data: { from: +prev.toFixed(2), to: +curr.toFixed(2), drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Klaviyo-attributed revenue down ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Revenue attributed to Klaviyo fell from £${prev.toFixed(0)} to £${curr.toFixed(0)}. Review campaign cadence, flow health, and any deliverability issues.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'klaviyo_list_growth_stalled',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_list_growth_stalled',
+    severity: 'info',
+    name: 'Klaviyo List Growth Stalled',
+    evaluate(current = {}) {
+      const growth = Number(current.subscriber_growth_30d ?? 0);
+      const triggered = growth < 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { net_growth_30d: growth },
+        title: triggered ? `Subscriber list shrinking (${growth} net)` : '',
+        description: triggered
+          ? `List shrank by ${Math.abs(growth)} subscribers in the last 30 days. Review acquisition sources and unsubscribe patterns.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'klaviyo_low_click_rate',
+    connectorType: 'klaviyo',
+    type: 'klaviyo_low_click_rate',
+    severity: 'info',
+    name: 'Klaviyo Low Click Rate',
+    evaluate(current = {}) {
+      const rate = Number(current.campaign_click_rate ?? 0);
+      const sent = Number(current.campaigns_sent_30d ?? 0);
+      // Need at least a few campaigns before the average means anything.
+      const triggered = sent >= 3 && rate > 0 && rate < 0.015;
+      return {
+        triggered,
+        confidence: triggered ? 0.6 : 0,
+        data: { click_rate: +(rate * 100).toFixed(2) + '%' },
+        title: triggered ? `Campaign click rate ${(rate * 100).toFixed(2)}% — below healthy range` : '',
+        description: triggered
+          ? `Click rate below 1.5% indicates content or targeting may need improvement (industry average is 2–3%).`
+          : '',
+      };
+    },
+  },
+
+  // ─── SEMrush ───────────────────────────────────────────────────────────
+
+  {
+    id: 'semrush_rankings_drop',
+    connectorType: 'semrush',
+    type: 'semrush_rankings_drop',
+    severity: 'alert',
+    name: 'SEMrush Rankings Drop',
+    evaluate(current = {}) {
+      const lost = Number(current.keywords_positions_lost_7d ?? 0);
+      const triggered = lost > 10;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.5 + lost / 100) : 0,
+        data: { keywords_lost: lost },
+        title: triggered ? `${lost} keywords dropped in rankings this week` : '',
+        description: triggered
+          ? `Significant ranking losses detected. Check for content changes, algorithm updates, or technical issues.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'semrush_traffic_value_drop',
+    connectorType: 'semrush',
+    type: 'semrush_traffic_value_drop',
+    severity: 'warning',
+    name: 'SEMrush Organic Traffic Value Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current.organic_cost_estimate ?? 0);
+      const prev = Number(previous.organic_cost_estimate ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.15;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.85, 0.4 + drop) : 0,
+        data: { from: +prev.toFixed(2), to: +curr.toFixed(2), drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Organic traffic value down ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Estimated traffic value fell from £${prev.toFixed(0)} to £${curr.toFixed(0)}. Correlate with ranking changes and content updates.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'semrush_competitor_surge',
+    connectorType: 'semrush',
+    type: 'semrush_competitor_surge',
+    severity: 'info',
+    name: 'SEMrush Competitor Surge',
+    evaluate(current = {}, previous = {}) {
+      const currCompetitors = Array.isArray(current.competitors_data) ? current.competitors_data : [];
+      const prevCompetitors = Array.isArray(previous.competitors_data) ? previous.competitors_data : [];
+      if (currCompetitors.length === 0 || prevCompetitors.length === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const ourTraffic = Number(current.organic_traffic_estimate ?? 0);
+      const ourPrevTraffic = Number(previous.organic_traffic_estimate ?? 0);
+      const ourChange = ourPrevTraffic > 0 ? (ourTraffic - ourPrevTraffic) / ourPrevTraffic : 0;
+      const prevMap = new Map(prevCompetitors.map((c) => [c.domain, c]));
+      const surging = currCompetitors
+        .map((c) => {
+          const p = prevMap.get(c.domain);
+          if (!p || !(p.organic_traffic > 0)) return null;
+          const change = (c.organic_traffic - p.organic_traffic) / p.organic_traffic;
+          return change >= 0.2 ? { ...c, change_pct: Math.round(change * 100) } : null;
+        })
+        .filter(Boolean);
+      const triggered = surging.length > 0 && ourChange < 0.05;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { surging, our_change_pct: Math.round(ourChange * 100) },
+        title: triggered ? `${surging.length} competitor(s) gaining organic ground` : '',
+        description: triggered
+          ? `Competitors growing while our traffic is flat. Review their content and keyword strategy.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'semrush_keyword_opportunity',
+    connectorType: 'semrush',
+    type: 'semrush_keyword_opportunity',
+    severity: 'info',
+    name: 'SEMrush Page-2 Keyword Opportunity',
+    evaluate(current = {}) {
+      const ops = Array.isArray(current.opportunities_data) ? current.opportunities_data : [];
+      const high = ops.filter((k) => Number(k.search_volume) >= 500);
+      const triggered = high.length > 0;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.85, 0.5 + high.length * 0.05) : 0,
+        data: {
+          total: high.length,
+          keywords: high.slice(0, 10).map((k) => ({
+            keyword: k.keyword,
+            position: k.position,
+            volume: k.search_volume,
+            url: k.url,
+          })),
+        },
+        title: triggered ? `${high.length} high-volume keywords just off page 1` : '',
+        description: triggered
+          ? `Keywords in positions 11–20 with ≥500 monthly searches. Content improvements could push these into the top 10.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'semrush_backlink_growth',
+    connectorType: 'semrush',
+    type: 'semrush_backlink_growth',
+    severity: 'info',
+    name: 'SEMrush Backlink Growth',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current.referring_domains ?? 0);
+      const prev = Number(previous.referring_domains ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const gained = curr - prev;
+      const triggered = gained > 10;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.85, 0.5 + gained / 100) : 0,
+        data: { gained, total: curr },
+        title: triggered ? `+${gained} new referring domains` : '',
+        description: triggered
+          ? `Referring domain count grew from ${prev} to ${curr}. Positive authority signal — check which pages earned links.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'semrush_traffic_milestone',
+    connectorType: 'semrush',
+    type: 'semrush_traffic_milestone',
+    severity: 'info',
+    name: 'SEMrush Traffic Milestone',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current.organic_traffic_estimate ?? 0);
+      const prev = Number(previous.organic_traffic_estimate ?? 0);
+      const milestones = [1000, 5000, 10000, 25000, 50000, 100000];
+      const crossed = milestones.find((m) => prev < m && curr >= m);
+      const triggered = !!crossed;
+      return {
+        triggered,
+        confidence: triggered ? 0.9 : 0,
+        data: { milestone: crossed, current: curr },
+        title: triggered ? `Organic traffic crossed ${crossed?.toLocaleString()} monthly visits` : '',
+        description: triggered
+          ? `Estimated organic traffic reached a new milestone. Consider what content drove the growth and double down.`
+          : '',
+      };
+    },
+  },
+
+  // ─── Social (Facebook + Instagram organic) ────────────────────────────
+
+  {
+    id: 'fb_reach_drop',
+    connectorType: 'social',
+    type: 'fb_reach_drop',
+    severity: 'warning',
+    name: 'Facebook Reach Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current['fb.page_reach_30d'] ?? current.fb_page_reach_30d ?? 0);
+      const prev = Number(previous['fb.page_reach_30d'] ?? previous.fb_page_reach_30d ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.3;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.85, 0.4 + drop) : 0,
+        data: { from: prev, to: curr, drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Facebook reach down ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Organic reach fell from ${prev.toLocaleString()} to ${curr.toLocaleString()}. Algorithm change or posting cadence may be the cause.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'ig_follower_loss',
+    connectorType: 'social',
+    type: 'ig_follower_loss',
+    severity: 'warning',
+    name: 'Instagram Follower Loss',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current['ig.followers'] ?? current.ig_followers ?? 0);
+      const prev = Number(previous['ig.followers'] ?? previous.ig_followers ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const delta = curr - prev;
+      const triggered = delta < -50;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { delta, from: prev, to: curr },
+        title: triggered ? `Instagram lost ${Math.abs(delta)} followers` : '',
+        description: triggered
+          ? `Net follower change of ${delta} since previous sync. Check for content missteps, mass unfollows, or bot purges.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'ig_engagement_drop',
+    connectorType: 'social',
+    type: 'ig_engagement_drop',
+    severity: 'info',
+    name: 'Instagram Engagement Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current['ig.avg_post_engagement_rate'] ?? current.ig_avg_post_engagement_rate ?? 0);
+      const prev = Number(previous['ig.avg_post_engagement_rate'] ?? previous.ig_avg_post_engagement_rate ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.25;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.8, 0.4 + drop) : 0,
+        data: { from: +(prev * 100).toFixed(2) + '%', to: +(curr * 100).toFixed(2) + '%', drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Instagram engagement rate down ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Average per-post engagement rate fell from ${(prev * 100).toFixed(2)}% to ${(curr * 100).toFixed(2)}%.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'social_posting_gap',
+    connectorType: 'social',
+    type: 'social_posting_gap',
+    severity: 'info',
+    name: 'Social Posting Gap',
+    evaluate(current = {}) {
+      const fbPosts = Number(current['fb.posts_published_30d'] ?? current.fb_posts_published_30d ?? 0);
+      const igPosts = Number(current['ig.posts_published_30d'] ?? current.ig_posts_published_30d ?? 0);
+      const total = fbPosts + igPosts;
+      const triggered = total < 4;
+      return {
+        triggered,
+        confidence: triggered ? 0.75 : 0,
+        data: { total_posts_30d: total, fb: fbPosts, ig: igPosts },
+        title: triggered ? `Low posting frequency (${total} posts in 30 days)` : '',
+        description: triggered
+          ? `Fewer than 1 post per week across Facebook and Instagram combined. Consistency affects reach.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'ig_website_clicks_opportunity',
+    connectorType: 'social',
+    type: 'ig_website_clicks_opportunity',
+    severity: 'info',
+    name: 'Instagram Website Clicks Opportunity',
+    evaluate(current = {}) {
+      const views = Number(current['ig.profile_views_30d'] ?? current.ig_profile_views_30d ?? 0);
+      const clicks = Number(current['ig.website_clicks_30d'] ?? current.ig_website_clicks_30d ?? 0);
+      const triggered = views > 500 && clicks < 50;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { profile_views: views, website_clicks: clicks, click_through: views > 0 ? +(clicks / views * 100).toFixed(2) + '%' : '0%' },
+        title: triggered ? 'High IG profile views but low website clicks' : '',
+        description: triggered
+          ? `${views} profile views produced only ${clicks} website clicks. Bio link and CTA likely need strengthening.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'fb_high_performing_post',
+    connectorType: 'social',
+    type: 'fb_high_performing_post',
+    severity: 'info',
+    name: 'Facebook High-Performing Post',
+    evaluate(current = {}) {
+      const posts = Array.isArray(current['fb.recent_posts_data'])
+        ? current['fb.recent_posts_data']
+        : Array.isArray(current.fb_recent_posts_data) ? current.fb_recent_posts_data : [];
+      if (posts.length < 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const avg = posts.reduce((s, p) => s + (p.reach || 0), 0) / posts.length;
+      if (avg <= 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const winners = posts.filter((p) => (p.reach || 0) >= avg * 3);
+      const triggered = winners.length > 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.75 : 0,
+        data: {
+          winners: winners.slice(0, 3).map((p) => ({
+            message: (p.message || '').slice(0, 150),
+            reach: p.reach,
+            url: p.permalink_url,
+          })),
+          avg_reach: Math.round(avg),
+        },
+        title: triggered ? `High-performing Facebook post (${winners.length} at 3x+ avg reach)` : '',
+        description: triggered
+          ? `One or more recent posts reached 3x+ the average. Analyse what worked and create similar content.`
+          : '',
+      };
+    },
+  },
+
+  // ─── Buffer ──────────────────────────────────────────────────────────
+
+  {
+    id: 'buffer_queue_empty',
+    connectorType: 'buffer',
+    type: 'buffer_queue_empty',
+    severity: 'info',
+    name: 'Buffer Queue Empty',
+    evaluate(current = {}) {
+      const pending = Number(current['buffer.posts_scheduled_pending'] ?? current.buffer_posts_scheduled_pending ?? 0);
+      const triggered = pending === 0;
+      return {
+        triggered,
+        confidence: triggered ? 0.8 : 0,
+        data: { scheduled: pending },
+        title: triggered ? 'Buffer schedule is empty' : '',
+        description: triggered
+          ? 'No posts scheduled across any connected Buffer profile. Content gap likely upcoming.'
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'buffer_posting_gap',
+    connectorType: 'buffer',
+    type: 'buffer_posting_gap',
+    severity: 'warning',
+    name: 'Buffer Posting Gap',
+    evaluate(current = {}) {
+      const freq = Number(current['buffer.posting_frequency_7d'] ?? current.buffer_posting_frequency_7d ?? 0);
+      const triggered = freq < 1;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { posts_last_7d: freq },
+        title: triggered ? 'Less than one post per week' : '',
+        description: triggered
+          ? `Only ${freq} posts published in the last 7 days across all connected Buffer profiles.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'buffer_low_engagement',
+    connectorType: 'buffer',
+    type: 'buffer_low_engagement',
+    severity: 'info',
+    name: 'Buffer Engagement Drop',
+    evaluate(current = {}, previous = {}) {
+      const curr = Number(current['buffer.avg_post_engagement_30d'] ?? current.buffer_avg_post_engagement_30d ?? 0);
+      const prev = Number(previous['buffer.avg_post_engagement_30d'] ?? previous.buffer_avg_post_engagement_30d ?? 0);
+      if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const drop = (prev - curr) / prev;
+      const triggered = drop >= 0.3;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.8, 0.4 + drop) : 0,
+        data: { from: prev, to: curr, drop_pct: Math.round(drop * 100) },
+        title: triggered ? `Buffer average engagement down ${Math.round(drop * 100)}%` : '',
+        description: triggered
+          ? `Average engagement per published post fell from ${prev} to ${curr}.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'buffer_content_opportunity',
+    connectorType: 'buffer',
+    type: 'buffer_content_opportunity',
+    severity: 'info',
+    name: 'Buffer Top Platform',
+    evaluate(current = {}) {
+      const topMeta = current['buffer.top_performing_platform']?.data
+        ?? current.buffer_top_performing_platform?.data
+        ?? null;
+      if (!topMeta?.platform) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const avgPost = Number(current['buffer.avg_post_engagement_30d'] ?? 0);
+      const triggered = avgPost > 0 && Number(topMeta.avg_engagement) >= avgPost * 3;
+      return {
+        triggered,
+        confidence: triggered ? 0.7 : 0,
+        data: { platform: topMeta.platform, platform_avg: topMeta.avg_engagement, overall_avg: avgPost },
+        title: triggered ? `${topMeta.platform} is outperforming other platforms 3x+` : '',
+        description: triggered
+          ? `${topMeta.platform} engagement is significantly higher than average. Consider shifting more content there.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'buffer_schedule_ahead',
+    connectorType: 'buffer',
+    type: 'buffer_schedule_ahead',
+    severity: 'info',
+    name: 'Buffer Schedule Running Thin',
+    evaluate(current = {}) {
+      const pending = Number(current['buffer.posts_scheduled_pending'] ?? current.buffer_posts_scheduled_pending ?? 0);
+      const published = Number(current['buffer.posts_published_30d'] ?? current.buffer_posts_published_30d ?? 0);
+      const triggered = published > 10 && pending < 5;
+      return {
+        triggered,
+        confidence: triggered ? 0.65 : 0,
+        data: { scheduled: pending, published_30d: published },
+        title: triggered ? `Only ${pending} posts queued — schedule ahead` : '',
+        description: triggered
+          ? `Active poster (${published} posts in last 30 days) but only ${pending} in queue. Time to plan the next batch.`
+          : '',
+      };
+    },
+  },
 ];
 
 // ─── Meta Ads helpers ────────────────────────────────────────────────────────

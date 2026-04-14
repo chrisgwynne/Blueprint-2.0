@@ -6,7 +6,7 @@ import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
   Activity, CheckSquare, Mail, Send, Globe, FileText, TrendingUp,
-  CreditCard, GitBranch, MapPin, Settings2,
+  CreditCard, GitBranch, MapPin, Settings2, MessageSquare,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
@@ -637,6 +637,35 @@ const CONNECTOR_TYPES = [
   { id: 'todoist',    label: 'Todoist',     icon: CheckSquare, available: true, oauth: '/api/oauth/todoist',    name: 'Todoist' },
   { id: 'gbp',        label: 'Google Business Profile', icon: MapPin, available: true, oauth: '/api/oauth/gbp', name: 'Google Business Profile' },
   { id: 'google-ads', label: 'Google Ads',  icon: TrendingUp, available: true, oauth: '/api/oauth/google-ads',  name: 'Google Ads' },
+  { id: 'social',     label: 'Facebook & Instagram', icon: MessageSquare, available: true, oauth: '/api/oauth/social', name: 'Facebook & Instagram' },
+  { id: 'buffer',     label: 'Buffer',      icon: Send,        available: true, oauth: '/api/oauth/buffer',     name: 'Buffer' },
+
+  // Klaviyo and SEMrush — generic apikey setup
+  { id: 'klaviyo',    label: 'Klaviyo',     icon: Mail,        available: true,
+    name: 'Klaviyo',
+    configFields: [
+      { id: 'apiKey', label: 'Private API Key', type: 'password', required: true,
+        hint: 'Klaviyo → Account → Settings → API Keys. Use a Private API Key.' },
+    ],
+  },
+  { id: 'semrush',    label: 'SEMrush',     icon: TrendingUp,  available: true,
+    name: 'SEMrush',
+    configFields: [
+      { id: 'apiKey', label: 'API Key', type: 'password', required: true,
+        hint: 'SEMrush → Profile → Subscription info → API.' },
+      { id: 'domain', label: 'Target Domain', type: 'text', required: true,
+        hint: 'Enter domain without protocol, e.g. example.com' },
+      { id: 'database', label: 'Regional Database', type: 'select', required: true,
+        options: [
+          { value: 'uk', label: 'United Kingdom' },
+          { value: 'us', label: 'United States' },
+          { value: 'ie', label: 'Ireland' },
+          { value: 'au', label: 'Australia' },
+          { value: 'ca', label: 'Canada' },
+        ],
+        default: 'uk' },
+    ],
+  },
 ]
 
 // ─── Generic config-fields setup (apikey / basic-auth connectors) ──────────────
