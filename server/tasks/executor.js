@@ -1299,7 +1299,7 @@ Produce a connector proposal as JSON:
   "alternatives": [{ "name": "Alt API", "url": "https://...", "why_not_primary": "reason" }]
 }`;
 
-  const { providerId, model } = resolveProfileLLM({ model: 'claude-sonnet-4-5' });
+  const { providerId, model } = resolveProfileLLM({});
   const llmResult = await runLLM(providerId, model, {
     messages: [{ role: 'user', content: prompt }],
     system: 'Return only valid JSON. Be specific and honest about API complexity.',

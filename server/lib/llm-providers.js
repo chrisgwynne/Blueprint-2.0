@@ -231,31 +231,115 @@ function pickConfiguredProvider() {
   return null;
 }
 
-const DEFAULT_MODEL_BY_PROVIDER = {
-  anthropic: 'claude-sonnet-4-5',
-  'claude-cli': 'claude-sonnet-4-5',
-  openai: 'gpt-4o-mini',
-  google: 'gemini-1.5-flash',
-  ollama: 'llama3',
-  lmstudio: 'local-model',
-  custom: 'custom',
-  minimax: 'MiniMax-M2',
-};
+/**
+ * Read tier-specific provider/model overrides from settings.
+ *   - tier='triage'   → settings keys llm_triage_provider / llm_triage_model
+ *   - tier='fallback' → settings keys llm_fallback_provider / llm_fallback_model
+ *   - tier='default'  → settings keys llm_default_provider / llm_default_model
+ * Returns { provider, model } with either field null when unset.
+ */
+function readTierSettings(tier) {
+  let providerKey, modelKey;
+  if (tier === 'triage') {
+    providerKey = 'llm_triage_provider'; modelKey = 'llm_triage_model';
+  } else if (tier === 'fallback') {
+    providerKey = 'llm_fallback_provider'; modelKey = 'llm_fallback_model';
+  } else {
+    providerKey = 'llm_default_provider'; modelKey = 'llm_default_model';
+  }
+  let provider = null, model = null;
+  try {
+    const p = db.prepare('SELECT value FROM settings WHERE key = ?').get(providerKey);
+    if (p?.value) {
+      const parsed = JSON.parse(p.value);
+      // llm_default_provider historically stored as { provider } or bare string
+      provider = typeof parsed === 'string' ? parsed : (parsed?.provider ?? null);
+    }
+  } catch {}
+  try {
+    const m = db.prepare('SELECT value FROM settings WHERE key = ?').get(modelKey);
+    if (m?.value) {
+      const parsed = JSON.parse(m.value);
+      model = typeof parsed === 'string' ? parsed : (parsed?.model ?? null);
+    }
+  } catch {}
+  return { provider, model };
+}
+
+/**
+ * Get the user-configured fallback LLM config for agent-runner's retry path.
+ * Returns { provider, model } if both are set in settings, else null.
+ * If either is missing, there's no fallback — caller skips the retry.
+ */
+export function getFallbackLLM() {
+  const f = readTierSettings('fallback');
+  if (!f.provider || !f.model) return null;
+  if (!isProviderConfigured(f.provider)) return null;
+  return { provider: f.provider, model: f.model };
+}
 
 /**
  * Given a profile's llm config, return { providerId, model, temperature, max_tokens }.
- * Falls back to ANY configured provider if the requested one has no credentials.
+ *
+ * Resolution order for provider:
+ *   1. profileLLM.provider (explicit per-call override)
+ *   2. tier-specific setting (llm_triage_provider for tier='triage')
+ *   3. llm_default_provider setting
+ *   4. first configured provider (pickConfiguredProvider)
+ *   5. throw — no silent hardcoded fallback
+ *
+ * Resolution order for model:
+ *   1. profileLLM.model (explicit per-call override)
+ *   2. tier-specific setting (llm_triage_model for tier='triage')
+ *   3. llm_default_model setting
+ *   4. the model saved on the chosen provider's credentials
+ *   5. throw — ask the user to pick one in Settings
+ *
+ * Temperature and max_tokens stay per-profile tuning with generic defaults
+ * because "be conservative-ish and allow a reasonable response" has no
+ * business-level setting equivalent.
+ *
+ * @param {object|null} profileLLM  e.g. { temperature, max_tokens } from profile.yaml
+ * @param {object}      [opts]
+ * @param {'default'|'triage'} [opts.tier='default']
  */
-export function resolveProfileLLM(profileLLM) {
-  // Use the explicitly requested provider, OR the user's configured default.
-  // Never silently swap one named provider for another.
-  let providerId = profileLLM?.provider ?? pickConfiguredProvider() ?? 'anthropic';
+export function resolveProfileLLM(profileLLM, opts = {}) {
+  const tier =
+    opts.tier === 'triage'   ? 'triage' :
+    opts.tier === 'fallback' ? 'fallback' : 'default';
+  const tierSettings = readTierSettings(tier);
+  const defaultSettings = tier === 'default' ? tierSettings : readTierSettings('default');
 
+  // Provider resolution
+  let providerId =
+    profileLLM?.provider ??
+    tierSettings.provider ??
+    defaultSettings.provider ??
+    pickConfiguredProvider();
+
+  if (!providerId) {
+    throw new Error(
+      'No LLM provider is configured. ' +
+      'Open Settings → LLM Providers and add credentials for at least one provider.'
+    );
+  }
+
+  // Model resolution — each layer can be absent
   const savedModel = getProviderCredentials(providerId)?.model;
-  let model = profileLLM?.model
-    ?? savedModel
-    ?? DEFAULT_MODEL_BY_PROVIDER[providerId]
-    ?? 'claude-sonnet-4-5';
+  let model =
+    profileLLM?.model ??
+    (tierSettings.provider === providerId ? tierSettings.model : null) ??
+    (defaultSettings.provider === providerId ? defaultSettings.model : null) ??
+    savedModel;
+
+  if (!model) {
+    throw new Error(
+      `LLM provider '${providerId}' has no model selected. ` +
+      `Open Settings → LLM Providers and choose a model for ${providerId}` +
+      (tier === 'triage' ? ' (or configure a separate triage model).' : '.')
+    );
+  }
+
   const temperature = profileLLM?.temperature ?? 0.7;
   const max_tokens = profileLLM?.max_tokens ?? 4096;
 

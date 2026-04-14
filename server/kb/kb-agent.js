@@ -10,7 +10,7 @@
  * Uses the unified runLLM() interface so it works with claude-cli, anthropic,
  * openai, ollama, etc.
  */
-import { runLLM } from '../lib/llm-providers.js';
+import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 
 function todayISO() {
   return new Date().toISOString().split('T')[0];
@@ -54,11 +54,25 @@ export class KBAgent {
   /**
    * @param {KBEngine} kb
    * @param {{ provider?: string, model?: string }} options
+   *   If provider/model are omitted, the agent resolves them via
+   *   resolveProfileLLM({}) — i.e. from user settings — on every LLM call.
+   *   An explicit provider+model override the settings resolution.
    */
-  constructor(kb, { provider = 'claude-cli', model = 'claude-sonnet-4-20250514' } = {}) {
+  constructor(kb, { provider = null, model = null } = {}) {
     this.kb = kb;
-    this.provider = provider;
-    this.model = model;
+    this._explicitProvider = provider;
+    this._explicitModel = model;
+  }
+
+  // Lazy getters — resolve from settings at access time so changes to
+  // Settings → LLM Providers take effect without restarting the agent.
+  get provider() {
+    if (this._explicitProvider) return this._explicitProvider;
+    return resolveProfileLLM({}).providerId;
+  }
+  get model() {
+    if (this._explicitModel) return this._explicitModel;
+    return resolveProfileLLM({}).model;
   }
 
   /**

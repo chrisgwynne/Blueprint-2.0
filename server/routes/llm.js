@@ -52,6 +52,109 @@ router.put('/default', (req, res) => {
   }
 });
 
+// ─── Tiered LLM configuration ────────────────────────────────────────────
+// The agent runtime resolves provider+model by tier:
+//   - default tier   — every run that doesn't ask for something cheaper
+//   - triage tier    — optional: fast/cheap model for event-driven and
+//                      poll-driven routing work (Conductor, chat summaries,
+//                      intent extraction, causal/attribution quickhits)
+//   - fallback tier  — optional: the model to try when the primary fails
+//
+// Each tier is stored as two settings keys: llm_<tier>_provider and
+// llm_<tier>_model. If a tier isn't configured it falls back to default.
+// If default isn't configured, resolveProfileLLM throws — no hidden
+// hardcoded model is ever used.
+
+const VALID_TIERS = ['default', 'triage', 'fallback'];
+
+function readTier(tier) {
+  const providerRow = db.prepare('SELECT value FROM settings WHERE key = ?').get(`llm_${tier}_provider`);
+  const modelRow    = db.prepare('SELECT value FROM settings WHERE key = ?').get(`llm_${tier}_model`);
+  let provider = null, model = null;
+  try {
+    if (providerRow?.value) {
+      const p = JSON.parse(providerRow.value);
+      provider = typeof p === 'string' ? p : (p?.provider ?? null);
+    }
+  } catch {}
+  try {
+    if (modelRow?.value) {
+      const m = JSON.parse(modelRow.value);
+      model = typeof m === 'string' ? m : (m?.model ?? null);
+    }
+  } catch {}
+  return { provider, model };
+}
+
+/**
+ * GET /api/llm/tiers
+ * Returns the configured provider+model for each tier plus the list of
+ * valid tier names. Used by the Settings UI to render the three sections.
+ */
+router.get('/tiers', (req, res) => {
+  try {
+    const out = { tiers: {}, valid_tiers: VALID_TIERS };
+    for (const tier of VALID_TIERS) out.tiers[tier] = readTier(tier);
+    res.json(out);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * PUT /api/llm/tiers/:tier
+ * Body: { provider: string, model: string }
+ * Sets both provider and model for a tier atomically. Either can be null
+ * to clear one value and keep the other. Both null = unconfigure the tier
+ * (it'll then fall back to the default tier).
+ */
+router.put('/tiers/:tier', (req, res) => {
+  try {
+    const tier = req.params.tier;
+    if (!VALID_TIERS.includes(tier)) {
+      return res.status(400).json({ error: `Invalid tier '${tier}'. Must be one of: ${VALID_TIERS.join(', ')}` });
+    }
+    const { provider, model } = req.body ?? {};
+    if (provider != null && !PROVIDERS_CATALOG.find((p) => p.id === provider)) {
+      return res.status(404).json({ error: `Unknown provider '${provider}'` });
+    }
+
+    const upsert = db.prepare(`
+      INSERT INTO settings (key, value, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+    `);
+    if (provider !== undefined) upsert.run(`llm_${tier}_provider`, JSON.stringify(provider));
+    if (model    !== undefined) upsert.run(`llm_${tier}_model`,    JSON.stringify(model));
+
+    res.json({ ok: true, tier, ...readTier(tier) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/llm/tiers/:tier
+ * Unconfigures a tier — subsequent resolution falls back to the default.
+ * Cannot delete the default tier (something has to be configured).
+ */
+router.delete('/tiers/:tier', (req, res) => {
+  try {
+    const tier = req.params.tier;
+    if (tier === 'default') {
+      return res.status(400).json({ error: 'Cannot delete the default tier. Set a provider instead.' });
+    }
+    if (!VALID_TIERS.includes(tier)) {
+      return res.status(400).json({ error: `Invalid tier '${tier}'` });
+    }
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`llm_${tier}_provider`);
+    db.prepare('DELETE FROM settings WHERE key = ?').run(`llm_${tier}_model`);
+    res.json({ ok: true, tier, provider: null, model: null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * GET /api/llm/providers
  * List all LLM providers and their configuration status

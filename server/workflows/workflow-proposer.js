@@ -52,12 +52,15 @@ function extractJSON(content) {
 }
 
 function loadConductorLLM() {
+  // Return tuning only; provider + model come from user settings via
+  // resolveProfileLLM. If conductor's profile doesn't exist, use sensible
+  // tuning defaults.
   const path = join(AGENTS_DIR, 'conductor', 'profile.yaml');
-  if (!existsSync(path)) return { model: 'claude-sonnet-4-20250514', temperature: 0.3, max_tokens: 2048 };
+  if (!existsSync(path)) return { temperature: 0.3, max_tokens: 2048 };
   try {
     const profile = yaml.load(readFileSync(path, 'utf8'));
-    return profile?.llm ?? { model: 'claude-sonnet-4-20250514' };
-  } catch { return { model: 'claude-sonnet-4-20250514' }; }
+    return profile?.llm ?? { temperature: 0.3, max_tokens: 2048 };
+  } catch { return { temperature: 0.3, max_tokens: 2048 }; }
 }
 
 export async function proposeWorkflow(businessId, trigger = 'human request') {

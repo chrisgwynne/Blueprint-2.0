@@ -180,8 +180,10 @@ async function runAgentChat(agentId, userMessage, history, businessId) {
 
   const systemPrompt = assembleChatSystemPrompt(agentId, business, history, recentSignals);
 
+  // Provider + model come from user settings (llm_default_*), not profile.
+  // If the agent profile overrides temperature/max_tokens we use those;
+  // otherwise sensible defaults for chat.
   const llmConfig = profile?.llm ?? {
-    model: 'claude-sonnet-4-20250514',
     temperature: 0.4,
     max_tokens: 2048,
   };
@@ -258,10 +260,12 @@ async function fileConversationToKB(conversationId, businessId) {
   try {
     const transcript = messages.map(m => `${m.sender_name}: ${m.content}`).join('\n\n');
 
-    // Generate summary via LLM
+    // Generate summary via LLM — uses the user's configured triage tier.
     let summary = transcript.slice(0, 3000);
     try {
-      const result = await runLLM('anthropic', 'claude-haiku-4-5-20251001', {
+      const { providerId: sumProvider, model: sumModel } =
+        resolveProfileLLM({}, { tier: 'triage' });
+      const result = await runLLM(sumProvider, sumModel, {
         system: 'Summarise this agent conversation in 2 paragraphs. Extract key decisions, findings, and tasks proposed. Plain markdown.',
         messages: [{ role: 'user', content: transcript.slice(0, 12000) }],
         temperature: 0.2,

@@ -85,9 +85,7 @@ ${history.map((m) => `${m.sender_name}: ${m.content}`).join('\n') || '(none)'}
 
 Extract any intent with confidence >= 0.7. Empty array if nothing clear.`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
   try {
     const result = await runLLM(providerId, model, {

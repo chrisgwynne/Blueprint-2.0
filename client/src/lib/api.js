@@ -403,6 +403,11 @@ export const getTimelineIntelligence = (businessId, params) =>
 export const getProducedByEvent = (businessId, sourceType, sourceId, params) =>
   get(`/timeline/${businessId}/produced/${sourceType}/${encodeURIComponent(sourceId)}`, params)
 
+// ─── LLM tiers (default / triage / fallback) ───────────────────────────────
+export const getLLMTiers = () => get('/llm/tiers')
+export const setLLMTier = (tier, body) => request('PUT', `/llm/tiers/${tier}`, body)
+export const clearLLMTier = (tier) => del(`/llm/tiers/${tier}`)
+
 // ─── Agent settings (per-agent poll intervals, Tranche 6D) ──────────────────
 export const getAgentPollIntervals = () => get('/agent-settings/poll-intervals')
 export const setAgentPollInterval = (agentId, minutes) =>

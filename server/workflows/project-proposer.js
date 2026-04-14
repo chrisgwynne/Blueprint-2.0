@@ -37,7 +37,7 @@ Open signals: ${signals.map(s => s.title).join(', ') || '(none)'}
 Active goals: ${goals.map(g => g.title).join(', ') || '(none)'}
 Context: ${context}`;
 
-  const { providerId, model } = resolveProfileLLM({ model: 'claude-sonnet-4-20250514' });
+  const { providerId, model } = resolveProfileLLM({});
   try {
     const res = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,

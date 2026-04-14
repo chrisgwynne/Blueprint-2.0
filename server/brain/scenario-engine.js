@@ -68,9 +68,7 @@ export async function modelScenarios(businessId, question, context = '') {
   const ctx = assembleContext(businessId);
   const prompt = buildPrompt(question, context, ctx);
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-sonnet-4-20250514',
-  });
+  const { providerId, model } = resolveProfileLLM({});
 
   let rawContent = '';
   let parsed = null;

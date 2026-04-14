@@ -12,8 +12,6 @@ personality: |
   without a clear expected outcome tied to the data.
 
 llm:
-  provider: claude-cli
-  model: claude-sonnet-4-20250514
   temperature: 0.3
   max_tokens: 3000
   cost_cap_daily_usd: 1.50

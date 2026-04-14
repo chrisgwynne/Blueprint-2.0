@@ -209,9 +209,7 @@ export async function runInvestigation({ businessId, metricName = null, signalId
     timeline, actionCorr, metricCorr, seasonal, external, historical,
   });
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-sonnet-4-20250514',
-  });
+  const { providerId, model } = resolveProfileLLM({});
 
   let rawContent = '';
   let parsed = null;

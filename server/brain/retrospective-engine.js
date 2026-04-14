@@ -216,9 +216,7 @@ export async function runRetrospective(businessId, opts = {}) {
   const data = assembleData(businessId, periodStart, periodEnd);
   const prompt = buildPrompt(business, data, periodStart, periodEnd);
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-sonnet-4-20250514',
-  });
+  const { providerId, model } = resolveProfileLLM({});
 
   let parsed = null;
   try {

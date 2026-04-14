@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -877,7 +877,158 @@ function LLMTab() {
           ))}
         </div>
       </Section>
+
+      <TierConfigSection providers={providers ?? []} />
     </div>
+  )
+}
+
+// Tier configuration — lets the user pick provider+model per tier
+// (default / triage / fallback). Triage and fallback fall back to default
+// when not set. No hardcoded model strings anywhere in the system — every
+// LLM call resolves its model through these settings.
+function TierConfigSection({ providers }) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [tiers, setTiers] = useState({ default: {}, triage: {}, fallback: {} })
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState({})  // { [tier]: { provider, model } }
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await getLLMTiers()
+      setTiers(res?.tiers ?? { default: {}, triage: {}, fallback: {} })
+    } catch (err) {
+      addNotification({ type: 'error', message: 'Failed to load tiers: ' + err.message })
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (tier) => {
+    const draft = pending[tier] ?? {}
+    const provider = draft.provider ?? tiers[tier].provider
+    const model = draft.model ?? tiers[tier].model
+    try {
+      await setLLMTier(tier, { provider, model })
+      addNotification({ type: 'success', message: `${tier} tier updated.` })
+      setPending((p) => ({ ...p, [tier]: undefined }))
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+  const clear = async (tier) => {
+    try {
+      await clearLLMTier(tier)
+      addNotification({ type: 'success', message: `${tier} tier cleared — falls back to default.` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  const modelsFor = (providerId) => {
+    const p = providers.find((x) => x.id === providerId)
+    return p?.models ?? []
+  }
+
+  const TierRow = ({ tier, description }) => {
+    const cur = tiers[tier] ?? {}
+    const draft = pending[tier] ?? {}
+    const provider = draft.provider ?? cur.provider ?? ''
+    const model = draft.model ?? cur.model ?? ''
+    const dirty = (draft.provider !== undefined && draft.provider !== cur.provider) ||
+                  (draft.model !== undefined && draft.model !== cur.model)
+    const isDefault = tier === 'default'
+    const configured = !!(cur.provider && cur.model)
+    return (
+      <div className="p-3 rounded border border-blueprint-border bg-blueprint-bg">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <div className="text-xs font-medium text-slate-300 capitalize">{tier} tier</div>
+            <div className="text-[10px] text-blueprint-muted">{description}</div>
+          </div>
+          <div className="text-[10px] text-blueprint-muted">
+            {configured ? '✓ configured' : isDefault ? '⚠ not set' : 'falls back to default'}
+          </div>
+        </div>
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+          <select
+            value={provider}
+            onChange={(e) => setPending((p) => ({
+              ...p,
+              [tier]: { ...(p[tier] ?? {}), provider: e.target.value || null, model: null },
+            }))}
+            className="bp-select text-xs"
+          >
+            <option value="">— not set —</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={model}
+            onChange={(e) => setPending((p) => ({
+              ...p,
+              [tier]: { ...(p[tier] ?? {}), model: e.target.value || null },
+            }))}
+            disabled={!provider}
+            className="bp-select text-xs"
+          >
+            <option value="">— pick a model —</option>
+            {modelsFor(provider).map((m) => (
+              <option key={m.id ?? m} value={m.id ?? m}>{m.name ?? m.id ?? m}</option>
+            ))}
+          </select>
+          <div className="flex gap-1">
+            <button
+              onClick={() => save(tier)}
+              disabled={!dirty}
+              className="bp-btn bp-btn-secondary text-[10px]"
+            >
+              Save
+            </button>
+            {!isDefault && configured && (
+              <button
+                onClick={() => clear(tier)}
+                className="bp-btn bp-btn-ghost text-[10px]"
+                title="Clear — falls back to default"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <Section
+      title="LLM Tiers"
+      description="Pick which provider + model drives each tier. Blueprint never hardcodes a model — every LLM call resolves through these settings."
+    >
+      {loading ? (
+        <div className="text-xs text-blueprint-muted">Loading…</div>
+      ) : (
+        <div className="space-y-2">
+          <TierRow
+            tier="default"
+            description="Used for every run unless the call explicitly asks for another tier. Required."
+          />
+          <TierRow
+            tier="triage"
+            description="Fast/cheap model for routing, intent extraction, attribution, summaries. Optional — falls back to default."
+          />
+          <TierRow
+            tier="fallback"
+            description="Retry model when the primary provider fails mid-run. Optional — if unset, primary failure propagates."
+          />
+        </div>
+      )}
+    </Section>
   )
 }
 

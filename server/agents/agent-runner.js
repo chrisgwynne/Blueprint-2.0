@@ -931,27 +931,30 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     profile = yaml.load(readFileSync(found, 'utf8'));
   }
 
-  // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model).
-  // Conductor has a dual-model setup: a cheap triage model for event + poll
-  // runs (routing decisions, no deep analysis) and a full model for manual
-  // + scheduled runs. Any agent can add an `llm_triage` block to its profile
-  // to opt into the same two-tier behaviour.
-  const wantsTriage = (triggerType === 'event' || triggerType === 'poll');
-  const llmConfig = (wantsTriage && profile.llm_triage)
-    ? { ...profile.llm_triage, _tier: 'triage' }
-    : (profile.llm ? { ...profile.llm, _tier: 'full' } : {
-        model: profile.model?.primary ?? 'claude-sonnet-4-20250514',
-        temperature: 0.7,
-        max_tokens: profile.model?.max_tokens ?? 4096,
-        fallback_provider: null,
-        fallback_model: profile.model?.fallback ?? null,
-        cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
-        _tier: 'full',
-      });
+  // 3. Resolve LLM settings.
+  //
+  // Provider and model ALWAYS come from user settings (never baked into
+  // the profile). The profile only declares per-agent tuning — temperature,
+  // max_tokens, daily cost cap — and optionally opts into the triage tier
+  // for event/poll runs by providing an `llm_triage` block.
+  //
+  // Tier selection:
+  //   trigger is event/poll AND profile.llm_triage present → triage tier
+  //   otherwise                                            → default tier
+  //
+  // resolveProfileLLM reads the tier's provider/model from settings
+  // (llm_triage_provider/model, llm_default_provider/model) and overlays
+  // the profile's temperature/max_tokens.
+  const wantsTriage = (triggerType === 'event' || triggerType === 'poll') && !!profile.llm_triage;
+  const tier = wantsTriage ? 'triage' : 'default';
+  const profileBlock = wantsTriage ? profile.llm_triage : (profile.llm ?? {});
+  // Strip any stale `provider`/`model` that might still be lurking in an
+  // old profile.yaml — we never read them. Keep tuning-only keys.
+  const { provider: _ignoredP, model: _ignoredM, ...tuning } = profileBlock;
+  const llmConfig = { ...tuning, _tier: wantsTriage ? 'triage' : 'full' };
   if (profile.llm_triage) {
     console.log(
-      `[agent-runner] ${agentId} using ${llmConfig._tier} model ` +
-      `(trigger_type=${triggerType}, model=${llmConfig.model})`
+      `[agent-runner] ${agentId} tier=${llmConfig._tier} (trigger_type=${triggerType})`
     );
   }
 
@@ -1044,7 +1047,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     });
 
     // 9. Run LLM (with fallback)
-    const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig);
+    const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig, { tier });
 
     let llmResult;
     try {
@@ -1056,10 +1059,15 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       });
     } catch (primaryErr) {
       console.warn(`[agent-runner] Primary provider '${providerId}' failed: ${primaryErr.message}`);
-      if (llmConfig.fallback_provider) {
+      // Fallback provider + model come from settings (llm_fallback_provider /
+      // llm_fallback_model). If the user hasn't configured a fallback, the
+      // primary failure propagates.
+      const { getFallbackLLM } = await import('../lib/llm-providers.js');
+      const fallback = getFallbackLLM();
+      if (fallback) {
         const { providerId: fbPid, model: fbModel } = resolveProfileLLM({
-          provider: llmConfig.fallback_provider,
-          model: llmConfig.fallback_model,
+          provider: fallback.provider,
+          model: fallback.model,
           temperature,
           max_tokens,
         });

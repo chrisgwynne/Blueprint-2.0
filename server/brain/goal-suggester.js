@@ -267,9 +267,7 @@ Pattern details: ${JSON.stringify(pattern)}
 
 Produce a goal suggestion per the JSON schema. Estimate opportunity value conservatively.`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
   try {
     const result = await runLLM(providerId, model, {

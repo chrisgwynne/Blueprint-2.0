@@ -106,7 +106,6 @@ export async function runClustering(businessId) {
   if (!business) return [];
 
   const llmConfig = loadConductorLLM() ?? {
-    model: 'claude-sonnet-4-20250514',
     temperature: 0.2,
     max_tokens: 4096,
   };
