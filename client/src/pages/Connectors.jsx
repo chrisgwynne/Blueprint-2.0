@@ -13,6 +13,7 @@ import useStore from '../lib/store.js'
 import {
   getConnectors, addConnector, syncConnector, healthCheckConnector,
   updateConnector, deleteConnector, testPageSpeed, getGoogleAuthUrl, revokeGoogleAuth,
+  getTasks,
 } from '../lib/api.js'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -1498,6 +1499,20 @@ function Connectors() {
 
   const connectedCount = connectors.filter((c) => c.status === 'connected').length
 
+  // Wishlist — connector requests surfaced by agents
+  const [wishlistTasks, setWishlistTasks] = useState([])
+  useEffect(() => {
+    if (!currentBusiness) return
+    getTasks(currentBusiness.id, { limit: 50 })
+      .then((data) => {
+        const rows = Array.isArray(data?.tasks) ? data.tasks : (Array.isArray(data) ? data : [])
+        setWishlistTasks(rows.filter(t =>
+          t.action_type === 'connect_connector' || t.action_type === 'research_connector'
+        ))
+      })
+      .catch(() => {})
+  }, [currentBusiness])
+
   return (
     <div style={{ padding: '24px 28px', maxWidth: 1400, margin: '0 auto' }}>
       {/* Header */}
@@ -1588,13 +1603,80 @@ function Connectors() {
           onClose={() => setSelectedConnector(null)}
           onDelete={handleDelete}
           onSync={() => {
-            // Re-fetch connector to get updated last_sync
             getConnectors(currentBusiness?.id)
               .then((data) => setConnectors(Array.isArray(data) ? data : []))
               .catch(() => {})
           }}
           onUpdate={handleSaved}
         />
+      )}
+
+      {/* Connector Wishlist — requests surfaced by agents */}
+      {wishlistTasks.length > 0 && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+            <h2 style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 16, color: 'var(--bp-text)', margin: 0 }}>
+              Connector Wishlist
+            </h2>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', background: 'var(--bp-base-2)', border: '1px solid var(--bp-border)', borderRadius: 4, padding: '1px 6px' }}>
+              {wishlistTasks.length} item{wishlistTasks.length !== 1 ? 's' : ''} from agents
+            </span>
+          </div>
+          <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 16 }}>
+            Your agents identified these data sources during their analysis. Connect built-in connectors directly, or review research tasks to explore new APIs.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {wishlistTasks.map((t) => {
+              const payload = t.action_payload || {}
+              const isConnect = t.action_type === 'connect_connector'
+              const isResearch = t.action_type === 'research_connector'
+              const statusColor = t.status === 'complete' ? 'var(--bp-green)' : t.status === 'failed' ? 'var(--bp-red)' : 'var(--bp-text-3)'
+              return (
+                <div key={t.id} className="bp-card" style={{ padding: '14px 16px', display: 'flex', alignItems: 'flex-start', gap: 14 }}>
+                  <div style={{ marginTop: 2, flexShrink: 0, width: 28, height: 28, borderRadius: 6, background: isConnect ? 'rgba(var(--bp-green-rgb,74,222,128),0.12)' : 'rgba(99,102,241,0.12)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {isConnect
+                      ? <Plus size={13} style={{ color: 'var(--bp-green)' }} />
+                      : <Search size={13} style={{ color: '#818cf8' }} />
+                    }
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>
+                        {isConnect ? (payload.connector_name || payload.connector_type) : (payload.description || t.title)}
+                      </span>
+                      <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', background: 'var(--bp-base-2)', border: '1px solid var(--bp-border)', borderRadius: 3, padding: '1px 5px' }}>
+                        {isConnect ? 'built-in' : 'needs research'}
+                      </span>
+                      <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: statusColor }}>
+                        {t.status}
+                      </span>
+                    </div>
+                    <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 4 }}>
+                      Requested by <strong style={{ color: 'var(--bp-text-2)' }}>{t.proposed_by}</strong>
+                      {payload.reason && <span> · {payload.reason.slice(0, 120)}</span>}
+                      {payload.use_case && <span> · {payload.use_case.slice(0, 120)}</span>}
+                    </div>
+                    {t.status === 'complete' && t.outcome_data?.issue_url && (
+                      <a href={t.outcome_data.issue_url} target="_blank" rel="noreferrer"
+                        style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: '#818cf8', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                        <ExternalLink size={10} /> View GitHub issue
+                      </a>
+                    )}
+                  </div>
+                  {isConnect && t.status === 'proposed' && (
+                    <button
+                      className="bp-btn bp-btn-primary"
+                      style={{ fontSize: 10, flexShrink: 0, whiteSpace: 'nowrap' }}
+                      onClick={() => setShowAdd(true)}
+                    >
+                      <Plus size={11} /> Connect
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
       )}
     </div>
   )

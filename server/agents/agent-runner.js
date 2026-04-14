@@ -132,6 +132,29 @@ Structure:
       "estimated_impact": "Specific expected outcome with a measurable result"
     }
   ],
+  "search_queries": [
+    {
+      "query": "search query string",
+      "purpose": "why you need this — what question it answers",
+      "depth": "basic|advanced"
+    }
+  ],
+  "data_gaps": [
+    {
+      "description": "What data you needed but couldn't find",
+      "connector_type": "built-in connector id that would provide it, or null",
+      "connector_name": "Human-readable name",
+      "impact": "How this data would have improved your analysis",
+      "priority": "high|medium|low"
+    }
+  ],
+  "connector_wishlist": [
+    {
+      "description": "Data source that doesn't exist as a Blueprint connector yet",
+      "use_case": "Specifically what you would do with this data",
+      "search_for_api": true
+    }
+  ],
   "learnings": ["Any pattern or insight worth remembering for future runs"],
   "summary": "One-sentence summary of this run's findings"
 }
@@ -142,7 +165,10 @@ Rules:
 - p1 = urgent/critical, p2 = important/normal, p3 = nice to have
 - Maximum 3 tasks per run unless trigger is p1 signal
 - If nothing actionable found, return empty tasks array — never invent busywork
-- learnings array: 0-3 concise strings, patterns useful for future runs`;
+- learnings array: 0-3 concise strings, patterns useful for future runs
+- search_queries: only include if you genuinely need external data not in your context. Maximum 3.
+- data_gaps: only include data you actually needed and was genuinely missing. Do not pad.
+- connector_wishlist: only for data sources Blueprint has no connector for. Omit if empty.`;
 }
 
 function buildLegacySystemPrompt(profile) {
@@ -478,6 +504,41 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
     }
   } catch {}
 
+  // Search availability — tell the agent what search tools it has
+  try {
+    const searchRow = db.prepare(`
+      SELECT type FROM connectors
+      WHERE business_id = ? AND type IN ('tavily', 'brave-search') AND status = 'active'
+      ORDER BY CASE type WHEN 'tavily' THEN 1 WHEN 'brave-search' THEN 2 END LIMIT 1
+    `).get(business.id);
+    if (searchRow) {
+      lines.push(`## Web Search Available (${searchRow.type})`);
+      lines.push('You can search the web during this run. Include search_queries in your response to request searches.');
+      lines.push('Use search when: you need current info not in your connector data, want to check if a metric change is industry-wide, need to research a competitor or API, or want to verify a hypothesis with external evidence.');
+      lines.push('Maximum 3 searches per run. Use search_depth "advanced" only when full page content is needed.');
+      lines.push('');
+    }
+  } catch {}
+
+  // Available-but-not-connected built-in connectors
+  try {
+    const ALL_BUILT_IN_TYPES = [
+      'ga4', 'gsc', 'pagespeed', 'gbp', 'google-ads',
+      'shopify', 'stripe', 'github', 'brevo', 'klaviyo',
+      'semrush', 'meta-ads', 'social', 'buffer', 'wix',
+      'stannp', 'todoist', 'uptimerobot', 'wordpress',
+      'kirby', 'tavily', 'brave-search', 'server-access',
+    ];
+    const activeTypes = new Set(connectors.filter(c => c.status === 'active').map(c => c.type));
+    const notConnected = ALL_BUILT_IN_TYPES.filter(t => !activeTypes.has(t));
+    if (notConnected.length > 0) {
+      lines.push('## Built-In Connectors Not Yet Connected');
+      lines.push('If any of these would materially improve your analysis, include them in data_gaps:');
+      lines.push(notConnected.join(', '));
+      lines.push('');
+    }
+  } catch {}
+
   lines.push(`## Existing Pending Tasks (do not duplicate these)`);
   if (existingTasks.length === 0) {
     lines.push('No pending tasks.');
@@ -505,6 +566,86 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   }
 
   return lines.join('\n');
+}
+
+// ─── Data gap + connector wishlist processors ─────────────────────────────────
+
+/**
+ * Handle data_gaps from an agent response.
+ * For built-in connectors that aren't connected, propose a connect task.
+ */
+async function processDataGaps(gaps, agentId, businessId) {
+  if (!Array.isArray(gaps) || gaps.length === 0) return;
+  const { createTask } = await import('../tasks/task-queue.js');
+
+  for (const gap of gaps) {
+    if (!gap?.connector_type || gap.priority === 'low') continue;
+
+    // Avoid duplicate connect tasks
+    const existing = db.prepare(`
+      SELECT id FROM tasks
+      WHERE business_id = ?
+        AND action_type = 'connect_connector'
+        AND status IN ('proposed', 'approved')
+        AND json_extract(action_payload, '$.connector_type') = ?
+    `).get(businessId, gap.connector_type);
+    if (existing) continue;
+
+    createTask({
+      business_id: businessId,
+      title: `Connect ${gap.connector_name || gap.connector_type} — requested by ${agentId}`,
+      description: `**Why ${agentId} needs this:**\n\n${gap.description}\n\n**Impact on analysis:** ${gap.impact}\n\nThis connector is built into Blueprint and ready to connect. Go to: Settings → Connectors → Add Connector.`,
+      proposed_by: agentId,
+      action_type: 'connect_connector',
+      priority: gap.priority === 'high' ? 'p2' : 'p3',
+      trust_tier: 'green',
+      confidence: 0.8,
+      action_payload: {
+        connector_type: gap.connector_type,
+        connector_name: gap.connector_name || gap.connector_type,
+        requested_by: agentId,
+        reason: gap.description,
+      },
+    });
+  }
+}
+
+/**
+ * Handle connector_wishlist from an agent response.
+ * Creates research_connector tasks for data sources that don't have a Blueprint connector yet.
+ */
+async function processConnectorWishlist(wishlist, agentId, businessId) {
+  if (!Array.isArray(wishlist) || wishlist.length === 0) return;
+  const { createTask } = await import('../tasks/task-queue.js');
+
+  for (const item of wishlist) {
+    if (!item?.description || !item.search_for_api) continue;
+
+    const existing = db.prepare(`
+      SELECT id FROM tasks
+      WHERE business_id = ?
+        AND action_type = 'research_connector'
+        AND status IN ('proposed', 'approved', 'executing')
+        AND title LIKE ?
+    `).get(businessId, `%${item.description.slice(0, 30)}%`);
+    if (existing) continue;
+
+    createTask({
+      business_id: businessId,
+      title: `Research connector: ${item.description.slice(0, 80)}`,
+      description: `**Requested by:** ${agentId}\n\n**Use case:** ${item.use_case}\n\nThis data source doesn't have a Blueprint connector yet. Blueprint will research available APIs and produce a connector spec.`,
+      proposed_by: agentId,
+      action_type: 'research_connector',
+      priority: 'p3',
+      trust_tier: 'green',
+      confidence: 0.7,
+      action_payload: {
+        description: item.description,
+        use_case: item.use_case,
+        requested_by: agentId,
+      },
+    });
+  }
 }
 
 // ─── Main runAgent function ───────────────────────────────────────────────────
@@ -706,6 +847,53 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     } catch {
       console.error('[agent-runner] Failed to parse agent response:', rawContent.substring(0, 500));
       parsed = { tasks: [], reasoning: rawContent, signals_detected: 0, learnings: [] };
+    }
+
+    // 10a. Two-phase execution: if agent requested web searches, run them
+    // and re-run the LLM with search results injected before final analysis.
+    const searchQueries = Array.isArray(parsed.search_queries) ? parsed.search_queries.slice(0, 3) : [];
+    if (searchQueries.length > 0) {
+      try {
+        const { agentSearch } = await import('./tools/search.js');
+        const searchResults = {};
+        for (const sq of searchQueries) {
+          const r = await agentSearch(
+            sq.query,
+            { search_depth: sq.depth || 'basic' },
+            businessId, db,
+            { agentId, runId }
+          );
+          if (r.available) searchResults[sq.query] = r;
+        }
+
+        if (Object.keys(searchResults).length > 0) {
+          const searchBlock = Object.entries(searchResults).map(([query, r]) => {
+            const snippets = (r.results ?? []).slice(0, 3).map(res =>
+              `**${res.title}** (${res.url})\n${(res.content || res.description || '').slice(0, 300)}`
+            ).join('\n\n');
+            return `### Search: "${query}"\n${r.answer ? `Summary: ${r.answer}\n\n` : ''}${snippets}`;
+          }).join('\n\n---\n\n');
+
+          const secondPassContent = await runLLM(providerId, model, {
+            messages: [{
+              role: 'user',
+              content: userContext + `\n\n## Web Search Results\n\n${searchBlock}\n\nNow produce your final analysis incorporating these search results.`,
+            }],
+            system: systemPrompt,
+            temperature,
+            max_tokens,
+          });
+          const rawSecond = secondPassContent?.content ?? '';
+          try {
+            const m2 = rawSecond.match(/```(?:json)?\s*([\s\S]*?)```/) || rawSecond.match(/(\{[\s\S]*\})/);
+            parsed = JSON.parse((m2 ? m2[1] : rawSecond).trim());
+          } catch {
+            // Keep first-pass parsed if second-pass fails to parse
+          }
+        }
+      } catch (searchErr) {
+        console.warn(`[agent-runner] Search phase failed for '${agentId}' (non-fatal):`, searchErr.message);
+      }
     }
 
     let tasksToCreate = Array.isArray(parsed.tasks) ? parsed.tasks : [];
@@ -912,7 +1100,13 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
-    // 14. Update memory with learnings
+    // 14. Process data gaps and connector wishlist (non-blocking)
+    processDataGaps(parsed.data_gaps, agentId, businessId)
+      .catch(e => console.warn('[agent-runner] processDataGaps failed (non-fatal):', e.message));
+    processConnectorWishlist(parsed.connector_wishlist, agentId, businessId)
+      .catch(e => console.warn('[agent-runner] processConnectorWishlist failed (non-fatal):', e.message));
+
+    // 15. Update memory with learnings
     const learnings = Array.isArray(parsed.learnings) ? parsed.learnings : [];
     updateMemory(agentId, {
       learnings,
@@ -1026,6 +1220,11 @@ ${signalsDetected} signal(s) reviewed.
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).run(err.message, runId);
+
+    // Self-healing: diagnose, search for solution, create GitHub issue + draft PR
+    import('./self-healer.js')
+      .then(m => m.healAgentError(err, { agentId, runId, businessId, trigger }))
+      .catch(healErr => console.warn('[self-heal] Agent healing failed (non-fatal):', healErr.message));
 
     try {
       const { pushDashboardEvent } = await import('../lib/sse-bus.js');

@@ -459,6 +459,23 @@ const STARTUP_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)`,
   // Measurement window for follow-on tasks (days to check metric after execution)
   `ALTER TABLE tasks ADD COLUMN measurement_window_days INTEGER`,
+
+  // Agent web search usage log (Brave Search / Tavily)
+  `CREATE TABLE IF NOT EXISTS search_log (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_id TEXT NOT NULL,
+    query TEXT NOT NULL,
+    results_count INTEGER DEFAULT 0,
+    search_depth TEXT DEFAULT 'basic',
+    agent_id TEXT,
+    run_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_search_log_business ON search_log(business_id, created_at)`,
+
+  // Connector wishlist / data gap requests from agents
+  `ALTER TABLE tasks ADD COLUMN wishlist_connector_type TEXT`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

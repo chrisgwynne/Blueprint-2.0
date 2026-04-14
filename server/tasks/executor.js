@@ -42,6 +42,9 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'gbp_update',
   'klaviyo_flow_update',
   'meta_ads_update',
+  // Connector lifecycle — surfaced by agents, reviewed by human
+  'connect_connector',
+  'research_connector',
 ]);
 
 export function isExecutable(actionType) {
@@ -992,6 +995,8 @@ export async function executeTask(taskId) {
       case 'gbp_update':                result = await executeGbpUpdate(task); break;
       case 'klaviyo_flow_update':       result = await executeKlaviyoFlowUpdate(task); break;
       case 'meta_ads_update':           result = await executeMetaAdsUpdate(task); break;
+      case 'connect_connector':         result = await executeConnectConnector(task); break;
+      case 'research_connector':        result = await executeResearchConnector(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }
@@ -1018,8 +1023,15 @@ export async function executeTask(taskId) {
         { error: err.message }
       );
     } catch {}
-    if (!isConnectorMissing) console.error(`[executor] Task ${taskId} failed:`, err);
-    else console.warn(`[executor] Task ${taskId} blocked (missing connector):`, err.message);
+    if (!isConnectorMissing) {
+      console.error(`[executor] Task ${taskId} failed:`, err);
+      // Self-healing: diagnose executor failures (not missing-connector blocks)
+      import('../agents/self-healer.js')
+        .then(m => m.healExecutorError(err, task))
+        .catch(healErr => console.warn('[self-heal] Executor healing failed (non-fatal):', healErr.message));
+    } else {
+      console.warn(`[executor] Task ${taskId} blocked (missing connector):`, err.message);
+    }
     return { ok: false, error: err.message };
   }
 
@@ -1205,4 +1217,239 @@ async function executeServerFileRollback(task) {
   } finally {
     await conn.disconnect();
   }
+}
+
+// ─── Connector lifecycle handlers ─────────────────────────────────────────────
+
+/**
+ * connect_connector — human has approved the recommendation to connect a
+ * built-in connector. Returns an instruction to go connect it; no API call.
+ */
+async function executeConnectConnector(task) {
+  const { connector_type, connector_name } = task.action_payload ?? {};
+  return {
+    outcome: `Connector recommendation acknowledged: connect ${connector_name || connector_type}. Go to Settings → Connectors → Add Connector.`,
+    outcome_data: { connector_type, connector_name },
+  };
+}
+
+/**
+ * research_connector — searches for APIs that provide the requested data,
+ * evaluates them with an LLM, files a spec to the KB, and creates a GitHub
+ * issue for worthwhile connectors.
+ */
+async function executeResearchConnector(task) {
+  const { description, use_case, requested_by } = task.action_payload ?? {};
+  if (!description) throw new Error('research_connector requires action_payload.description');
+
+  const { agentSearch } = await import('../agents/tools/search.js');
+  const { runLLM, resolveProfileLLM } = await import('../lib/llm-providers.js');
+
+  // Search for APIs
+  const [apiSearch, pricingSearch] = await Promise.allSettled([
+    agentSearch(
+      `${description} API developer documentation REST`,
+      { search_depth: 'advanced', max_results: 5 },
+      task.business_id, db
+    ),
+    agentSearch(
+      `${description} API integration pricing free tier`,
+      { search_depth: 'basic', max_results: 4 },
+      task.business_id, db
+    ),
+  ]);
+
+  const apiResults = apiSearch.status === 'fulfilled' && apiSearch.value.available
+    ? apiSearch.value.results.slice(0, 4) : [];
+  const pricingResults = pricingSearch.status === 'fulfilled' && pricingSearch.value.available
+    ? pricingSearch.value.results.slice(0, 3) : [];
+
+  const searchAvailable = apiResults.length > 0;
+
+  const prompt = `You are evaluating APIs to build a Blueprint connector for:
+
+REQUESTED DATA: ${description}
+USE CASE: ${use_case ?? 'Not specified'}
+REQUESTED BY AGENT: ${requested_by ?? 'unknown'}
+
+${searchAvailable ? `API DOCUMENTATION FOUND:
+${apiResults.map(r => `**${r.title}**\nURL: ${r.url}\n${(r.content || r.description || '').slice(0, 400)}`).join('\n\n')}
+
+PRICING / INTEGRATION INFO:
+${pricingResults.map(r => `**${r.title}**\n${(r.content || r.description || '').slice(0, 200)}`).join('\n\n')}` : 'No search connector available — use your training knowledge to evaluate known APIs.'}
+
+Produce a connector proposal as JSON:
+{
+  "connector_name": "Name of the best API option",
+  "connector_id": "snake_case_id",
+  "provider_url": "https://...",
+  "api_docs_url": "https://...",
+  "auth_type": "apikey|oauth2|basic",
+  "pricing": "free|freemium|paid — brief description",
+  "free_tier": "What free tier includes, or null",
+  "data_available": ["Specific metric or data point"],
+  "signals_possible": ["Signal rule that would be possible"],
+  "agents_benefiting": ["agent-id"],
+  "build_complexity": "low|medium|high",
+  "build_estimate": "e.g. 2-4 hours",
+  "recommendation": "build_now|build_later|not_worth_it",
+  "recommendation_reason": "Why",
+  "sample_endpoints": [{ "name": "what it fetches", "method": "GET", "url": "https://...", "key_fields": ["field1"] }],
+  "alternatives": [{ "name": "Alt API", "url": "https://...", "why_not_primary": "reason" }]
+}`;
+
+  const { providerId, model } = resolveProfileLLM({ model: 'claude-sonnet-4-5' });
+  const llmResult = await runLLM(providerId, model, {
+    messages: [{ role: 'user', content: prompt }],
+    system: 'Return only valid JSON. Be specific and honest about API complexity.',
+    temperature: 0.2,
+    max_tokens: 2000,
+  });
+
+  // Parse spec
+  let spec;
+  try {
+    const raw = llmResult.content ?? '';
+    const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
+    spec = JSON.parse((m ? m[1] : raw).trim());
+  } catch {
+    throw new Error('LLM could not produce a valid connector spec JSON');
+  }
+
+  // File spec to KB
+  let kbPath = null;
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const kb = await getKBForBusiness(task.business_id);
+    if (kb?.engine) {
+      const date = new Date().toISOString().split('T')[0];
+      const slug = (spec.connector_id || description.toLowerCase().replace(/\s+/g, '-')).slice(0, 40);
+      kbPath = `research/connector-spec-${slug}-${date}.md`;
+      const doc = buildConnectorSpecDoc(spec, task, date);
+      await kb.engine.writeFile(
+        kbPath, doc,
+        { title: `Connector Spec: ${spec.connector_name}`, tags: ['connector-spec', 'research', spec.recommendation],
+          written_by: 'researcher', review_status: 'pending_review' },
+        `connector spec: ${spec.connector_name}`
+      );
+    }
+  } catch (kbErr) {
+    console.warn('[executor] research_connector KB write failed (non-fatal):', kbErr.message);
+  }
+
+  // Create GitHub issue for worthwhile connectors
+  let issueUrl = null;
+  if (spec.recommendation !== 'not_worth_it') {
+    try {
+      const ghRow = db.prepare(
+        `SELECT * FROM connectors WHERE business_id = ? AND type = 'github' AND status = 'active' LIMIT 1`
+      ).get(task.business_id);
+      if (ghRow) {
+        const ghCreds = JSON.parse(decrypt(ghRow.credentials));
+        const ghConfig = JSON.parse(ghRow.config || '{}');
+        const owner = ghCreds.owner || ghConfig.owner;
+        const repo = (ghCreds.repos || ghConfig.repos || '').split(',')[0]?.trim();
+        if (owner && repo) {
+          const { default: github } = await import('../connectors/github/index.js');
+          const issue = await github.createIssue(ghCreds, owner, repo, {
+            title: `Connector request: ${spec.connector_name}`,
+            body: buildConnectorIssueBody(spec, task),
+            labels: [
+              'connector-request',
+              spec.recommendation === 'build_now' ? 'priority' : 'backlog',
+            ],
+          });
+          issueUrl = issue?.html_url ?? null;
+        }
+      }
+    } catch (ghErr) {
+      console.warn('[executor] research_connector GitHub issue failed (non-fatal):', ghErr.message);
+    }
+  }
+
+  return {
+    outcome: `Connector spec for "${spec.connector_name}" produced. Recommendation: ${spec.recommendation}.${issueUrl ? ` GitHub issue created.` : ''}`,
+    outcome_data: { connector_name: spec.connector_name, recommendation: spec.recommendation, kb_path: kbPath, issue_url: issueUrl },
+  };
+}
+
+function buildConnectorSpecDoc(spec, task, date) {
+  return `# Connector Spec: ${spec.connector_name}
+
+**Requested by:** ${task.action_payload?.requested_by ?? 'unknown'}
+**Date:** ${date}
+**Recommendation:** ${(spec.recommendation ?? '').toUpperCase()}
+
+## Provider
+- Website: ${spec.provider_url ?? 'unknown'}
+- API Docs: ${spec.api_docs_url ?? 'unknown'}
+- Auth: ${spec.auth_type ?? 'unknown'}
+- Pricing: ${spec.pricing ?? 'unknown'}
+${spec.free_tier ? `- Free tier: ${spec.free_tier}` : ''}
+
+## What this connector provides
+${(spec.data_available ?? []).map(d => `- ${d}`).join('\n')}
+
+## Signals it would enable
+${(spec.signals_possible ?? []).map(s => `- ${s}`).join('\n')}
+
+## Agents that benefit
+${(spec.agents_benefiting ?? []).map(a => `- ${a}`).join('\n')}
+
+## Build assessment
+- Complexity: ${spec.build_complexity ?? 'unknown'}
+- Estimated time: ${spec.build_estimate ?? 'unknown'}
+- Recommendation: **${spec.recommendation ?? 'unknown'}**
+- Reason: ${spec.recommendation_reason ?? ''}
+
+## Sample endpoints
+${(spec.sample_endpoints ?? []).map(e =>
+  `### ${e.name}\n\`${e.method} ${e.url}\`\nKey fields: ${(e.key_fields ?? []).join(', ')}`
+).join('\n\n')}
+
+## Alternatives
+${(spec.alternatives ?? []).map(a => `- **${a.name}**: ${a.why_not_primary}`).join('\n') || 'None'}
+
+---
+*Spec generated by Blueprint on ${date}*
+*Use case: ${task.action_payload?.use_case ?? ''}*
+`;
+}
+
+function buildConnectorIssueBody(spec, task) {
+  return `## Connector Request: ${spec.connector_name}
+
+**Requested by agent:** ${task.action_payload?.requested_by ?? 'unknown'}
+**Use case:** ${task.action_payload?.use_case ?? 'not specified'}
+
+### API details
+- **Provider:** ${spec.connector_name} (${spec.provider_url ?? 'unknown'})
+- **API docs:** ${spec.api_docs_url ?? 'unknown'}
+- **Auth:** ${spec.auth_type ?? 'unknown'}
+- **Pricing:** ${spec.pricing ?? 'unknown'}
+${spec.free_tier ? `- **Free tier:** ${spec.free_tier}` : ''}
+
+### Data available
+${(spec.data_available ?? []).map(d => `- ${d}`).join('\n')}
+
+### Signals it would enable
+${(spec.signals_possible ?? []).map(s => `- ${s}`).join('\n')}
+
+### Agents that benefit
+${(spec.agents_benefiting ?? []).map(a => `- \`${a}\``).join('\n')}
+
+### Build assessment
+- Complexity: **${spec.build_complexity ?? 'unknown'}**
+- Estimated time: **${spec.build_estimate ?? 'unknown'}**
+
+### Sample endpoints
+\`\`\`
+${(spec.sample_endpoints ?? []).map(e =>
+  `${e.method} ${e.url}\nFields: ${(e.key_fields ?? []).join(', ')}`
+).join('\n\n')}
+\`\`\`
+
+---
+*Automatically generated by Blueprint's connector discovery system.*
+`;
 }

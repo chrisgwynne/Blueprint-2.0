@@ -4,9 +4,9 @@ import { parseTimestamp } from '../lib/time.js'
 import {
   Activity, RefreshCw, Play, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle2, XCircle, Pause, Database,
-  BookOpen, Clock, Zap,
+  BookOpen, Clock, Zap, Wrench, ExternalLink,
 } from 'lucide-react'
-import { getSystemHealth, syncConnector, runAgent, getBrainStatus } from '../lib/api.js'
+import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks } from '../lib/api.js'
 import useStore from '../lib/store.js'
 
 const STATUS_COLORS = {
@@ -394,6 +394,99 @@ function SchedulerSection({ scheduler }) {
   )
 }
 
+function SelfHealingSection() {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [healingTasks, setHealingTasks] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    if (!currentBusiness) { setLoading(false); return }
+    getTasks(currentBusiness.id, { limit: 100 })
+      .then((data) => {
+        const rows = Array.isArray(data?.tasks) ? data.tasks : (Array.isArray(data) ? data : [])
+        setHealingTasks(rows.filter(t => t.proposed_by === 'self-healer'))
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [currentBusiness])
+
+  const total = healingTasks.length
+  const withPR = healingTasks.filter(t => t.outcome_data?.issue_url).length
+  const resolved = healingTasks.filter(t => t.status === 'complete').length
+  const needsReview = healingTasks.filter(t => t.status === 'proposed').length
+
+  return (
+    <div>
+      <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 14 }}>
+        Blueprint automatically diagnoses failures, proposes fixes, and creates draft PRs for human review.
+        PRs always target <code>develop</code>, always draft — never auto-merged.
+      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 18 }}>
+        {[
+          { label: 'Errors diagnosed', value: total, color: 'var(--bp-text)' },
+          { label: 'Draft PRs created', value: withPR, color: '#818cf8' },
+          { label: 'Fixed & resolved', value: resolved, color: 'var(--bp-green)' },
+          { label: 'Awaiting review', value: needsReview, color: 'var(--bp-amber)' },
+        ].map(c => (
+          <div key={c.label} style={{ padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3 }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 18, fontWeight: 700, color: c.color }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      {loading && <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>Loading…</div>}
+      {!loading && healingTasks.length === 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px', background: 'var(--bp-surface-2)', borderRadius: 4 }}>
+          <CheckCircle2 size={14} style={{ color: 'var(--bp-green)', flexShrink: 0 }} />
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>
+            No self-healing events yet. Errors will appear here when they occur.
+          </span>
+        </div>
+      )}
+      {healingTasks.length > 0 && (
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--bp-border)' }}>
+              {['Date', 'Component', 'Diagnosis', 'PR', 'Status'].map(h => (
+                <th key={h} style={{ padding: '6px 8px', textAlign: 'left', fontWeight: 600, fontSize: 9, letterSpacing: '0.08em', color: 'var(--bp-text-3)', textTransform: 'uppercase' }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {healingTasks.slice(0, 20).map((t) => {
+              const issueUrl = t.outcome_data?.issue_url
+              const statusColor = t.status === 'complete' ? 'var(--bp-green)' : t.status === 'failed' ? 'var(--bp-red)' : 'var(--bp-amber)'
+              return (
+                <tr key={t.id} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+                  <td style={{ padding: '8px 8px', color: 'var(--bp-text-3)', whiteSpace: 'nowrap' }}>
+                    {t.created_at ? formatDistanceToNow(parseTimestamp(t.created_at), { addSuffix: true }) : '—'}
+                  </td>
+                  <td style={{ padding: '8px 8px', color: 'var(--bp-text-2)' }}>
+                    {t.action_payload?.component || t.proposed_by || '—'}
+                  </td>
+                  <td style={{ padding: '8px 8px', color: 'var(--bp-text)', maxWidth: 260 }}>
+                    <span style={{ display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                      {t.description?.split('\n')[0]?.slice(0, 140) || t.title || '—'}
+                    </span>
+                  </td>
+                  <td style={{ padding: '8px 8px' }}>
+                    {issueUrl
+                      ? <a href={issueUrl} target="_blank" rel="noreferrer" style={{ color: '#818cf8', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          <ExternalLink size={10} /> Issue
+                        </a>
+                      : <span style={{ color: 'var(--bp-text-3)' }}>—</span>}
+                  </td>
+                  <td style={{ padding: '8px 8px', color: statusColor, whiteSpace: 'nowrap' }}>{t.status}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function SystemHealth() {
   const [data, setData] = useState(null)
@@ -507,6 +600,10 @@ export default function SystemHealth() {
 
       <Section title="Brain">
         <BrainSection />
+      </Section>
+
+      <Section title="Self-Healing">
+        <SelfHealingSection />
       </Section>
     </div>
   )
