@@ -91,11 +91,16 @@ function safeJSON(val, fallback = []) {
 // ─── System ─────────────────────────────────────────────────────────────────
 
 router.get('/health', (_req, res) => {
-  res.json({ status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '0.9.0-beta', timestamp: new Date().toISOString() });
 });
 
 router.get('/version', (_req, res) => {
-  res.json({ version: '1.0.0', protocol: 'Blueprint Public API v1' });
+  res.json({
+    name: 'Blueprint',
+    version: '0.9.0-beta',
+    protocol: 'Blueprint Public API v1',
+    environment: process.env.NODE_ENV || 'development',
+  });
 });
 
 // ─── Businesses ─────────────────────────────────────────────────────────────
