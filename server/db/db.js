@@ -511,6 +511,50 @@ const STARTUP_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_self_heal_log_last_seen ON self_heal_log(last_seen_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_self_heal_log_component ON self_heal_log(component, last_seen_at DESC)`,
 
+  // ─── Intelligence mesh ───────────────────────────────────────────────────
+  // Cross-component event log: every time one part of the system produces
+  // output that another part consumes (KB → signal, signal → task, agent →
+  // agent brief, chat → connector gap, etc.) a row is written here.
+  // Powers the Timeline UI and lets Conductor see what's flowing.
+  `CREATE TABLE IF NOT EXISTS intelligence_events (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    event_type TEXT NOT NULL,
+    description TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_business ON intelligence_events(business_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_source ON intelligence_events(source_type, source_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_target ON intelligence_events(target_type, target_id)`,
+
+  // Unified connector-gap tracker. KB analyser, signals, agents, chat, task
+  // outcomes all call surfaceConnectorGap() when they notice a missing data
+  // source. Dedup is enforced by the unique (business_id, connector_name)
+  // index — repeat surfacings bump times_surfaced instead of spawning new
+  // tasks. See server/lib/connector-gap-handler.js.
+  `CREATE TABLE IF NOT EXISTS connector_gaps (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_name TEXT NOT NULL,
+    is_built INTEGER DEFAULT 0,
+    times_surfaced INTEGER DEFAULT 1,
+    first_surfaced_by TEXT,
+    last_surfaced_by TEXT,
+    last_surfaced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    task_id TEXT,
+    status TEXT DEFAULT 'task_created',
+    description TEXT,
+    last_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_gaps_unique ON connector_gaps(business_id, connector_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_connector_gaps_last_surfaced ON connector_gaps(business_id, last_surfaced_at DESC)`,
+
   // ─── Prompt-injection defence ────────────────────────────────────────────
   // Every outbound HTTP call from an agent-driven code path is logged here.
   // See server/lib/safe-fetch.js + server/lib/outbound-allowlist.js.

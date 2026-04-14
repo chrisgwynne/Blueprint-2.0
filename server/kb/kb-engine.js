@@ -298,6 +298,35 @@ export class KBEngine {
   }
 
   /**
+   * Return KB files modified within the last `hours`, newest first.
+   * Each entry: { path, modified (ISO string), size (bytes) }.
+   *
+   * Used by the KB analyser and the mesh orchestrator to find what's
+   * changed recently without re-reading every file.
+   */
+  async getRecentlyModified(hours = 48) {
+    const cutoffMs = Date.now() - Number(hours) * 3600 * 1000;
+    const files = await this.listFiles();
+    const out = [];
+    for (const path of files) {
+      if (path.startsWith('_archived/')) continue;
+      const full = join(this.root, path);
+      try {
+        const stat = statSync(full);
+        if (stat.mtimeMs >= cutoffMs) {
+          out.push({
+            path,
+            modified: stat.mtime.toISOString(),
+            size: stat.size,
+          });
+        }
+      } catch {}
+    }
+    out.sort((a, b) => b.modified.localeCompare(a.modified));
+    return out;
+  }
+
+  /**
    * List all .md files relative to KB root.
    * Walks recursively, skips dotfiles and _archived/.
    */

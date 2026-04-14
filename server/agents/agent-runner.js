@@ -572,82 +572,59 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
 }
 
 // ─── Data gap + connector wishlist processors ─────────────────────────────────
+//
+// Both of these used to have their own task-creation + dedup logic. They now
+// funnel through surfaceConnectorGap() so KB, signals, chat, and agents all
+// share the same connector-gap pipeline (with a single dedup row per
+// business+connector and a single place to change policy).
 
 /**
  * Handle data_gaps from an agent response.
- * For built-in connectors that aren't connected, propose a connect task.
+ * For built-in connectors that aren't connected, surface a gap.
  */
 async function processDataGaps(gaps, agentId, businessId) {
   if (!Array.isArray(gaps) || gaps.length === 0) return;
-  const { createTask } = await import('../tasks/task-queue.js');
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const gap of gaps) {
     if (!gap?.connector_type || gap.priority === 'low') continue;
 
-    // Avoid duplicate connect tasks
-    const existing = db.prepare(`
-      SELECT id FROM tasks
-      WHERE business_id = ?
-        AND action_type = 'connect_connector'
-        AND status IN ('proposed', 'approved')
-        AND json_extract(action_payload, '$.connector_type') = ?
-    `).get(businessId, gap.connector_type);
-    if (existing) continue;
-
-    createTask({
+    await surfaceConnectorGap({
       business_id: businessId,
-      title: `Connect ${gap.connector_name || gap.connector_type} — requested by ${agentId}`,
-      description: `**Why ${agentId} needs this:**\n\n${gap.description}\n\n**Impact on analysis:** ${gap.impact}\n\nThis connector is built into Blueprint and ready to connect. Go to: Settings → Connectors → Add Connector.`,
-      proposed_by: agentId,
-      action_type: 'connect_connector',
+      connector_name: gap.connector_name || gap.connector_type,
+      source: `agent:${agentId}`,
+      reason: gap.description,
+      use_case: gap.impact,
+      implied_by: `${agentId} analysis`,
       priority: gap.priority === 'high' ? 'p2' : 'p3',
-      trust_tier: 'green',
-      confidence: 0.8,
-      action_payload: {
-        connector_type: gap.connector_type,
-        connector_name: gap.connector_name || gap.connector_type,
-        requested_by: agentId,
-        reason: gap.description,
-      },
-    });
+    }).catch((err) =>
+      console.warn(`[agent-runner] surfaceConnectorGap failed for ${gap.connector_type}:`, err.message)
+    );
   }
 }
 
 /**
  * Handle connector_wishlist from an agent response.
- * Creates research_connector tasks for data sources that don't have a Blueprint connector yet.
+ * Surfaces research-needed gaps for data sources without a built-in connector.
  */
 async function processConnectorWishlist(wishlist, agentId, businessId) {
   if (!Array.isArray(wishlist) || wishlist.length === 0) return;
-  const { createTask } = await import('../tasks/task-queue.js');
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const item of wishlist) {
     if (!item?.description || !item.search_for_api) continue;
 
-    const existing = db.prepare(`
-      SELECT id FROM tasks
-      WHERE business_id = ?
-        AND action_type = 'research_connector'
-        AND status IN ('proposed', 'approved', 'executing')
-        AND title LIKE ?
-    `).get(businessId, `%${item.description.slice(0, 30)}%`);
-    if (existing) continue;
-
-    createTask({
+    await surfaceConnectorGap({
       business_id: businessId,
-      title: `Research connector: ${item.description.slice(0, 80)}`,
-      description: `**Requested by:** ${agentId}\n\n**Use case:** ${item.use_case}\n\nThis data source doesn't have a Blueprint connector yet. Blueprint will research available APIs and produce a connector spec.`,
-      proposed_by: agentId,
-      action_type: 'research_connector',
+      connector_name: item.description,  // free-form → research_connector path
+      source: `agent:${agentId}`,
+      reason: item.use_case,
+      use_case: item.description,
+      implied_by: `${agentId} connector wishlist`,
       priority: 'p3',
-      trust_tier: 'green',
-      confidence: 0.7,
-      action_payload: {
-        description: item.description,
-        use_case: item.use_case,
-        requested_by: agentId,
-      },
-    });
+    }).catch((err) =>
+      console.warn(`[agent-runner] surfaceConnectorGap failed for wishlist item:`, err.message)
+    );
   }
 }
 
