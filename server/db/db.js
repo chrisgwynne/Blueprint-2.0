@@ -478,10 +478,38 @@ const STARTUP_MIGRATIONS = [
   `ALTER TABLE tasks ADD COLUMN wishlist_connector_type TEXT`,
 
   // Blueprint system GitHub settings (separate from business GitHub connectors).
-  // Seeded here so existing installs get the rows; ON CONFLICT does nothing if already present.
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_owner', '"chrisgwynne"', CURRENT_TIMESTAMP)`,
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_repo',  '"Blueprint"',   CURRENT_TIMESTAMP)`,
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token', '""',            CURRENT_TIMESTAMP)`,
+  // Owner/repo are hardcoded in code to chrisgwynne/Blueprint — only the token
+  // and the enabled toggle are persisted here. Old owner/repo rows are left
+  // in place for backwards compat but are no longer read.
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token',   '""',   CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_enabled', 'true', CURRENT_TIMESTAMP)`,
+
+  // ─── Self-heal log ───────────────────────────────────────────────────────
+  // One row per unique error fingerprint. Counter increments on repeat
+  // occurrences so we don't spam GitHub or notifications with duplicates.
+  // See server/agents/self-healer.js for the fingerprinting rules.
+  `CREATE TABLE IF NOT EXISTS self_heal_log (
+    fingerprint TEXT PRIMARY KEY,
+    component TEXT NOT NULL,
+    error_type TEXT,
+    error_message TEXT,
+    diagnosis TEXT,
+    severity TEXT,
+    confidence REAL,
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_notified_at DATETIME,
+    github_issue_number INTEGER,
+    github_issue_url TEXT,
+    github_pr_number INTEGER,
+    github_pr_url TEXT,
+    env_context TEXT,
+    last_business_id TEXT,
+    last_run_id TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_self_heal_log_last_seen ON self_heal_log(last_seen_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_self_heal_log_component ON self_heal_log(component, last_seen_at DESC)`,
 
   // ─── Prompt-injection defence ────────────────────────────────────────────
   // Every outbound HTTP call from an agent-driven code path is logged here.

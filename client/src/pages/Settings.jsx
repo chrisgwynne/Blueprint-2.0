@@ -1037,11 +1037,13 @@ function SystemTab() {
   const [health, setHealth] = useState(null)
 
   // Blueprint GitHub state
+  // Owner/repo are hardcoded on the server to chrisgwynne/Blueprint — we only
+  // let the user edit the token and toggle the integration on/off.
+  const BLUEPRINT_REPO_LABEL = 'chrisgwynne/Blueprint'
   const [ghToken, setGhToken]       = useState('')
-  const [ghOwner, setGhOwner]       = useState('chrisgwynne')
-  const [ghRepo, setGhRepo]         = useState('Blueprint')
+  const [ghEnabled, setGhEnabled]   = useState(true)
   const [ghShowToken, setGhShowToken] = useState(false)
-  const [ghStatus, setGhStatus]     = useState(null)   // { configured, repo, error }
+  const [ghStatus, setGhStatus]     = useState(null)   // { configured, enabled, repo, error }
   const [ghTesting, setGhTesting]   = useState(false)
   const [ghSaving, setGhSaving]     = useState(false)
 
@@ -1051,8 +1053,7 @@ function SystemTab() {
     getBlueprintGitHubStatus()
       .then((s) => {
         setGhStatus(s)
-        if (s.owner) setGhOwner(s.owner)
-        if (s.repo)  setGhRepo(s.repo.split('/').pop() || 'Blueprint')
+        if (typeof s.enabled === 'boolean') setGhEnabled(s.enabled)
       })
       .catch(() => {})
   }, [])
@@ -1078,7 +1079,10 @@ function SystemTab() {
   async function handleGhSave() {
     setGhSaving(true)
     try {
-      await saveBlueprintGitHubSettings({ token: ghToken || undefined, owner: ghOwner, repo: ghRepo })
+      await saveBlueprintGitHubSettings({
+        token: ghToken || undefined,
+        enabled: ghEnabled,
+      })
       addNotification({ type: 'success', message: 'Blueprint GitHub settings saved' })
       // Re-check status
       const s = await getBlueprintGitHubStatus()
@@ -1157,24 +1161,26 @@ function SystemTab() {
         )}
 
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Owner / Org">
+          <Field label="Target repository" hint="Hardcoded — Blueprint never files issues or PRs on any other repo.">
+            <div className="bp-input text-xs w-full opacity-70 flex items-center justify-between">
+              <span className="mono">{BLUEPRINT_REPO_LABEL}</span>
+              <span className="text-[10px] uppercase tracking-wider text-blueprint-muted">read-only</span>
+            </div>
+          </Field>
+
+          <Field
+            label="Enable self-healing on GitHub"
+            hint="When off, Blueprint still diagnoses errors locally but does not create issues or draft PRs on GitHub."
+          >
+            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
               <input
-                className="bp-input text-xs w-full"
-                value={ghOwner}
-                onChange={(e) => setGhOwner(e.target.value)}
-                placeholder="chrisgwynne"
+                type="checkbox"
+                checked={ghEnabled}
+                onChange={(e) => setGhEnabled(e.target.checked)}
               />
-            </Field>
-            <Field label="Repository">
-              <input
-                className="bp-input text-xs w-full"
-                value={ghRepo}
-                onChange={(e) => setGhRepo(e.target.value)}
-                placeholder="Blueprint"
-              />
-            </Field>
-          </div>
+              <span>{ghEnabled ? 'Enabled' : 'Disabled — no GitHub issues or PRs will be created'}</span>
+            </label>
+          </Field>
 
           <Field label="Personal Access Token" hint="Fine-grained token: Issues + Pull requests + Contents (read/write). Repo: chrisgwynne/Blueprint only.">
             <div className="relative">
@@ -1184,6 +1190,7 @@ function SystemTab() {
                 value={ghToken}
                 onChange={(e) => setGhToken(e.target.value)}
                 placeholder={ghStatus?.configured ? '••••••••••••••••••••••••••••••••' : 'ghp_...'}
+                disabled={!ghEnabled}
               />
               <button
                 type="button"

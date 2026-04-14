@@ -389,15 +389,17 @@ const mountRoutes = async () => {
   });
 
   app.post('/api/settings/blueprint-github', _isAuth, (req, res) => {
-    const { token, owner, repo } = req.body ?? {};
+    // Owner and repo are hardcoded to chrisgwynne/Blueprint — only the access
+    // token and the enabled toggle can be changed by the user. Any owner/repo
+    // values in the request body are ignored.
+    const { token, enabled } = req.body ?? {};
     const upsert = db.prepare(
       `INSERT INTO settings (key, value, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     );
-    if (token  !== undefined) upsert.run('blueprint_github_token', JSON.stringify(token));
-    if (owner  !== undefined) upsert.run('blueprint_github_owner', JSON.stringify(owner));
-    if (repo   !== undefined) upsert.run('blueprint_github_repo',  JSON.stringify(repo));
+    if (token   !== undefined) upsert.run('blueprint_github_token',   JSON.stringify(token));
+    if (enabled !== undefined) upsert.run('blueprint_github_enabled', JSON.stringify(Boolean(enabled)));
     res.json({ ok: true });
   });
 

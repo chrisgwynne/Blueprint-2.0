@@ -44,9 +44,9 @@ function seedSettings() {
     { key: 'notifications.telegram.enabled', value: false },
     // Blueprint system GitHub — for self-healing and connector discovery issues/PRs.
     // SEPARATE from business GitHub connectors (which are per-business in connectors table).
-    { key: 'blueprint_github_owner', value: process.env.BLUEPRINT_GITHUB_OWNER || 'chrisgwynne' },
-    { key: 'blueprint_github_repo',  value: process.env.BLUEPRINT_GITHUB_REPO  || 'Blueprint'   },
-    { key: 'blueprint_github_token', value: process.env.BLUEPRINT_GITHUB_TOKEN || ''             },
+    // Owner/repo are hardcoded in server/lib/blueprint-github.js and are not configurable.
+    { key: 'blueprint_github_token',   value: process.env.BLUEPRINT_GITHUB_TOKEN || '' },
+    { key: 'blueprint_github_enabled', value: true },
   ];
 
   const upsert = db.prepare(`
