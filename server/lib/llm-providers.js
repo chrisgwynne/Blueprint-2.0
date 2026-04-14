@@ -247,9 +247,10 @@ const DEFAULT_MODEL_BY_PROVIDER = {
  * Falls back to ANY configured provider if the requested one has no credentials.
  */
 export function resolveProfileLLM(profileLLM) {
-  let providerId = profileLLM?.provider ?? 'anthropic';
-  // Honour the user-saved 'preferred model' for this provider in Settings,
-  // then the profile's pinned model, then the per-provider sensible default.
+  // Use the explicitly requested provider, OR the user's configured default.
+  // Never silently swap one named provider for another.
+  let providerId = profileLLM?.provider ?? pickConfiguredProvider() ?? 'anthropic';
+
   const savedModel = getProviderCredentials(providerId)?.model;
   let model = profileLLM?.model
     ?? savedModel
@@ -266,25 +267,14 @@ export function resolveProfileLLM(profileLLM) {
     }
   }
 
-  // If the requested provider is not configured:
-  //   - explicit provider requested → fail with a clear message (no silent fallback)
-  //   - no provider specified (used the 'anthropic' default) → pick any configured one
-  if (!isProviderConfigured(providerId)) {
-    if (profileLLM?.provider != null) {
-      // Caller explicitly requested this provider but it isn't set up.
-      throw new Error(
-        `LLM provider '${providerId}' is not configured. ` +
-        (providerId === 'anthropic'
-          ? 'Add an API key in Settings → LLM Providers, or set the ANTHROPIC_API_KEY environment variable.'
-          : `Add credentials in Settings → LLM Providers.`)
-      );
-    }
-    // No explicit provider — pick whatever the user has configured.
-    const any = pickConfiguredProvider();
-    if (any && any !== providerId) {
-      providerId = any;
-      model = DEFAULT_MODEL_BY_PROVIDER[any] ?? model;
-    }
+  // If an explicit provider was named but isn't configured, fail clearly.
+  if (profileLLM?.provider != null && !isProviderConfigured(providerId)) {
+    throw new Error(
+      `LLM provider '${providerId}' is not configured. ` +
+      (providerId === 'anthropic'
+        ? 'Add an API key in Settings → LLM Providers, or set the ANTHROPIC_API_KEY environment variable.'
+        : `Add credentials in Settings → LLM Providers.`)
+    );
   }
 
   return { providerId, model, temperature, max_tokens };
