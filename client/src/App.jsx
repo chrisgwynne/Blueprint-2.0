@@ -15,6 +15,7 @@ const KB             = lazy(() => import('./pages/KB.jsx'))
 const SystemHealth   = lazy(() => import('./pages/SystemHealth.jsx'))
 const Chat           = lazy(() => import('./pages/Chat.jsx'))
 const Outcomes       = lazy(() => import('./pages/Outcomes.jsx'))
+const ROI            = lazy(() => import('./pages/ROI.jsx'))
 const Workflows      = lazy(() => import('./pages/Workflows.jsx'))
 const Goals          = lazy(() => import('./pages/Goals.jsx'))
 const Scenarios      = lazy(() => import('./pages/Scenarios.jsx'))
@@ -155,6 +156,7 @@ function App() {
           <Route path="chat" element={<Chat />} />
           <Route path="chat/:conversationId" element={<Chat />} />
           <Route path="outcomes" element={<Outcomes />} />
+          <Route path="roi" element={<ROI />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="goals" element={<Goals />} />
           <Route path="scenarios" element={<Scenarios />} />

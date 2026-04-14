@@ -403,6 +403,13 @@ export const getTimelineIntelligence = (businessId, params) =>
 export const getProducedByEvent = (businessId, sourceType, sourceId, params) =>
   get(`/timeline/${businessId}/produced/${sourceType}/${encodeURIComponent(sourceId)}`, params)
 
+// ─── ROI (Tranche 7) ─────────────────────────────────────────────────────
+export const getROIReport = (businessId) => get(`/roi/${businessId}`)
+export const getROIAgents = (businessId, params) => get(`/roi/${businessId}/agents`, params)
+export const getROIBaselines = (businessId) => get(`/roi/${businessId}/baselines`)
+export const getROITrajectory = (businessId, params) => get(`/roi/${businessId}/trajectory`, params)
+export const getROIAssessment = (businessId) => get(`/roi/${businessId}/assessment`)
+
 // ─── LLM tiers (default / triage / fallback) ───────────────────────────────
 export const getLLMTiers = () => get('/llm/tiers')
 export const setLLMTier = (tier, body) => request('PUT', `/llm/tiers/${tier}`, body)
