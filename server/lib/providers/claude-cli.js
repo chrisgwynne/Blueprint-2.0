@@ -44,6 +44,8 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
     try { rmdirSync(tmpDir); } catch {}
   };
 
+  const TIMEOUT_MS = 180_000; // 3 minutes — LLM calls on large prompts can be slow
+
   return new Promise((resolve, reject) => {
     const args = [
       '--print',
@@ -69,7 +71,9 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
     const proc = spawn('claude', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      timeout: 120_000,
+      // Note: do NOT pass timeout here — spawn() ignores it in Node, and Bun
+      // applies it as a hard SIGTERM which produces an unhelpful "code null" error.
+      // We implement our own timeout below using setTimeout.
       env: childEnv,
       // Run from tmpDir so Claude Code doesn't pick up any CLAUDE.md context
       // from the project root, which would bleed into the LLM responses.
@@ -82,11 +86,28 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
 
     let stdout = '';
     let stderr = '';
+    let settled = false;
+
+    // Implement real timeout — kills the process and gives a useful error.
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill('SIGTERM');
+      cleanup();
+      reject(new Error(
+        `Claude CLI timed out after ${TIMEOUT_MS / 1000}s. ` +
+        'The prompt may be too large, or the CLI is unresponsive. ' +
+        'Run `claude --version` to verify the CLI is working.'
+      ));
+    }, TIMEOUT_MS);
 
     proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
 
     proc.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
       cleanup();
       if (err.code === 'ENOENT') {
         reject(new Error('Claude CLI not found. Install Claude Code and ensure `claude` is in your PATH.'));
@@ -95,11 +116,21 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
       }
     });
 
-    proc.on('close', (code) => {
+    proc.on('close', (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
       cleanup();
       if (code !== 0) {
-        const detail = stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300);
-        reject(new Error(`Claude CLI exited with code ${code}. ${detail}`));
+        if (signal) {
+          reject(new Error(
+            `Claude CLI was terminated by signal ${signal}. ` +
+            'This usually means the process was killed externally or hit a system limit.'
+          ));
+        } else {
+          const detail = stderr.trim().slice(0, 300) || stdout.trim().slice(0, 300);
+          reject(new Error(`Claude CLI exited with code ${code}.${detail ? ' ' + detail : ''}`));
+        }
         return;
       }
 
