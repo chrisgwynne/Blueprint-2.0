@@ -81,7 +81,20 @@ export function onConnectorSyncSuccess(connectorType, businessId) {
   try { promoted = promotePendingAgents(businessId); }
   catch (err) { console.warn('[post-sync] promote failed:', err.message); }
 
-  // 2. Dispatch the sync event — the event-triggers module handles the
+  // 2. Capture ROI baselines for any metric this connector type produces.
+  // Idempotent via unique index on (business_id, metric_name) — only the
+  // first sync with data actually writes anything, subsequent syncs silently
+  // skip. Fire-and-forget.
+  import('../roi/baselines.js')
+    .then(({ captureBaselinesForConnector }) => {
+      const r = captureBaselinesForConnector(businessId, connectorType);
+      if (r.recorded > 0) {
+        console.log(`[post-sync] ${connectorType}: recorded ${r.recorded} baseline(s) for ${businessId}`);
+      }
+    })
+    .catch((err) => console.warn('[post-sync] baseline capture failed:', err.message));
+
+  // 3. Dispatch the sync event — the event-triggers module handles the
   // canonical wake logic (per-connector agent map + conductor + cooldown +
   // work-check). This replaces the old queueAgentsForConnector + its per-
   // agent MIN_HOURS_BETWEEN_RUNS throttle, which is now redundant: the

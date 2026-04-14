@@ -566,6 +566,92 @@ const STARTUP_MIGRATIONS = [
   `ALTER TABLE agent_runs ADD COLUMN work_reasons TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger_type ON agent_runs(trigger_type, started_at DESC)`,
 
+  // ─── ROI measurement system ──────────────────────────────────────────────
+  //
+  // Blueprint tracks its own value honestly — including the parts that
+  // didn't work. Four tables support this:
+  //
+  //   baselines: immutable "before" snapshot. Populated on first connector
+  //     sync per (business_id, metric_name). Ever-after comparisons happen
+  //     against this value. If a baseline looks wrong, add a note — never
+  //     overwrite the original.
+  //
+  //   roi_snapshots: a full ROI calculation captured weekly. Lets us show
+  //     how Blueprint's estimated contribution has evolved over time and
+  //     how our confidence in the estimate has grown.
+  //
+  //   counterfactual_estimates: at task proposal time, record the estimated
+  //     cost of NOT doing the task. Later, compare to actual outcome —
+  //     proof that the counterfactual model is (or isn't) calibrated.
+  //
+  //   attribution_records: links a measured task outcome to a share of the
+  //     overall metric improvement. The core table behind "£X of this
+  //     month's gain is attributable to Blueprint".
+
+  `CREATE TABLE IF NOT EXISTS baselines (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    baseline_value REAL NOT NULL,
+    baseline_date DATETIME NOT NULL,
+    source_connector TEXT,
+    context TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_baselines_unique ON baselines(business_id, metric_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_baselines_business ON baselines(business_id, baseline_date DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS roi_snapshots (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    snapshot_date DATETIME NOT NULL,
+    period_start DATETIME,
+    period_end DATETIME,
+    total_cost_usd REAL,
+    attributed_value_usd REAL,
+    unattributed_value_usd REAL,
+    attributed_decline_usd REAL,
+    confidence_level TEXT,
+    metrics_count INTEGER,
+    outcomes_count INTEGER,
+    narrative TEXT,
+    full_report TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_roi_snapshots_business_date ON roi_snapshots(business_id, snapshot_date DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS counterfactual_estimates (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    target_metric TEXT,
+    baseline_value REAL,
+    estimated_monthly_cost_of_inaction_usd REAL,
+    confidence TEXT,
+    assumptions TEXT,
+    reasoning TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_counterfactual_task ON counterfactual_estimates(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_counterfactual_business ON counterfactual_estimates(business_id, created_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS attribution_records (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    task_id TEXT,
+    metric_name TEXT NOT NULL,
+    change_pct REAL,
+    change_absolute REAL,
+    estimated_value_usd REAL,
+    confidence TEXT,
+    evidence TEXT,
+    measurement_window_days INTEGER,
+    verified_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_attribution_business ON attribution_records(business_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_attribution_task ON attribution_records(task_id)`,
+
   // ─── Prompt-injection defence ────────────────────────────────────────────
   // Every outbound HTTP call from an agent-driven code path is logged here.
   // See server/lib/safe-fetch.js + server/lib/outbound-allowlist.js.
