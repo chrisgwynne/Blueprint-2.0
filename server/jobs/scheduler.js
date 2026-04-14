@@ -286,8 +286,10 @@ export function startScheduler() {
     }
   });
 
-  // Every hour: run conductor for all businesses
-  cron.schedule('0 * * * *', async () => {
+  // Every hour at :05: run conductor for all businesses.
+  // Offset by 5 minutes so it doesn't overlap with the daily full sync at 06:00,
+  // and connector poll syncs that fire on the :00 boundary have a chance to complete.
+  cron.schedule('5 * * * *', async () => {
     console.log('[scheduler] Running hourly conductor pass...');
     try {
       await runConductorAllBusinesses();
@@ -296,7 +298,9 @@ export function startScheduler() {
     }
   });
 
-  // Every day at 06:00: full connector sync for all active connectors
+  // Every day at 06:00: full connector sync for all active connectors.
+  // After all syncs complete, run a conductor pass so any signals created by
+  // fresh data are acted on immediately rather than waiting until 07:05.
   cron.schedule('0 6 * * *', async () => {
     console.log('[scheduler] Running daily full connector sync...');
     try {
@@ -306,6 +310,8 @@ export function startScheduler() {
           console.error(`[scheduler] Daily sync error for ${connector.name}:`, err.message);
         });
       }
+      console.log('[scheduler] Daily sync complete. Running post-sync conductor pass...');
+      await runConductorAllBusinesses();
     } catch (err) {
       console.error('[scheduler] Daily sync failed:', err);
     }
