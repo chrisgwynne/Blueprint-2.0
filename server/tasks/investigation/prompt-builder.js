@@ -6,6 +6,8 @@
  * regardless of which connectors are involved.
  */
 
+import { sanitiseExternalContent, wrapInContentBoundary } from '../../lib/content-sanitiser.js';
+
 /**
  * Build a complete investigation prompt from task + assembled context.
  *
@@ -22,7 +24,11 @@ export function buildInvestigationPrompt(task, context) {
 
   const actionTypesBlock = buildActionTypesBlock(context.all_connected_connectors ?? []);
 
-  const kbContext = _truncate(context.kb_context, MAX_KB_CONTEXT_CHARS) || 'No relevant knowledge base entries found.';
+  // KB context is internally generated but compounds with external research
+  // over time, so it still gets sanitised + wrapped as a defensive measure.
+  const rawKbContext = _truncate(context.kb_context, MAX_KB_CONTEXT_CHARS) || 'No relevant knowledge base entries found.';
+  const kbSanitised = sanitiseExternalContent(rawKbContext, 'kb_context');
+  const kbContext = wrapInContentBoundary(kbSanitised.content, 'kb_context');
   const seasonalContext = _truncate(context.seasonal_context, MAX_SEASONAL_CHARS) || 'No seasonal patterns detected yet.';
 
   return `Investigate this specific business problem and produce actionable findings.
@@ -200,7 +206,11 @@ function buildSignalBlock(signal) {
   let dataStr = '';
   if (signalData) {
     const raw = JSON.stringify(signalData);
-    dataStr = `Data: ${raw.length > MAX_SIGNAL_DATA_CHARS ? raw.slice(0, MAX_SIGNAL_DATA_CHARS) + '…' : raw}`;
+    const trimmed = raw.length > MAX_SIGNAL_DATA_CHARS ? raw.slice(0, MAX_SIGNAL_DATA_CHARS) + '…' : raw;
+    // Signal data often embeds connector-derived strings (URLs, product
+    // descriptions, GBP reviews). Sanitise before putting them in a prompt.
+    const { content } = sanitiseExternalContent(trimmed, 'signal_data');
+    dataStr = `Data: ${content}`;
   }
   return [
     `Title: ${signal.title}`,

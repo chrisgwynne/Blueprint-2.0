@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -16,6 +16,7 @@ const TABS = [
   { id: 'approvals', label: 'Approval Policies' },
   { id: 'integrations', label: 'External Agents' },
   { id: 'data',      label: 'Data' },
+  { id: 'security',  label: 'Security' },
   { id: 'system',    label: 'System' },
   { id: 'about',     label: 'About' },
 ]
@@ -1921,6 +1922,275 @@ function ApprovalsTab() {
   )
 }
 
+// ============================================
+// Tab: Security (prompt injection defence)
+// ============================================
+function SecurityTab() {
+  const [status, setStatus] = useState(null)
+  const [allowlist, setAllowlist] = useState(null)
+  const [events, setEvents] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [newHost, setNewHost] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function load() {
+    setLoading(true)
+    setError(null)
+    try {
+      const [s, a, e] = await Promise.all([
+        getSecurityStatus(),
+        getSecurityAllowlist(),
+        getSecurityEvents({ limit: 25 }).catch(() => ({ events: [] })),
+      ])
+      setStatus(s)
+      setAllowlist(a)
+      setEvents(e.events || [])
+    } catch (err) {
+      setError(err.message || 'Failed to load security status')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [])
+
+  async function handleAddHost() {
+    const host = newHost.trim().toLowerCase()
+    if (!host) return
+    setBusy(true)
+    try {
+      await addSecurityAllowlist(host)
+      setNewHost('')
+      await load()
+    } catch (err) {
+      setError(err.message)
+    } finally { setBusy(false) }
+  }
+
+  async function handleRemoveHost(host) {
+    if (!window.confirm(`Remove ${host} from the allowlist? Outbound calls to this host will be blocked.`)) return
+    setBusy(true)
+    try {
+      await removeSecurityAllowlist(host)
+      await load()
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  async function handleEnforcementToggle(enabled) {
+    if (!enabled && !window.confirm('Disabling outbound enforcement removes a critical safety layer. Continue?')) return
+    setBusy(true)
+    try {
+      await setSecurityEnforcement(enabled)
+      await load()
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  async function handleLayerToggle(key, enabled) {
+    if (!enabled && !window.confirm('Disabling a security layer is not recommended. Continue?')) return
+    setBusy(true)
+    try {
+      await toggleSecurityLayer(key, enabled)
+      await load()
+    } catch (err) { setError(err.message) } finally { setBusy(false) }
+  }
+
+  if (loading) return <div className="text-xs text-blueprint-muted">Loading security status…</div>
+  if (error) return <div className="text-xs text-red-400">{error}</div>
+  if (!status) return null
+
+  const layer = (key, label) => {
+    const cfg = status.layers?.[key]
+    const active = !!cfg?.active
+    return (
+      <div className="flex items-center justify-between py-2 border-b border-blueprint-border last:border-0">
+        <div className="flex items-center gap-2">
+          <span className={clsx('inline-block w-2 h-2 rounded-full', active ? 'bg-green-500' : 'bg-red-500')} />
+          <span className="text-xs text-slate-200">{label}</span>
+        </div>
+        <span className="text-xs text-blueprint-muted">{active ? 'Active' : 'Disabled'}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <Section
+        title="Prompt injection defence"
+        description="Layered protection against malicious content injected via search results, connector data, or user-generated text."
+      >
+        <div className="space-y-0">
+          {layer('outbound_allowlist', `Outbound allowlist (${status.layers?.outbound_allowlist?.allowed_count ?? 0} hosts)`)}
+          {layer('content_sanitisation', 'Content sanitisation')}
+          {layer('kb_access_scoping', 'KB sensitive-data scanning')}
+          {layer('output_monitoring', 'Anomalous output monitoring')}
+        </div>
+
+        <div className="grid grid-cols-3 gap-3 mt-4">
+          <Stat label="Outbound blocked (30d)" value={status.stats?.outbound_blocked_30d ?? 0} />
+          <Stat label="Injections detected (30d)" value={status.stats?.injections_detected_30d ?? 0} />
+          <Stat label="Outputs blocked (30d)" value={status.stats?.anomalous_outputs_blocked_30d ?? 0} />
+        </div>
+      </Section>
+
+      <Section
+        title="Outbound allowlist"
+        description="Agents can only make outbound HTTP calls to these hostnames. Prevents exfiltration even if an LLM is tricked into attempting one."
+      >
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-xs text-slate-300">
+            Enforcement: <strong className={allowlist?.enforcement ? 'text-green-400' : 'text-red-400'}>
+              {allowlist?.enforcement ? 'ON' : 'OFF'}
+            </strong>
+          </div>
+          <button
+            onClick={() => handleEnforcementToggle(!allowlist?.enforcement)}
+            disabled={busy}
+            className="bp-btn text-xs"
+          >
+            {allowlist?.enforcement ? 'Disable enforcement' : 'Enable enforcement'}
+          </button>
+        </div>
+
+        <div className="flex gap-2 mb-3">
+          <input
+            type="text"
+            value={newHost}
+            onChange={(e) => setNewHost(e.target.value)}
+            placeholder="api.example.com"
+            className="bp-input flex-1 text-xs"
+          />
+          <button onClick={handleAddHost} disabled={busy || !newHost} className="bp-btn bp-btn-primary text-xs">
+            <Plus size={12} /> Add
+          </button>
+        </div>
+        <p className="text-xs text-blueprint-muted mb-3">
+          Only add domains for APIs you explicitly trust.
+        </p>
+
+        <div className="max-h-64 overflow-y-auto border border-blueprint-border rounded">
+          {(allowlist?.allowed ?? []).map(({ host, source }) => (
+            <div key={host} className="flex items-center justify-between px-3 py-1.5 border-b border-blueprint-border last:border-0">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono text-slate-200">{host}</span>
+                <span className={clsx('text-[10px] px-1.5 py-0.5 rounded',
+                  source === 'default' ? 'bg-blueprint-border text-blueprint-muted' : 'bg-green-900/30 text-green-400')}>
+                  {source}
+                </span>
+              </div>
+              {source === 'custom' && (
+                <button
+                  onClick={() => handleRemoveHost(host)}
+                  disabled={busy}
+                  className="text-xs text-red-400 hover:text-red-300"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <Section
+        title="Security layers"
+        description="Individual layers can be toggled if you need to investigate a false positive. All should be on in production."
+      >
+        <div className="space-y-2">
+          <LayerToggle
+            label="Content sanitisation"
+            description="Strips injection patterns from search results and connector data before they reach the LLM."
+            enabled={status.layers?.content_sanitisation?.active}
+            onChange={(e) => handleLayerToggle('security_sanitisation_enabled', e)}
+            disabled={busy}
+          />
+          <LayerToggle
+            label="KB sensitive-data scanning"
+            description="Blocks API keys, passwords, and tokens from being written to the knowledge base."
+            enabled={status.layers?.kb_access_scoping?.active}
+            onChange={(e) => handleLayerToggle('security_kb_scan_enabled', e)}
+            disabled={busy}
+          />
+          <LayerToggle
+            label="Anomalous output monitoring"
+            description="Blocks agent runs whose output contains unexpected URLs, credentials, or exfiltration verbiage."
+            enabled={status.layers?.output_monitoring?.active}
+            onChange={(e) => handleLayerToggle('security_output_monitor_enabled', e)}
+            disabled={busy}
+          />
+        </div>
+      </Section>
+
+      <Section
+        title="Recent security events"
+        description="Last 25 security signals. Dismiss from the Signals page."
+      >
+        {events.length === 0 ? (
+          <div className="text-xs text-blueprint-muted">None ✅ No security events detected.</div>
+        ) : (
+          <div className="max-h-80 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-blueprint-muted">
+                <tr>
+                  <th className="text-left py-1 px-1">When</th>
+                  <th className="text-left py-1 px-1">Rule</th>
+                  <th className="text-left py-1 px-1">Title</th>
+                  <th className="text-left py-1 px-1">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map(ev => (
+                  <tr key={ev.id} className="border-t border-blueprint-border">
+                    <td className="py-1 px-1 text-blueprint-muted whitespace-nowrap">
+                      {formatDistanceToNow(parseTimestamp(ev.created_at), { addSuffix: true })}
+                    </td>
+                    <td className="py-1 px-1 font-mono text-slate-300">{(ev.rule_id || '').replace('security:', '')}</td>
+                    <td className="py-1 px-1 text-slate-200">{ev.title}</td>
+                    <td className="py-1 px-1">
+                      <span className={clsx('px-1.5 py-0.5 rounded text-[10px]',
+                        ev.status === 'open' ? 'bg-red-900/30 text-red-400' : 'bg-blueprint-border text-blueprint-muted')}>
+                        {ev.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
+    </div>
+  )
+}
+
+function Stat({ label, value }) {
+  return (
+    <div className="bp-card p-3">
+      <div className="text-[10px] text-blueprint-muted uppercase tracking-wide">{label}</div>
+      <div className="text-lg font-semibold text-slate-100 mt-0.5">{value}</div>
+    </div>
+  )
+}
+
+function LayerToggle({ label, description, enabled, onChange, disabled }) {
+  return (
+    <div className="flex items-start justify-between gap-3 py-2">
+      <div>
+        <div className="text-xs font-medium text-slate-200">{label}</div>
+        <div className="text-xs text-blueprint-muted">{description}</div>
+      </div>
+      <button
+        onClick={() => onChange(!enabled)}
+        disabled={disabled}
+        className={clsx('bp-btn text-xs whitespace-nowrap',
+          enabled ? 'bp-btn-primary' : '')}
+      >
+        {enabled ? 'On' : 'Off'}
+      </button>
+    </div>
+  )
+}
+
 function Settings() {
   const [activeTab, setActiveTab] = useState('business')
 
@@ -1934,6 +2204,7 @@ function Settings() {
     approvals:     <ApprovalsTab />,
     integrations:  <IntegrationsTab />,
     data:          <DataTab />,
+    security:      <SecurityTab />,
     system:        <SystemTab />,
     about:         <AboutTab />,
   }

@@ -482,6 +482,31 @@ const STARTUP_MIGRATIONS = [
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_owner', '"chrisgwynne"', CURRENT_TIMESTAMP)`,
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_repo',  '"Blueprint"',   CURRENT_TIMESTAMP)`,
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token', '""',            CURRENT_TIMESTAMP)`,
+
+  // ─── Prompt-injection defence ────────────────────────────────────────────
+  // Every outbound HTTP call from an agent-driven code path is logged here.
+  // See server/lib/safe-fetch.js + server/lib/outbound-allowlist.js.
+  `CREATE TABLE IF NOT EXISTS outbound_log (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    hostname TEXT,
+    method TEXT DEFAULT 'GET',
+    context TEXT,
+    allowed INTEGER NOT NULL,
+    block_reason TEXT,
+    status_code INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_outbound_log_created ON outbound_log(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_outbound_log_allowed ON outbound_log(allowed, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_outbound_log_host ON outbound_log(hostname, created_at)`,
+
+  // Enforcement toggle (default on). See server/lib/outbound-allowlist.js.
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_outbound_enforcement', 'true', CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_outbound_allowlist',   '[]',   CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_sanitisation_enabled', 'true', CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_kb_scan_enabled',      'true', CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_output_monitor_enabled', 'true', CURRENT_TIMESTAMP)`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

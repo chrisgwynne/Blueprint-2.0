@@ -8,6 +8,8 @@
  * Free tier: 1,000 searches/month
  */
 
+import { safeFetch } from '../../lib/safe-fetch.js';
+
 const BASE = 'https://api.tavily.com';
 
 const connector = {
@@ -39,7 +41,7 @@ const connector = {
   async healthCheck(credentials) {
     if (!credentials?.apiKey) return { ok: false, error: 'API key missing.' };
     try {
-      const res = await fetch(`${BASE}/search`, {
+      const res = await safeFetch(`${BASE}/search`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -49,7 +51,7 @@ const connector = {
           search_depth: 'basic',
           include_answer: false,
         }),
-      });
+      }, 'connector:tavily:healthCheck');
       if (!res.ok) {
         const body = await res.text();
         return { ok: false, error: `Tavily returned ${res.status}: ${body.slice(0, 200)}` };
@@ -78,7 +80,7 @@ const connector = {
       exclude_domains = [],
     } = options;
 
-    const res = await fetch(`${BASE}/search`, {
+    const res = await safeFetch(`${BASE}/search`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -92,7 +94,7 @@ const connector = {
         include_domains,
         exclude_domains,
       }),
-    });
+    }, 'connector:tavily:search');
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
@@ -117,14 +119,14 @@ const connector = {
    * Only available in Tavily — Brave does not support URL extraction.
    */
   async extract(url, credentials) {
-    const res = await fetch(`${BASE}/extract`, {
+    const res = await safeFetch(`${BASE}/extract`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         api_key: credentials.apiKey,
         urls: [url],
       }),
-    });
+    }, 'connector:tavily:extract');
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Tavily extract failed (${res.status}): ${body.slice(0, 200)}`);

@@ -12,6 +12,9 @@ import { shouldAutoApprove, sendApprovalRequest } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
+import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
+import { detectAnomalousOutput } from '../lib/security-monitor.js';
+import { SecurityError } from '../lib/outbound-allowlist.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -874,10 +877,16 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
             return `### Search: "${query}"\n${r.answer ? `Summary: ${r.answer}\n\n` : ''}${snippets}`;
           }).join('\n\n---\n\n');
 
+          // Wrap the search block in an explicit external_content boundary so
+          // the LLM treats it as untrusted data, not instructions. The search
+          // tool already sanitised injection patterns; the boundary is
+          // defence-in-depth.
+          const wrappedSearchBlock = wrapInContentBoundary(searchBlock, `search:${agentId}`);
+
           const secondPassContent = await runLLM(providerId, model, {
             messages: [{
               role: 'user',
-              content: userContext + `\n\n## Web Search Results\n\n${searchBlock}\n\nNow produce your final analysis incorporating these search results.`,
+              content: userContext + `\n\n## Web Search Results\n\n${wrappedSearchBlock}\n\nNow produce your final analysis incorporating these search results.`,
             }],
             system: systemPrompt,
             temperature,
@@ -952,6 +961,83 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         `(no signals, no connector reference in reasoning). Dropping tasks to prevent speculative KB pollution.`
       );
       tasksToCreate = [];
+    }
+
+    // 10c. Anomalous output detection — layer 4 of prompt injection defence.
+    // Scan the parsed output for high-severity anomalies (unexpected URLs,
+    // credentials, exfiltration verbiage, base64 blobs). High-severity hits
+    // block the run entirely; the output is discarded, a critical signal is
+    // raised, and we notify the operator immediately.
+    try {
+      const anomalies = detectAnomalousOutput(parsed, agentId);
+      const highSeverity = anomalies.filter(a => a.severity === 'high');
+      if (anomalies.length > 0) {
+        console.warn(
+          `[security:agent] '${agentId}' output: ${anomalies.length} anomaly(s), ` +
+          `${highSeverity.length} high-severity`
+        );
+      }
+      if (highSeverity.length > 0) {
+        // Record a critical security signal so the operator sees it.
+        try {
+          db.prepare(`
+            INSERT INTO signals (
+              id, business_id, connector_id, rule_id, type, severity,
+              title, description, data, status, confidence, created_at, agent_id
+            ) VALUES (?, ?, NULL, 'security:anomalous_output', 'security_risk', 'critical',
+                      ?, ?, ?, 'open', 1.0, CURRENT_TIMESTAMP, ?)
+          `).run(
+            generateId(),
+            businessId,
+            `Security: anomalous output blocked from ${agentId}`,
+            `Agent output contained suspicious patterns (${highSeverity.map(a => a.type).join(', ')}). ` +
+            `Output was blocked; no tasks or KB writes occurred. This may indicate a prompt injection attack via ` +
+            `external content (search results, connector data). Review recent ingestion sources.`,
+            JSON.stringify({ anomalies, run_id: runId }),
+            agentId
+          );
+        } catch (sigErr) {
+          console.warn('[security:agent] Failed to record anomaly signal:', sigErr.message);
+        }
+
+        // Immediate Telegram + dashboard notification.
+        try {
+          const { dispatch } = await import('../notifications/dispatcher.js');
+          const body = `Agent '${agentId}' produced output with suspicious patterns:\n` +
+            highSeverity.map(a => `• ${a.type}${a.value ? `: ${a.value}` : ''}`).join('\n') +
+            `\n\nOutput was blocked. Check Signals page.`;
+          dispatch({
+            business_id: businessId,
+            channel: 'dashboard',
+            severity: 'critical',
+            title: `Security alert: ${agentId} output blocked`,
+            body,
+            entity_type: 'security',
+            entity_id: runId,
+          }).catch(() => {});
+          if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+            dispatch({
+              business_id: businessId,
+              channel: 'telegram',
+              severity: 'critical',
+              title: `🚨 Blueprint security alert: agent output blocked`,
+              body,
+              entity_type: 'security',
+              entity_id: runId,
+            }).catch(() => {});
+          }
+        } catch {}
+
+        // Block the run — throw so it's recorded as failed.
+        throw new SecurityError(
+          `Agent output blocked due to high-severity security anomalies: ` +
+          highSeverity.map(a => a.type).join(', '),
+          { anomalies, agentId, runId }
+        );
+      }
+    } catch (secErr) {
+      if (secErr instanceof SecurityError) throw secErr;
+      console.warn('[security:agent] Anomaly detection errored (fail-open):', secErr.message);
     }
 
     // 11. Insert tasks (with brain restraint check)

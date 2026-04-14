@@ -399,3 +399,13 @@ export const saveGoogleOAuthConfig = (body) => request('PUT', '/oauth/google/con
 export const getBlueprintGitHubStatus   = ()     => get('/settings/blueprint-github/status')
 export const saveBlueprintGitHubSettings = (data) => post('/settings/blueprint-github', data)
 export const testBlueprintGitHubConnection = ()  => post('/settings/blueprint-github/test', {})
+
+// ─── Security (prompt injection defence) ───────────────────────────────────
+export const getSecurityStatus = () => get('/security/status')
+export const getSecurityAllowlist = () => get('/security/allowlist')
+export const addSecurityAllowlist = (hostname) => post('/security/allowlist', { hostname })
+export const removeSecurityAllowlist = (hostname) => del(`/security/allowlist/${encodeURIComponent(hostname)}`)
+export const setSecurityEnforcement = (enabled) => post('/security/enforcement', { enabled })
+export const toggleSecurityLayer = (key, enabled) => post('/security/toggle', { key, enabled })
+export const getSecurityEvents = (params) => get('/security/events', params)
+export const getSecurityOutboundLog = (params) => get('/security/outbound-log', params)

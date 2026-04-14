@@ -21,6 +21,7 @@ import {
   writeFileSync, unlinkSync, renameSync,
 } from 'fs';
 import matter from 'gray-matter';
+import { scanForSensitiveData } from '../lib/content-sanitiser.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -365,6 +366,12 @@ export class KBEngine {
 
   /**
    * Write a file with optional frontmatter, auto-commit to git.
+   *
+   * Security: scans content for sensitive data (API keys, passwords, tokens,
+   * private keys, JWTs). If any are detected, the file is still written (so
+   * operator can inspect the evidence) but flagged with review_status =
+   * 'security_review' and prefixed with a warning banner. A critical signal
+   * is also fired from the caller if a db handle is supplied via frontmatter.
    */
   async writeFile(relativePath, content, frontmatter = null, commitMessage = null) {
     // Block writes to forbidden locations
@@ -375,11 +382,41 @@ export class KBEngine {
     const full = join(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
 
+    // ─── Sensitive-data scan ──────────────────────────────────────────────
+    let effectiveContent = content;
+    let effectiveFrontmatter = frontmatter;
+    let flagged = false;
+    try {
+      flagged = scanForSensitiveData(String(content ?? ''), relativePath);
+    } catch (err) {
+      // Fail closed — treat scanner errors as flagged so content gets reviewed.
+      console.warn(`[kb:security] scanForSensitiveData errored on ${relativePath}:`, err.message);
+      flagged = true;
+    }
+    if (flagged) {
+      const banner = `> [!warning] SECURITY REVIEW NEEDED\n` +
+                     `> This file may contain sensitive data (API keys, tokens, passwords).\n` +
+                     `> Flagged by Blueprint's KB sensitive-data scanner on ${todayISO()}.\n` +
+                     `> Review and redact before use.\n\n`;
+      effectiveContent = banner + String(content ?? '');
+      effectiveFrontmatter = {
+        ...(frontmatter ?? {}),
+        review_status: 'security_review',
+        review_reason: 'sensitive_data_detected',
+      };
+      try {
+        console.error(
+          `[kb:security] Sensitive data detected in KB write: ${relativePath}. ` +
+          `Written with security_review flag.`
+        );
+      } catch {}
+    }
+
     // Build content with frontmatter if provided
-    let fileContent = content;
-    if (frontmatter) {
-      fileContent = matter.stringify(content, {
-        ...frontmatter,
+    let fileContent = effectiveContent;
+    if (effectiveFrontmatter) {
+      fileContent = matter.stringify(effectiveContent, {
+        ...effectiveFrontmatter,
         updated: todayISO(),
       });
     }
@@ -389,7 +426,12 @@ export class KBEngine {
     const message = commitMessage ?? `update: ${relativePath}`;
     await this._commit(message, [relativePath]);
 
-    return { path: relativePath, size: fileContent.length, committed: true };
+    return {
+      path: relativePath,
+      size: fileContent.length,
+      committed: true,
+      security_review: flagged || undefined,
+    };
   }
 
   /**

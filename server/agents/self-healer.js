@@ -24,6 +24,7 @@ import crypto from 'node:crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import { createBlueprintIssue, createBlueprintPR, isBlueprintGitHubConfigured } from '../lib/blueprint-github.js';
+import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
@@ -187,9 +188,12 @@ ${f.content}
 
 ${searchResults?.results?.length ? `
 ## SEARCH RESULTS
-${searchResults.results.slice(0, 2).map(r =>
-  `**${r.title}**\n${(r.content || r.description || '').slice(0, 300)}`
-).join('\n\n')}
+${wrapInContentBoundary(
+  searchResults.results.slice(0, 2).map(r =>
+    `**${r.title}**\n${(r.content || r.description || '').slice(0, 300)}`
+  ).join('\n\n'),
+  'self-healer:search'
+)}
 ` : ''}
 
 Produce diagnosis as JSON:
