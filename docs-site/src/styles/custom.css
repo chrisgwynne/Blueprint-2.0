@@ -1,8 +1,0 @@
-:root {
-  --sl-color-accent: #3b82f6;
-  --sl-color-accent-high: #60a5fa;
-}
-.sl-markdown-content code {
-  font-family: 'DM Mono', monospace;
-  font-size: 0.875em;
-}

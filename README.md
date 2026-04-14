@@ -8,7 +8,8 @@
     <a href="#connectors">Connectors</a> ·
     <a href="#agents">Agents</a> ·
     <a href="#knowledge-base">Knowledge Base</a> ·
-    <a href="#external-agents-bap">BAP Protocol</a>
+    <a href="#external-agents-bap">BAP Protocol</a> ·
+    <a href="http://localhost:4000/docs">Documentation</a>
   </p>
 
   <p>

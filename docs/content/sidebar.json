@@ -1,0 +1,85 @@
+{
+  "sections": [
+    { "id": "getting-started", "title": "Getting Started", "pages": [
+      {"id":"installation","title":"Quick Start"},
+      {"id":"docker","title":"Docker Setup"},
+      {"id":"configuration","title":"Configuration"},
+      {"id":"first-connector","title":"Your First Connector"},
+      {"id":"first-agent","title":"Your First Agent"}
+    ]},
+    { "id": "connectors", "title": "Connectors", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"google-analytics","title":"Google Analytics 4"},
+      {"id":"google-search-console","title":"Google Search Console"},
+      {"id":"pagespeed","title":"PageSpeed Insights"},
+      {"id":"google-ads","title":"Google Ads"},
+      {"id":"shopify","title":"Shopify"},
+      {"id":"stripe","title":"Stripe"},
+      {"id":"brevo","title":"Brevo"},
+      {"id":"klaviyo","title":"Klaviyo"},
+      {"id":"semrush","title":"SEMrush"},
+      {"id":"meta-ads","title":"Meta Ads"},
+      {"id":"buffer","title":"Buffer"},
+      {"id":"todoist","title":"Todoist"},
+      {"id":"uptimerobot","title":"UptimeRobot"},
+      {"id":"wordpress","title":"WordPress"},
+      {"id":"github","title":"GitHub"},
+      {"id":"wix","title":"Wix"},
+      {"id":"stannp","title":"Stannp"},
+      {"id":"server-access","title":"Server Access (SSH/FTP)"},
+      {"id":"building-a-connector","title":"Building a Connector"}
+    ]},
+    { "id": "agents", "title": "Agents", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"conductor","title":"Conductor"},
+      {"id":"seo-sentinel","title":"SEO Sentinel"},
+      {"id":"quill","title":"Quill"},
+      {"id":"trend-spotter","title":"Trend Spotter"},
+      {"id":"soul-files","title":"Soul Files"},
+      {"id":"llm-providers","title":"LLM Providers"},
+      {"id":"hiring-agents","title":"Hiring Agents"},
+      {"id":"building-an-agent","title":"Building an Agent"}
+    ]},
+    { "id": "brain", "title": "The Brain", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"temporal-reasoning","title":"Temporal Reasoning"},
+      {"id":"action-windows","title":"Action Windows"},
+      {"id":"restraint-system","title":"Restraint System"},
+      {"id":"causal-attribution","title":"Causal Attribution"},
+      {"id":"goal-reasoning","title":"Goal Reasoning"}
+    ]},
+    { "id": "goals", "title": "Goals", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"creating-goals","title":"Creating Goals"},
+      {"id":"milestones","title":"Milestones"}
+    ]},
+    { "id": "signals", "title": "Signals", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"signal-types","title":"Signal Types"},
+      {"id":"clustering","title":"Clustering"}
+    ]},
+    { "id": "tasks", "title": "Tasks", "pages": [
+      {"id":"overview","title":"Overview"},
+      {"id":"approval-flow","title":"Approval Flow"},
+      {"id":"trust-tiers","title":"Trust Tiers"},
+      {"id":"write-back","title":"Write-Back Actions"}
+    ]},
+    { "id": "integrations", "title": "Integrations", "pages": [
+      {"id":"bap-protocol","title":"BAP Protocol"},
+      {"id":"api-reference","title":"API Reference"},
+      {"id":"telegram","title":"Telegram"},
+      {"id":"webhooks","title":"Webhooks"}
+    ]},
+    { "id": "deployment", "title": "Deployment", "pages": [
+      {"id":"docker","title":"Docker"},
+      {"id":"environment-variables","title":"Environment Variables"},
+      {"id":"bare-metal","title":"Bare Metal"},
+      {"id":"raspberry-pi","title":"Raspberry Pi"}
+    ]},
+    { "id": "troubleshooting", "title": "Troubleshooting", "pages": [
+      {"id":"common-issues","title":"Common Issues"},
+      {"id":"connector-errors","title":"Connector Errors"},
+      {"id":"agent-failures","title":"Agent Failures"}
+    ]}
+  ]
+}

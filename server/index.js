@@ -402,6 +402,14 @@ const mountRoutes = async () => {
     return webhookHandler(req, res).catch(next);
   });
 
+  // Docs routes — served at /docs, no auth required
+  const { serveDoc, serveDocIndex, searchDocs } = await import('./docs/docs-engine.js');
+  app.use('/docs/assets', express.static(resolve(__dirname, '../docs/assets')));
+  app.get('/docs/search', searchDocs);
+  app.get('/docs', serveDocIndex);
+  app.get('/docs/:section', serveDocIndex);
+  app.get('/docs/:section/:page', serveDoc);
+
   // Serve static client files in production
   if (process.env.NODE_ENV === 'production') {
     const clientDistPath = resolve(__dirname, '../client/dist');

@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{title}} — Blueprint Docs</title>
+  <meta name="description" content="{{description}}">
+  <link rel="stylesheet" href="/docs/assets/css/docs.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <nav class="docs-topbar">
+    <div class="docs-topbar-left">
+      <button class="docs-sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+      <a href="/" class="docs-logo">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="docs-logo-icon"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        <span class="docs-logo-name">Blueprint</span>
+        <span class="docs-logo-sep">/</span>
+        <span class="docs-logo-docs">docs</span>
+      </a>
+    </div>
+
+    <div class="docs-topbar-search">
+      <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="search" id="docs-search" placeholder="Search docs…" autocomplete="off" spellcheck="false">
+      <kbd class="search-kbd">⌘K</kbd>
+      <div id="docs-search-results" class="docs-search-results" hidden></div>
+    </div>
+
+    <div class="docs-topbar-right">
+      <a href="/" class="topbar-link">← App</a>
+      <a href="https://github.com/chrisgwynne/blueprint" class="topbar-link" target="_blank" rel="noreferrer">GitHub</a>
+    </div>
+  </nav>
+
+  <div class="docs-layout">
+
+    <aside class="docs-sidebar" id="docs-sidebar">
+      <div class="docs-sidebar-inner">
+        {{sidebar}}
+      </div>
+    </aside>
+
+    <div class="docs-sidebar-overlay" id="sidebar-overlay"></div>
+
+    <main class="docs-main">
+      <div class="docs-breadcrumb">{{breadcrumb}}</div>
+      <article class="docs-article">
+        {{content}}
+      </article>
+      {{footer_nav}}
+    </main>
+
+    <aside class="docs-toc" id="docs-toc">
+      <div class="docs-toc-inner">
+        <div class="docs-toc-title">On this page</div>
+        <nav id="docs-toc-nav"></nav>
+      </div>
+    </aside>
+
+  </div>
+
+  <script src="/docs/assets/js/docs.js"></script>
+</body>
+</html>

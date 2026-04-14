@@ -7,6 +7,7 @@ import {
   Bell,
   X,
   Menu,
+  HelpCircle,
 } from 'lucide-react'
 import Sidebar from './Sidebar.jsx'
 import AgentPanel from './AgentPanel.jsx'
@@ -25,6 +26,22 @@ function useLocalStorage(key, fallback) {
     try { window.localStorage.setItem(key, JSON.stringify(value)) } catch {}
   }, [key, value])
   return [value, setValue]
+}
+
+// Contextual docs links per route
+const DOCS_LINKS = {
+  '/':            '/docs/getting-started/installation',
+  '/signals':     '/docs/signals/overview',
+  '/tasks':       '/docs/tasks/overview',
+  '/chat':        '/docs/integrations/api-reference',
+  '/agents':      '/docs/agents/overview',
+  '/connectors':  '/docs/connectors/overview',
+  '/outcomes':    '/docs/brain/causal-attribution',
+  '/workflows':   '/docs/tasks/overview',
+  '/goals':       '/docs/goals/overview',
+  '/kb':          '/docs/brain/overview',
+  '/health':      '/docs/troubleshooting/common-issues',
+  '/settings':    '/docs/deployment/environment-variables',
 }
 
 // Page title map
@@ -238,6 +255,29 @@ function TopBar({ onHamburger }) {
         >
           <RefreshCw size={12} style={{ animation: syncing ? 'bp-spin-slow 1s linear infinite' : 'none' }} />
         </button>
+
+        {/* Contextual help */}
+        <a
+          href={DOCS_LINKS[location.pathname] || '/docs'}
+          target="_blank"
+          rel="noreferrer"
+          style={{
+            width: 28, height: 28,
+            borderRadius: '50%',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            background: 'transparent',
+            border: '1px solid var(--bp-border)',
+            color: 'var(--bp-text-3)',
+            textDecoration: 'none',
+            transition: 'color 150ms ease, border-color 150ms ease',
+            flexShrink: 0,
+          }}
+          title="Documentation"
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--bp-text)'; e.currentTarget.style.borderColor = 'var(--bp-text-3)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--bp-text-3)'; e.currentTarget.style.borderColor = 'var(--bp-border)' }}
+        >
+          <HelpCircle size={12} />
+        </a>
 
         {/* Bell */}
         <button

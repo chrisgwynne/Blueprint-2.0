@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
+  ExternalLink,
   ChevronsUpDown,
   Building2,
   Plus,
@@ -721,6 +722,40 @@ function Sidebar() {
             </div>
           </div>
         )}
+
+        {/* Docs link */}
+        <a
+          href="/docs"
+          target="_blank"
+          rel="noreferrer"
+          className="group"
+          style={{
+            width: '100%',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '7px 10px',
+            borderRadius: 5,
+            textDecoration: 'none',
+            fontFamily: 'var(--bp-font-mono)',
+            fontSize: 12,
+            color: 'var(--bp-text-3)',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            transition: 'all 150ms ease',
+            marginBottom: 2,
+          }}
+          onMouseEnter={e => { e.currentTarget.style.color = 'var(--bp-text)'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)' }}
+          onMouseLeave={e => { e.currentTarget.style.color = 'var(--bp-text-3)'; e.currentTarget.style.background = 'transparent' }}
+          title="Documentation"
+        >
+          <BookOpen size={14} style={{ flexShrink: 0 }} />
+          {!collapsed && (
+            <>
+              <span style={{ flex: 1 }}>Docs</span>
+              <ExternalLink size={10} style={{ opacity: 0.5 }} />
+            </>
+          )}
+        </a>
 
         <button
           onClick={handleLogout}
