@@ -61,6 +61,8 @@ router.get('/:businessId', (req, res) => {
           severity: r.status === 'failed' ? 'error' : 'info',
           created_at: r.started_at,
           ref: { run_id: r.id },
+          // UI can call /produced/agent_run/<run_id> to see what this run did
+          produces: { source_type: 'agent_run', source_id: r.id },
         });
       }
     }
@@ -85,6 +87,7 @@ router.get('/:businessId', (req, res) => {
           severity: r.priority === 'p1' ? 'warning' : 'info',
           created_at: r.created_at,
           ref: { task_id: r.id },
+          produces: { source_type: 'task', source_id: r.id },
         });
       }
     }
@@ -112,6 +115,7 @@ router.get('/:businessId', (req, res) => {
           severity: r.severity === 'critical' || r.severity === 'alert' ? 'error' : 'info',
           created_at: r.created_at,
           ref: { signal_id: r.id },
+          produces: { source_type: 'signal', source_id: r.id },
         });
       }
     }

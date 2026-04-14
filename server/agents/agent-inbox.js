@@ -37,12 +37,17 @@ function ensureInboxDir(agentId) {
  * Deliver a brief from one agent (or any mesh source) to another agent.
  *
  * @param {object}  opts
- * @param {string}  opts.from           source label: 'agent:<id>' | 'chat' | 'kb-analyser' | etc.
+ * @param {string}  opts.from           source label for inbox display:
+ *                                      'agent:<id>' | 'chat' | 'kb-analyser' | etc.
  * @param {string}  opts.to             target agent id (e.g. 'seo-sentinel')
  * @param {string}  opts.businessId
  * @param {string}  opts.brief          what the source wants the target to know/do
  * @param {'immediate'|'next_run'|'fyi'} [opts.priority='next_run']
  * @param {object}  [opts.metadata]     optional structured payload
+ * @param {string}  [opts.source_label] label used for the intelligence_event row.
+ *                                      Defaults to `from`. Pass a run-scoped label
+ *                                      like 'agent_run:<runId>' so the Timeline
+ *                                      can attribute the brief to a specific run.
  * @returns {Promise<{delivered: boolean, triggered: boolean}>}
  */
 export async function deliverAgentBrief({
@@ -52,6 +57,7 @@ export async function deliverAgentBrief({
   brief,
   priority = 'next_run',
   metadata = null,
+  source_label = null,
 }) {
   if (!from || !to || !brief) return { delivered: false, triggered: false };
   if (from === `agent:${to}`) {
@@ -78,9 +84,11 @@ export async function deliverAgentBrief({
     return { delivered: false, triggered: false };
   }
 
-  // Intelligence event so the Timeline can show "agent A briefed agent B"
+  // Intelligence event so the Timeline can show "agent A briefed agent B".
+  // If the caller provided a source_label (e.g. 'agent_run:<runId>'), attribute
+  // the event to that source instead of the inbox `from` label.
   if (businessId) {
-    const { type, id } = parseSourceLabel(from);
+    const { type, id } = parseSourceLabel(source_label || from);
     logIntelligenceEvent({
       business_id: businessId,
       source_type: type,
@@ -89,7 +97,7 @@ export async function deliverAgentBrief({
       target_id: to,
       event_type: 'briefed_agent',
       description: `${priority}: ${String(brief).slice(0, 140)}`,
-      metadata: { priority, ...(metadata ?? {}) },
+      metadata: { priority, display_from: from, ...(metadata ?? {}) },
     });
   }
 

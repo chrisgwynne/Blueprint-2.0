@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import { getTimeline } from '../lib/api.js'
+import ProducedByEvent from '../components/ProducedByEvent.jsx'
 
 const TYPE_CONFIG = {
   agent_run:      { icon: Bot,         color: 'var(--bp-blue)',   label: 'AGENTS' },
@@ -39,7 +40,7 @@ function dayLabel(iso) {
   return format(d, 'EEEE d MMM')
 }
 
-function TimelineEvent({ event }) {
+function TimelineEvent({ event, businessId }) {
   const type = event.type === 'workflow_run' ? 'workflow_run' :
                event.type === 'goal_check'   ? 'goal_check'   :
                event.type === 'connector_sync' ? 'connector_sync' :
@@ -68,6 +69,17 @@ function TimelineEvent({ event }) {
           <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.4 }}>
             {event.subtitle}
           </div>
+        )}
+        {/* Event types that log intelligence events get a "produced" drilldown.
+            The server's timeline route attaches a `produces` hint for
+            agent_run, signal, and task events. Others (workflow, goal, sync)
+            don't currently emit intel events so we hide the toggle. */}
+        {event.produces?.source_type && event.produces?.source_id && businessId && (
+          <ProducedByEvent
+            businessId={businessId}
+            sourceType={event.produces.source_type}
+            sourceId={event.produces.source_id}
+          />
         )}
       </div>
     </div>
@@ -162,7 +174,7 @@ export default function Timeline() {
           }}>
             {dayLabel(g.day)}
           </div>
-          {g.events.map((e) => <TimelineEvent key={e.id} event={e} />)}
+          {g.events.map((e) => <TimelineEvent key={e.id} event={e} businessId={currentBusiness?.id} />)}
         </div>
       ))}
 

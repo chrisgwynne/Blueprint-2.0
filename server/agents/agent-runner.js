@@ -268,17 +268,19 @@ function appendRunLog(agentId, entry) {
 // helper so the same mechanism works for cross-agent briefs (see
 // server/agents/agent-inbox.js).
 
-async function briefConductor(agentId, parsed, businessId) {
+async function briefConductor(agentId, parsed, businessId, runId) {
   if (agentId === 'conductor') return; // conductor doesn't brief itself
   try {
     const { deliverAgentBrief } = await import('./agent-inbox.js');
     await deliverAgentBrief({
       from: `agent:${agentId}`,
+      source_label: runId ? `agent_run:${runId}` : `agent:${agentId}`,
       to: 'conductor',
       businessId,
       priority: 'fyi',
       brief: parsed.summary ?? parsed.reasoning?.slice(0, 300) ?? '(no summary)',
       metadata: {
+        run_id: runId ?? null,
         signals_detected: parsed.signals_detected ?? 0,
         tasks_proposed: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
         reasoning_excerpt: parsed.reasoning ? parsed.reasoning.slice(0, 500) : null,
@@ -662,11 +664,13 @@ async function processDataGaps(gaps, agentId, businessId) {
  * Handle kb_entries from an agent response.
  * Files each entry to the business KB tagged with the agent as author so the
  * KB analyser can see it in future passes without re-entrant loops.
+ * runId flows through so intelligence_events attribute the write to THIS run.
  */
-async function processAgentKBEntries(entries, agentId, businessId) {
+async function processAgentKBEntries(entries, agentId, businessId, runId) {
   if (!Array.isArray(entries) || entries.length === 0) return;
   try {
     const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const { logIntelligenceEvent } = await import('../lib/intelligence-events.js');
     const kbResult = await getKBForBusiness(businessId);
     if (!kbResult?.engine) return;
 
@@ -689,6 +693,21 @@ async function processAgentKBEntries(entries, agentId, businessId) {
           },
           `${agentId}: ${String(entry.title ?? entry.path).slice(0, 60)}`
         );
+
+        // Log so the Timeline can show "this run produced a KB entry".
+        // kb.writeFile doesn't log intelligence events itself.
+        if (runId) {
+          logIntelligenceEvent({
+            business_id: businessId,
+            source_type: 'agent_run',
+            source_id: runId,
+            target_type: 'kb_entry',
+            target_id: entry.path,
+            event_type: 'filed_kb',
+            description: `${agentId}: ${String(entry.title ?? entry.path).slice(0, 140)}`,
+            metadata: { agent_id: agentId, why: entry.why ?? null },
+          });
+        }
       } catch (err) {
         console.warn(`[agent-runner] kb_entries write for ${entry.path} failed:`, err.message);
       }
@@ -701,8 +720,9 @@ async function processAgentKBEntries(entries, agentId, businessId) {
 /**
  * Handle agent_briefs from an agent response — deliver each to the target
  * agent's inbox via the shared helper. Target validated against installed agents.
+ * runId flows through so intelligence_events attribute the brief to THIS run.
  */
-async function processAgentBriefs(briefs, fromAgentId, businessId) {
+async function processAgentBriefs(briefs, fromAgentId, businessId, runId) {
   if (!Array.isArray(briefs) || briefs.length === 0) return;
   try {
     const { deliverAgentBrief } = await import('./agent-inbox.js');
@@ -716,7 +736,10 @@ async function processAgentBriefs(briefs, fromAgentId, businessId) {
       if (!target) continue;
 
       await deliverAgentBrief({
+        // `from` is human-readable for the inbox display
         from: `agent:${fromAgentId}`,
+        // `source_label` is run-scoped for precise Timeline attribution
+        source_label: runId ? `agent_run:${runId}` : `agent:${fromAgentId}`,
         to: b.to_agent,
         businessId,
         brief: b.brief,
@@ -734,8 +757,9 @@ async function processAgentBriefs(briefs, fromAgentId, businessId) {
  * Handle signals_to_create from an agent response — route through the
  * createSignalIfNotDuplicate helper so each signal dedups, files to KB,
  * checks goal impact, and surfaces connector implications like any other.
+ * runId flows through so intelligence_events attribute the signal to THIS run.
  */
-async function processAgentSignals(signals, agentId, businessId) {
+async function processAgentSignals(signals, agentId, businessId, runId) {
   if (!Array.isArray(signals) || signals.length === 0) return;
   try {
     const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
@@ -755,8 +779,8 @@ async function processAgentSignals(signals, agentId, businessId) {
         title: s.title,
         description: s.description ?? null,
         confidence: Number(s.confidence) || 0.7,
-        data: { source_agent: agentId, raw: s },
-        source_label: `agent:${agentId}`,
+        data: { source_agent: agentId, run_id: runId ?? null, raw: s },
+        source_label: runId ? `agent_run:${runId}` : `agent:${agentId}`,
       });
     }
   } catch (err) {
@@ -1324,16 +1348,19 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
-    // 14. Process mesh outputs from the agent run (all fire-and-forget)
+    // 14. Process mesh outputs from the agent run (all fire-and-forget).
+    // runId is threaded through so intelligence_events attribute each output
+    // to THIS specific run — the Timeline UI needs that precision to answer
+    // "what did this particular run produce?"
     processDataGaps(parsed.data_gaps, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processDataGaps failed (non-fatal):', e.message));
     processConnectorWishlist(parsed.connector_wishlist, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processConnectorWishlist failed (non-fatal):', e.message));
-    processAgentKBEntries(parsed.kb_entries, agentId, businessId)
+    processAgentKBEntries(parsed.kb_entries, agentId, businessId, runId)
       .catch(e => console.warn('[agent-runner] processAgentKBEntries failed (non-fatal):', e.message));
-    processAgentBriefs(parsed.agent_briefs, agentId, businessId)
+    processAgentBriefs(parsed.agent_briefs, agentId, businessId, runId)
       .catch(e => console.warn('[agent-runner] processAgentBriefs failed (non-fatal):', e.message));
-    processAgentSignals(parsed.signals_to_create, agentId, businessId)
+    processAgentSignals(parsed.signals_to_create, agentId, businessId, runId)
       .catch(e => console.warn('[agent-runner] processAgentSignals failed (non-fatal):', e.message));
 
     // 15. Update memory with learnings
@@ -1361,7 +1388,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     });
 
     // 16. Brief conductor (non-conductor runs only) — fire-and-forget
-    briefConductor(agentId, parsed, businessId)
+    briefConductor(agentId, parsed, businessId, runId)
       .catch((err) => console.warn('[agent-runner] briefConductor failed (non-fatal):', err.message));
 
     // 16b. Dispatch BAP webhook for agent.run.complete

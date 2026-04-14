@@ -8,6 +8,7 @@ import {
   CheckCircle, XCircle, AlertCircle, Eye, Code,
 } from 'lucide-react'
 import useStore from '../lib/store.js'
+import ProducedByEvent from '../components/ProducedByEvent.jsx'
 import {
   getAgents, getAgentProfile, getAgentRuns, runAgent, updateAgent,
   updateAgentFile, getAgentMemory, clearAgentMemory,
@@ -161,7 +162,7 @@ function SoulFileEditor({ agentId, files, onSaved }) {
 
 // ─── Runs tab ─────────────────────────────────────────────────────────────────
 
-function RunsTab({ agentId }) {
+function RunsTab({ agentId, businessId }) {
   const [runs, setRuns] = useState([])
   const [loading, setLoading] = useState(true)
   const [page, setPage] = useState(1)
@@ -255,6 +256,17 @@ function RunsTab({ agentId }) {
                             <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 200, overflowY: 'auto' }}>
                               {run.reasoning}
                             </div>
+                          </div>
+                        )}
+                        {/* Mesh: what this specific run produced (signals,
+                            tasks, KB entries, agent briefs, connector gaps). */}
+                        {businessId && (
+                          <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--bp-border)' }}>
+                            <ProducedByEvent
+                              businessId={businessId}
+                              sourceType="agent_run"
+                              sourceId={run.id}
+                            />
                           </div>
                         )}
                       </td>
@@ -1067,7 +1079,7 @@ export default function AgentDetail() {
               </div>
             )}
             {activeTab === 'runs' && (
-              <RunsTab agentId={agentId} />
+              <RunsTab agentId={agentId} businessId={currentBusiness?.id} />
             )}
             {activeTab === 'memory' && (
               <MemoryTab agentId={agentId} />

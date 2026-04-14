@@ -394,6 +394,15 @@ export const overrideDeferredTask = (businessId, taskId) => post(`/brain/${busin
 export const getGoogleOAuthConfig = () => get('/oauth/google/config')
 export const saveGoogleOAuthConfig = (body) => request('PUT', '/oauth/google/config', body)
 
+// ─── Intelligence mesh (Timeline "produced by" drilldown) ─────────────────────
+// Each timeline event with a `produces` hint can fetch downstream events
+// (signals, tasks, KB entries, agent briefs, connector gaps) that were
+// caused by it. See server/routes/timeline.js.
+export const getTimelineIntelligence = (businessId, params) =>
+  get(`/timeline/${businessId}/intelligence`, params)
+export const getProducedByEvent = (businessId, sourceType, sourceId, params) =>
+  get(`/timeline/${businessId}/produced/${sourceType}/${encodeURIComponent(sourceId)}`, params)
+
 // ─── Blueprint system GitHub (self-healing + connector discovery) ─────────────
 // Separate from business GitHub connectors — targets chrisgwynne/Blueprint only.
 export const getBlueprintGitHubStatus   = ()     => get('/settings/blueprint-github/status')
