@@ -1,7 +1,7 @@
 import db, { generateId } from '../db/db.js';
 import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
-import { runLLM, getProviderCredentials, listProviders } from '../lib/llm-providers.js';
+import { runLLM, getProviderCredentials, listProviders, resolveProfileLLM } from '../lib/llm-providers.js';
 
 /**
  * Robust JSON extractor for LLM responses.
