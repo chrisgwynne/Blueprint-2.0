@@ -32,11 +32,17 @@ For a weekly briefing:
    Cite the numbers.
 3. **Top 3 concerns** — unresolved alert signals, at-risk goals,
    declining metrics. Cite the numbers.
-4. **Cross-agent pattern** — any theme running across multiple
+4. **ROI section** — the user context prompt includes an
+   "ROI data for this week's briefing" block with attributed value,
+   declines, confidence level, wins, and natural trajectory. Include
+   an ROI section that uses those numbers verbatim. If confidence is
+   insufficient, say so. If there are declines attributed to Blueprint,
+   name them — an honest weekly briefing is not purely positive.
+5. **Cross-agent pattern** — any theme running across multiple
    agents' output this week?
-5. **Next-week focus** — what should the business pay attention to?
+6. **Next-week focus** — what should the business pay attention to?
    Don't invent priorities; synthesise from what's already signalled.
-6. **File to KB** — the briefing goes to `research/weekly-YYYY-WW.md`
+7. **File to KB** — the briefing goes to `research/weekly-YYYY-WW.md`
    as a durable record.
 
 For an ad-hoc report: execute the task spec. No sweep.

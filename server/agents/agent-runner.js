@@ -645,6 +645,28 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
     lines.push('You have been triggered manually. Review all available context and propose the highest-value actions you can identify.');
   }
 
+  // ROI context — every agent sees its own performance data so it adapts.
+  // Conductor and Reporter get broader context blocks; specialists get a
+  // focused scorecard with specific feedback when their ROI warrants it.
+  try {
+    const { buildAgentROIContext, buildConductorROIContext, buildReporterROIContext } =
+      await import('../roi/agent-context.js');
+    let roiBlock = '';
+    if (agentId === 'conductor') {
+      roiBlock = buildConductorROIContext(business?.id);
+    } else if (agentId === 'reporter') {
+      roiBlock = buildReporterROIContext(business?.id);
+    } else {
+      roiBlock = buildAgentROIContext(agentId, business?.id);
+    }
+    if (roiBlock) {
+      lines.push('');
+      lines.push(roiBlock);
+    }
+  } catch (err) {
+    console.warn('[agent-runner] ROI context injection failed:', err.message);
+  }
+
   return lines.join('\n');
 }
 
