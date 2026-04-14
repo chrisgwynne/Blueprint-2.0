@@ -22,6 +22,9 @@ export function buildInvestigationPrompt(task, context) {
 
   const actionTypesBlock = buildActionTypesBlock(context.all_connected_connectors ?? []);
 
+  const kbContext = _truncate(context.kb_context, MAX_KB_CONTEXT_CHARS) || 'No relevant knowledge base entries found.';
+  const seasonalContext = _truncate(context.seasonal_context, MAX_SEASONAL_CHARS) || 'No seasonal patterns detected yet.';
+
   return `Investigate this specific business problem and produce actionable findings.
 
 # INVESTIGATION TASK
@@ -45,10 +48,10 @@ ${outcomesBlock}
 ${goalsBlock}
 
 # RELEVANT KB CONTEXT
-${context.kb_context || 'No relevant knowledge base entries found.'}
+${kbContext}
 
 # SEASONAL CONTEXT
-${context.seasonal_context || 'No seasonal patterns detected yet.'}
+${seasonalContext}
 
 ---
 
@@ -134,13 +137,31 @@ Additional fixes can be found in the next investigation cycle.`;
 
 // ─── Block builders ───────────────────────────────────────────────────────────
 
+// Hard limits to prevent runaway prompt sizes on large accounts
+const MAX_METRICS_PER_CONNECTOR = 20;
+const MAX_METRICS_BLOCK_CHARS   = 4_000;
+const MAX_SIGNAL_DATA_CHARS     = 500;
+const MAX_KB_CONTEXT_CHARS      = 2_000;
+const MAX_SEASONAL_CHARS        = 1_000;
+
 function buildMetricsBlock(context) {
   const entries = Object.entries(context.current_metrics);
   if (!entries.length) return null;
 
-  return entries.map(([connectorType, metrics]) => {
+  const connectorBlocks = entries.map(([connectorType, metrics]) => {
     const historical = context.historical_metrics[connectorType] ?? {};
-    const metricLines = Object.entries(metrics).map(([name, data]) => {
+    let metricEntries = Object.entries(metrics);
+
+    // Sort by absolute % deviation (most anomalous first), then cap count
+    metricEntries.sort(([nameA, a], [nameB, b]) => {
+      const devA = _deviation(a, historical[nameA]);
+      const devB = _deviation(b, historical[nameB]);
+      return devB - devA;
+    });
+    const capped = metricEntries.slice(0, MAX_METRICS_PER_CONNECTOR);
+    const omitted = metricEntries.length - capped.length;
+
+    const metricLines = capped.map(([name, data]) => {
       const hist = historical[name];
       let change = 'no history';
       if (hist?.avg != null && data.value != null) {
@@ -149,19 +170,43 @@ function buildMetricsBlock(context) {
       }
       return `  ${name}: ${data.value ?? 'n/a'} (vs 30d avg: ${hist?.avg?.toFixed(2) ?? 'unknown'}, change: ${change})`;
     });
+    if (omitted > 0) metricLines.push(`  … ${omitted} additional metrics omitted (low deviation)`);
     return `## ${connectorType.toUpperCase()}\n${metricLines.join('\n')}`;
-  }).join('\n\n');
+  });
+
+  const full = connectorBlocks.join('\n\n');
+  if (full.length > MAX_METRICS_BLOCK_CHARS) {
+    return full.slice(0, MAX_METRICS_BLOCK_CHARS) + '\n… [metrics truncated for length]';
+  }
+  return full;
+}
+
+/** Compute absolute % deviation for sorting — returns 0 if unknown. */
+function _deviation(data, hist) {
+  if (hist?.avg == null || data?.value == null || hist.avg === 0) return 0;
+  return Math.abs((data.value - hist.avg) / Math.abs(hist.avg)) * 100;
+}
+
+/** Truncate a string to maxChars, appending an ellipsis if cut. */
+function _truncate(str, maxChars) {
+  if (!str) return str;
+  return str.length > maxChars ? str.slice(0, maxChars) + '\n… [truncated for length]' : str;
 }
 
 function buildSignalBlock(signal) {
   if (!signal) return 'No linked signal — investigation triggered manually or from task.';
   let signalData = null;
   try { signalData = signal.data ? JSON.parse(signal.data) : null; } catch {}
+  let dataStr = '';
+  if (signalData) {
+    const raw = JSON.stringify(signalData);
+    dataStr = `Data: ${raw.length > MAX_SIGNAL_DATA_CHARS ? raw.slice(0, MAX_SIGNAL_DATA_CHARS) + '…' : raw}`;
+  }
   return [
     `Title: ${signal.title}`,
     `Severity: ${signal.severity}`,
     `Description: ${signal.description ?? '(none)'}`,
-    signalData ? `Data: ${JSON.stringify(signalData, null, 2)}` : '',
+    dataStr,
   ].filter(Boolean).join('\n');
 }
 
