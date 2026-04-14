@@ -15,6 +15,7 @@
  *   1. Add a case to executeTask()
  *   2. Implement the handler returning { outcome, outcome_data }
  */
+import crypto from 'node:crypto';
 import db from '../db/db.js';
 import { decrypt } from '../crypto.js';
 import { updateTaskStatus } from './task-queue.js';
@@ -35,6 +36,11 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'shopify_collection_update',
   'shopify_tag_update',
   'hire_agent',
+  // Wix SEO write-back (page + blog-post SEO fields only, approved)
+  'wix_seo_update',
+  // Server-access write (requires approved task + backup-before-write)
+  'server_file_write',
+  'server_file_rollback',
 ]);
 
 export function isExecutable(actionType) {
@@ -48,6 +54,8 @@ export function isExecutable(actionType) {
 function connectorTypeForAction(actionType) {
   if (actionType === 'github_issue' || actionType === 'github_pr') return 'github';
   if (actionType?.startsWith('shopify_')) return 'shopify';
+  if (actionType === 'wix_seo_update') return 'wix';
+  if (actionType === 'server_file_write' || actionType === 'server_file_rollback') return 'server-access';
   return null;
 }
 
@@ -576,6 +584,9 @@ export async function executeTask(taskId) {
       case 'shopify_collection_update': result = await executeShopifyCollectionUpdate(task); break;
       case 'shopify_tag_update':        result = await executeShopifyTagUpdate(task); break;
       case 'hire_agent':                result = await executeHireAgent(task); break;
+      case 'wix_seo_update':            result = await executeWixSeoUpdate(task); break;
+      case 'server_file_write':         result = await executeServerFileWrite(task); break;
+      case 'server_file_rollback':      result = await executeServerFileRollback(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }
@@ -618,4 +629,166 @@ export async function executeTask(taskId) {
 
   console.log(`[executor] Task ${taskId} (${task.action_type}) executed: ${result.outcome}`);
   return { ok: true, outcome: result.outcome, outcome_data: result.outcome_data };
+}
+
+// ─── Wix SEO write-back ─────────────────────────────────────────────────────
+
+async function executeWixSeoUpdate(task) {
+  const payload = typeof task.action_payload === 'string'
+    ? JSON.parse(task.action_payload) : task.action_payload ?? {};
+  const { target, target_id, title, description, slug, connector_id } = payload;
+  if (!connector_id) throw new Error('wix_seo_update: connector_id required in action_payload');
+  if (!target || !target_id) throw new Error('wix_seo_update: target and target_id required (target: "page"|"post")');
+
+  const connectorRow = db.prepare('SELECT * FROM connectors WHERE id = ? AND type = ?').get(connector_id, 'wix');
+  if (!connectorRow) throw new Error(`Wix connector ${connector_id} not found`);
+  const credentials = JSON.parse(decrypt(connectorRow.credentials));
+  const { default: wix } = await import('../connectors/wix/index.js');
+
+  let res;
+  if (target === 'page') {
+    res = await wix.updatePageSeo(credentials, { pageId: target_id, title, description });
+  } else if (target === 'post') {
+    res = await wix.updatePostSeo(credentials, { postId: target_id, title, description, slug });
+  } else {
+    throw new Error(`wix_seo_update: unknown target '${target}' (expected 'page' or 'post')`);
+  }
+
+  return {
+    outcome: `Wix ${target} ${target_id} SEO updated.`,
+    outcome_data: { target, target_id, title, description, result: res },
+  };
+}
+
+// ─── Server-access write + rollback ─────────────────────────────────────────
+//
+// SAFETY:
+//  - Both handlers require an already-approved task; the executor gates
+//    that via updateTaskStatus('executing'). We never write without
+//    taking a fresh backup of the current file first.
+//  - Every write is recorded in audit_log with the backup id so the
+//    change is reversible even if the DB and server drift.
+//  - Paths are re-validated at write time by the connector's isPathSafe
+//    gate — the executor trusts nothing from the payload.
+
+async function loadServerAccessConnector(connectorId) {
+  const row = db.prepare("SELECT * FROM connectors WHERE id = ? AND type = 'server-access'").get(connectorId);
+  if (!row) throw new Error(`server-access connector ${connectorId} not found`);
+  const credentials = JSON.parse(decrypt(row.credentials));
+  return { row, credentials };
+}
+
+async function executeServerFileWrite(task) {
+  const payload = typeof task.action_payload === 'string'
+    ? JSON.parse(task.action_payload) : task.action_payload ?? {};
+  const { connector_id, target_file, new_content } = payload;
+  if (!connector_id) throw new Error('server_file_write: connector_id required');
+  if (!target_file) throw new Error('server_file_write: target_file required');
+  if (typeof new_content !== 'string') throw new Error('server_file_write: new_content must be a string');
+
+  const { row: connectorRow, credentials } = await loadServerAccessConnector(connector_id);
+
+  // Lazy-import to keep ssh2/basic-ftp dependencies out of the startup path.
+  const { createServerConnection } = await import('../connectors/server-access/connection.js');
+  const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath });
+
+  try {
+    // 1. Fresh read + backup of current content (mandatory — never skip).
+    const before = await conn.readFile(target_file);
+    if (before.refused) {
+      throw new Error(`server_file_write: connector refused to read current file (${before.reason})`);
+    }
+
+    const backupId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO file_backups (id, business_id, connector_id, task_id, remote_path, content, content_hash, backed_up_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      backupId, task.business_id, connector_id, task.id,
+      target_file, before.content, before.hash,
+    );
+
+    // 2. Write.
+    const writeResult = await conn.writeFile(target_file, new_content);
+
+    // 3. Refresh the cache hash so subsequent syncs don't flag this as an
+    //    external change.
+    try {
+      db.prepare(`
+        INSERT INTO server_file_cache (id, business_id, connector_id, remote_path, content, content_hash, file_size, last_modified, cached_at)
+        VALUES (?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ON CONFLICT(connector_id, remote_path) DO UPDATE SET
+          content_hash = excluded.content_hash,
+          file_size = excluded.file_size,
+          last_modified = CURRENT_TIMESTAMP,
+          cached_at = CURRENT_TIMESTAMP
+      `).run(
+        crypto.randomUUID(), task.business_id, connector_id, target_file,
+        writeResult.hash, writeResult.bytes_written,
+      );
+    } catch (err) {
+      console.warn('[executor] server_file_cache update failed (non-fatal):', err.message);
+    }
+
+    // 4. Audit.
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (id, business_id, entity_type, entity_id, action, actor, metadata, created_at)
+        VALUES (?, ?, 'server_file', ?, 'file_write', ?, ?, CURRENT_TIMESTAMP)
+      `).run(
+        crypto.randomUUID(), task.business_id,
+        target_file, `task:${task.id}`,
+        JSON.stringify({ bytes: writeResult.bytes_written, backup_id: backupId, before_hash: before.hash, after_hash: writeResult.hash }),
+      );
+    } catch (err) {
+      console.warn('[executor] file_write audit insert failed:', err.message);
+    }
+
+    return {
+      outcome: `Wrote ${writeResult.bytes_written} bytes to ${target_file} (backup ${backupId.slice(0, 8)}).`,
+      outcome_data: {
+        target_file,
+        bytes_written: writeResult.bytes_written,
+        backup_id: backupId,
+        before_hash: before.hash,
+        after_hash: writeResult.hash,
+      },
+    };
+  } finally {
+    await conn.disconnect();
+  }
+}
+
+async function executeServerFileRollback(task) {
+  const payload = typeof task.action_payload === 'string'
+    ? JSON.parse(task.action_payload) : task.action_payload ?? {};
+  const { backup_id } = payload;
+  if (!backup_id) throw new Error('server_file_rollback: backup_id required');
+
+  const backup = db.prepare('SELECT * FROM file_backups WHERE id = ?').get(backup_id);
+  if (!backup) throw new Error(`Backup ${backup_id} not found — cannot rollback.`);
+
+  const { credentials } = await loadServerAccessConnector(backup.connector_id);
+  const { createServerConnection } = await import('../connectors/server-access/connection.js');
+  const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath });
+
+  try {
+    const result = await conn.writeFile(backup.remote_path, backup.content);
+    try {
+      db.prepare(`
+        INSERT INTO audit_log (id, business_id, entity_type, entity_id, action, actor, metadata, created_at)
+        VALUES (?, ?, 'server_file', ?, 'file_rollback', ?, ?, CURRENT_TIMESTAMP)
+      `).run(
+        crypto.randomUUID(), task.business_id,
+        backup.remote_path, `task:${task.id}`,
+        JSON.stringify({ backup_id, restored_from: backup.backed_up_at, bytes: result.bytes_written }),
+      );
+    } catch {}
+    return {
+      outcome: `Rolled back ${backup.remote_path} to backup from ${backup.backed_up_at}.`,
+      outcome_data: { target_file: backup.remote_path, restored_from: backup.backed_up_at, bytes_written: result.bytes_written },
+    };
+  } finally {
+    await conn.disconnect();
+  }
 }

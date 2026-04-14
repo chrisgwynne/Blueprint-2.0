@@ -7,6 +7,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { checkAgentReadiness } from '../agents/readiness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -164,10 +165,20 @@ router.get('/health/full', async (req, res) => {
     const agentRows = db.prepare('SELECT * FROM agents ORDER BY name ASC').all();
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
+    // Readiness is per-business; System Health is a tenant-wide view. Use the
+    // first business as the readiness context — the vast majority of
+    // installations are single-tenant. Multi-tenant deployments can layer a
+    // per-business view on top.
+    const primaryBusiness = db.prepare(
+      'SELECT id FROM businesses ORDER BY created_at ASC LIMIT 1'
+    ).get();
+
     const agents = agentRows.map((a) => {
+      // Skipped runs aren't failures — don't count them toward consecutive
+      // failure health state.
       const recentRuns = db.prepare(`
         SELECT status FROM agent_runs
-        WHERE agent_id = ?
+        WHERE agent_id = ? AND status != 'skipped'
         ORDER BY started_at DESC LIMIT 10
       `).all(a.id);
 
@@ -182,7 +193,7 @@ router.get('/health/full', async (req, res) => {
                SUM(CASE WHEN status = 'complete' THEN 1 ELSE 0 END) as success,
                SUM(tasks_proposed) as tasks
         FROM agent_runs
-        WHERE agent_id = ? AND started_at >= ?
+        WHERE agent_id = ? AND started_at >= ? AND status != 'skipped'
       `).get(a.id, sevenDaysAgo);
 
       const runs7d = sevenDayStats?.total ?? 0;
@@ -194,14 +205,53 @@ router.get('/health/full', async (req, res) => {
         ? Math.round((Date.now() - lastRunMs) / 60000)
         : null;
 
+      // Operational status (existing): ok / failing / disabled
       let status = 'ok';
       if (a.status === 'disabled' || a.status === 'paused') status = 'disabled';
       else if (consecutiveFailures >= 3) status = 'failing';
 
+      // Readiness status (new): active / pending / retired / missing_connectors
+      // etc. Surfaced alongside operational status so the UI can show
+      // "Pending — waiting for GSC" instead of treating a healthy pending
+      // agent as idle.
+      let readinessStatus = 'active';
+      let readinessReason = null;
+      let missingRequired = [];
+      let missingPreferred = [];
+      if (a.status === 'retired') {
+        readinessStatus = 'retired';
+      } else if (a.status === 'pending') {
+        readinessStatus = 'pending';
+      } else if (primaryBusiness?.id) {
+        try {
+          const r = checkAgentReadiness(a.id, primaryBusiness.id);
+          if (r.status === 'missing_connectors'
+              || r.status === 'connectors_never_synced'
+              || r.status === 'connectors_stale') {
+            readinessStatus = 'pending';
+          } else if (r.status === 'paused') {
+            readinessStatus = 'paused';
+          } else if (r.status === 'retired') {
+            readinessStatus = 'retired';
+          } else if (r.status === 'not_installed') {
+            readinessStatus = 'not_installed';
+          }
+          readinessReason = r.reason ?? null;
+          missingRequired = r.missing_required ?? [];
+          missingPreferred = r.missing_preferred ?? [];
+        } catch (err) {
+          console.warn(`[system-health] readiness check failed for ${a.id}:`, err.message);
+        }
+      }
+
       return {
         id: a.id,
         name: a.name,
-        status,
+        status,                       // operational: ok | failing | disabled
+        readiness_status: readinessStatus,  // lifecycle: active | pending | retired | paused | not_installed
+        readiness_reason: readinessReason,
+        missing_required: missingRequired,
+        missing_preferred: missingPreferred,
         last_run: a.last_run,
         minutes_since_run: minutesSinceRun,
         consecutive_failures: consecutiveFailures,

@@ -134,6 +134,19 @@ function TaskCard({ task, isDragging = false, onUpdate, onSelect }) {
               Conductor recommends
             </span>
           )}
+          {task.degraded_data ? (
+            <span
+              className="bp-pill"
+              title="Proposed with incomplete or stale connector data — confidence capped and human review required."
+              style={{
+                padding: '1px 6px', fontSize: 9, flexShrink: 0,
+                background: 'rgba(239,68,68,0.12)', color: '#fca5a5',
+                border: '1px solid rgba(239,68,68,0.3)',
+              }}
+            >
+              degraded data
+            </span>
+          ) : null}
         </div>
 
         {/* Title — click to open detail drawer (stopPropagation so the

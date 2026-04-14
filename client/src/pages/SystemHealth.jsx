@@ -30,6 +30,17 @@ const AGENT_STATUS = {
   idle:     { color: 'var(--bp-text-3)', label: 'Idle' },
 }
 
+// Readiness labels describe the agent's lifecycle state, independent of
+// whether its last run succeeded. A "pending" agent is installed but waiting
+// for its required connectors before it's allowed to run.
+const READINESS_STATUS = {
+  active:        { color: 'var(--bp-green)',  dot: '🟢', label: 'Active' },
+  pending:       { color: 'var(--bp-amber)',  dot: '🟡', label: 'Pending' },
+  paused:        { color: 'var(--bp-text-3)', dot: '⏸',  label: 'Paused' },
+  retired:       { color: 'var(--bp-text-3)', dot: '⚪', label: 'Retired' },
+  not_installed: { color: 'var(--bp-text-3)', dot: '⚪', label: 'Not hired' },
+}
+
 function fmtRel(iso) {
   if (!iso) return '—'
   try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) }
@@ -215,18 +226,39 @@ function AgentsTable({ agents, onRun }) {
         </thead>
         <tbody>
           {agents.map((a) => {
+            // Readiness is the authoritative lifecycle state. Show it first
+            // whenever the agent isn't active — a pending agent isn't idle,
+            // it's waiting for data. Operational status (ok/failing) only
+            // matters once readiness_status='active'.
+            const readinessCfg = READINESS_STATUS[a.readiness_status] ?? null
+            const isActive = !a.readiness_status || a.readiness_status === 'active'
             const cfg = AGENT_STATUS[a.status] ?? AGENT_STATUS.idle
-            const isFailing = a.status === 'failing'
-            const rowBg = isFailing ? 'rgba(255,82,82,0.05)' : 'transparent'
-            const dot = a.status === 'ok' && a.runs_7d === 0 ? '⚪'
-                      : a.status === 'ok' ? '🟢'
-                      : a.status === 'failing' ? '🔴'
-                      : '⚪'
-            const statusLabel = a.status === 'ok' && a.runs_7d === 0 ? 'Idle' : cfg.label
+            const isFailing = isActive && a.status === 'failing'
+            const rowBg = isFailing
+              ? 'rgba(255,82,82,0.05)'
+              : (!isActive ? 'rgba(245,158,11,0.04)' : 'transparent')
+
+            let dot, statusLabel, statusColor, statusTitle
+            if (readinessCfg && !isActive) {
+              dot = readinessCfg.dot
+              statusLabel = readinessCfg.label
+              statusColor = readinessCfg.color
+              statusTitle = a.readiness_reason || undefined
+              if (a.readiness_status === 'pending' && a.missing_required?.length) {
+                statusLabel = `Pending — waiting for ${a.missing_required.join(', ')}`
+              }
+            } else {
+              dot = a.status === 'ok' && a.runs_7d === 0 ? '⚪'
+                  : a.status === 'ok' ? '🟢'
+                  : a.status === 'failing' ? '🔴'
+                  : '⚪'
+              statusLabel = a.status === 'ok' && a.runs_7d === 0 ? 'Idle' : cfg.label
+              statusColor = cfg.color
+            }
             return (
               <tr key={a.id} style={{ borderBottom: '1px solid var(--bp-border)', background: rowBg }}>
                 <Td><strong style={{ color: 'var(--bp-text)' }}>{a.name}</strong></Td>
-                <Td><span style={{ color: cfg.color }}>{dot} {statusLabel}</span></Td>
+                <Td><span style={{ color: statusColor }} title={statusTitle}>{dot} {statusLabel}</span></Td>
                 <Td>{fmtRel(a.last_run)}</Td>
                 <Td align="right">{a.runs_7d}</Td>
                 <Td align="right">

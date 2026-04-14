@@ -18,6 +18,7 @@ connectors_required:
 connectors_optional:
   - ga4
   - stripe
+  - klaviyo
 schedule:
   - id: daily-catalogue-check
     cron: 0 9 * * 1-5
@@ -39,3 +40,4 @@ required_connectors:
 preferred_connectors:
   - ga4
   - stripe
+  - klaviyo

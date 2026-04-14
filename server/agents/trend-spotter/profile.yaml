@@ -20,6 +20,8 @@ connectors_optional:
   - gsc
   - ga4
   - shopify
+  - social
+  - buffer
 
 schedule:
   - id: weekly-opportunity-scan

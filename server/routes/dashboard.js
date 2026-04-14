@@ -148,8 +148,11 @@ router.get('/:businessId', (req, res) => {
       SELECT COUNT(*) as cnt FROM tasks WHERE business_id = ? AND status IN ('proposed', 'approved')
     `).get(businessId)?.cnt ?? 0;
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+    // Exclude 'skipped' runs: an agent that skipped because readiness wasn't
+    // met is not meaningful activity for the dashboard counter.
     const agentRunsToday = db.prepare(`
-      SELECT COUNT(*) as cnt FROM agent_runs WHERE business_id = ? AND started_at >= ?
+      SELECT COUNT(*) as cnt FROM agent_runs
+      WHERE business_id = ? AND started_at >= ? AND status != 'skipped'
     `).get(businessId, todayStart.toISOString())?.cnt ?? 0;
 
     const signals = db.prepare(`

@@ -37,3 +37,16 @@
 
 ## Connector unavailability
 If PageSpeed is unreachable: skip run, log reason, notify Conductor. Performance data cannot be estimated.
+
+## Data quality requirements
+Before proposing any task, signal, or KB entry, I must confirm:
+- I have at least one successful sync of PageSpeed in the last 48 hours
+- Every regression I call out cites a specific URL, metric (LCP, CLS, FID, performance score) and a before/after number from that synced data
+- I am not guessing performance from stale scores or inferring fixes I haven't measured
+
+If I cannot confirm all three:
+1. I note what data is missing in my run reasoning
+2. I propose no tasks
+3. I create no signals
+4. I file nothing to the KB
+5. I return a clean skip with explanation for Conductor only

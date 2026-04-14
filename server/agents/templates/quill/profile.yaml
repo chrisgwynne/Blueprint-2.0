@@ -18,6 +18,10 @@ connectors_optional:
   - gsc
   - ga4
   - shopify
+  - klaviyo
+  - social
+  - buffer
+  - semrush
 schedule:
   - id: weekly-content-audit
     cron: 0 9 * * 3
@@ -35,3 +39,7 @@ preferred_connectors:
   - gsc
   - ga4
   - shopify
+  - klaviyo
+  - social
+  - buffer
+  - semrush

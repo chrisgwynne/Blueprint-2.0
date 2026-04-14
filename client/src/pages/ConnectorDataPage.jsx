@@ -37,6 +37,12 @@ const CONNECTOR_META = {
   kirby:         { icon: FileText,    label: 'Kirby',              color: 'var(--bp-amber)' },
   'google-ads':  { icon: TrendingUp,  label: 'Google Ads',         color: 'var(--bp-amber)' },
   'meta-ads':    { icon: Target,      label: 'Meta Ads',           color: '#1877F2' },
+  klaviyo:       { icon: Mail,        label: 'Klaviyo',            color: '#FF6B35' },
+  semrush:       { icon: TrendingUp,  label: 'SEMrush',            color: '#FF642D' },
+  social:        { icon: MessageSquare, label: 'Facebook & Instagram', color: '#1877F2' },
+  buffer:        { icon: Send,        label: 'Buffer',             color: '#168EEA' },
+  wix:           { icon: Globe,       label: 'Wix',                color: '#0046FF' },
+  'server-access': { icon: Database,  label: 'Server (SSH/FTP)',   color: 'var(--bp-red)' },
   default:       { icon: Database,    label: 'Data Source',        color: 'var(--bp-text-3)' },
 }
 
@@ -56,6 +62,12 @@ const CONNECTOR_TABS = {
   kirby:         ['Overview', 'Pages', 'Drafts', 'Content Health', 'Raw Data'],
   'google-ads':  ['Overview', 'Campaigns', 'Keywords', 'Performance', 'Budget', 'Raw Data'],
   'meta-ads':    ['Overview', 'Campaigns', 'Audiences', 'Creative', 'Raw Data'],
+  klaviyo:       ['Overview', 'Campaigns', 'Flows', 'Lists', 'Raw Data'],
+  semrush:       ['Overview', 'Keywords', 'Competitors', 'Opportunities', 'Raw Data'],
+  social:        ['Overview', 'Facebook', 'Instagram', 'Posts', 'Raw Data'],
+  buffer:        ['Overview', 'Queue', 'Recent Posts', 'Raw Data'],
+  wix:           ['Overview', 'Pages', 'Blog', 'SEO Audit', 'Raw Data'],
+  'server-access': ['Overview', 'File Explorer', 'Error Log', 'Changes', 'Backups', 'Raw Data'],
   default:       ['Overview', 'Raw Data'],
 }
 
@@ -1872,8 +1884,735 @@ function renderTab(connector, tab, data, range) {
     if (tab === 'Contacts') return <BrevoContacts metrics={metrics} />
     if (tab === 'Transactional') return <BrevoTransactional metrics={metrics} summary={summary} />
   }
+  if (type === 'klaviyo') {
+    if (tab === 'Overview')  return <KlaviyoOverview  metrics={metrics} />
+    if (tab === 'Campaigns') return <KlaviyoCampaigns metrics={metrics} />
+    if (tab === 'Flows')     return <KlaviyoFlows     metrics={metrics} />
+    if (tab === 'Lists')     return <KlaviyoLists     metrics={metrics} />
+  }
+  if (type === 'semrush') {
+    if (tab === 'Overview')      return <SemrushOverview      metrics={metrics} />
+    if (tab === 'Keywords')      return <SemrushKeywords      metrics={metrics} />
+    if (tab === 'Competitors')   return <SemrushCompetitors   metrics={metrics} />
+    if (tab === 'Opportunities') return <SemrushOpportunities metrics={metrics} />
+  }
+  if (type === 'social') {
+    if (tab === 'Overview')  return <SocialOverview metrics={metrics} />
+    if (tab === 'Facebook')  return <SocialOverview metrics={metrics} />
+    if (tab === 'Instagram') return <SocialOverview metrics={metrics} />
+    if (tab === 'Posts')     return <SocialPosts    metrics={metrics} />
+  }
+  if (type === 'buffer') {
+    if (tab === 'Overview')     return <BufferOverview     metrics={metrics} />
+    if (tab === 'Queue')        return <BufferQueue        metrics={metrics} />
+    if (tab === 'Recent Posts') return <BufferRecentPosts  metrics={metrics} />
+  }
+  if (type === 'wix') {
+    if (tab === 'Overview')   return <WixOverview   metrics={metrics} />
+    if (tab === 'Pages')      return <WixPages      metrics={metrics} />
+    if (tab === 'Blog')       return <WixBlog       metrics={metrics} />
+    if (tab === 'SEO Audit')  return <WixSeoAudit   metrics={metrics} />
+  }
+  if (type === 'server-access') {
+    if (tab === 'Overview')       return <ServerAccessOverview      connector={connector} metrics={metrics} />
+    if (tab === 'File Explorer')  return <ServerAccessFileExplorer  metrics={metrics} />
+    if (tab === 'Error Log')      return <ServerAccessErrorLog      metrics={metrics} />
+    if (tab === 'Changes')        return <ServerAccessChanges       connector={connector} />
+    if (tab === 'Backups')        return <ServerAccessBackups       connector={connector} />
+  }
 
   return <EmptyState message="This view is coming soon." />
+}
+
+// ─── Klaviyo / SEMrush / Social / Buffer Tabs ───────────────────────────────
+
+// Small table cell helpers used across the new connector tabs. Kept local
+// to this file; consistent with existing inline-styled tables elsewhere.
+function Th({ children, align = 'left' }) {
+  return (
+    <th style={{
+      textAlign: align, padding: '10px 12px', fontWeight: 600,
+      color: 'var(--bp-text-3)', fontSize: 10, letterSpacing: '0.08em',
+      textTransform: 'uppercase', borderBottom: '1px solid var(--bp-border)',
+    }}>
+      {children}
+    </th>
+  )
+}
+function Td({ children, align = 'left', style }) {
+  return (
+    <td style={{
+      textAlign: align, padding: '9px 12px', color: 'var(--bp-text-2)',
+      ...(style ?? {}),
+    }}>
+      {children}
+    </td>
+  )
+}
+
+function num(v, fallback = 0) {
+  if (v === null || v === undefined) return fallback
+  const n = typeof v === 'number' ? v : parseFloat(v)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function latestValue(metrics, key) {
+  return num(metrics?.latest?.[key] ?? null)
+}
+
+function latestData(metrics, key) {
+  const m = metrics?.series?.[key] ?? []
+  const withData = m.find(r => r.metric_data)
+  if (!withData) return null
+  try {
+    return typeof withData.metric_data === 'string'
+      ? JSON.parse(withData.metric_data)
+      : withData.metric_data
+  } catch { return null }
+}
+
+function KlaviyoOverview({ metrics }) {
+  const attributed = latestValue(metrics, 'klaviyo.total_attributed_revenue_30d')
+  const perEmail = latestValue(metrics, 'klaviyo.revenue_per_email_sent')
+  const subs = latestValue(metrics, 'klaviyo.total_subscribers')
+  const unsub = latestValue(metrics, 'klaviyo.unsubscribe_rate_30d') * 100
+  const openRate = latestValue(metrics, 'klaviyo.campaign_open_rate') * 100
+  const clickRate = latestValue(metrics, 'klaviyo.campaign_click_rate') * 100
+  const campaignRev = latestValue(metrics, 'klaviyo.campaign_revenue_30d')
+  const flowRev = latestValue(metrics, 'klaviyo.flow_revenue_30d')
+  const acRev = latestValue(metrics, 'klaviyo.flow_abandoned_cart_revenue')
+  const healthColor = openRate >= 20 ? 'var(--bp-green)'
+                   : openRate >= 15 ? 'var(--bp-amber)'
+                   : 'var(--bp-red)'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+        <MetricCard label="Attributed Revenue (30d)" value={attributed} format="currency" accent="var(--bp-green)" />
+        <MetricCard label="Revenue / Email Sent" value={perEmail} format="currency" />
+        <MetricCard label="Active Subscribers" value={subs} />
+        <MetricCard label="Unsubscribe Rate" value={unsub} format="pct" invertPolarity accent={unsub > 0.5 ? 'var(--bp-red)' : undefined} />
+        <MetricCard label="Campaign Open Rate" value={openRate} format="pct" accent={healthColor} />
+        <MetricCard label="Campaign Click Rate" value={clickRate} format="pct" />
+      </div>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+          Revenue breakdown (last 30 days)
+        </div>
+        <div style={{ display: 'flex', gap: 2, height: 28, borderRadius: 4, overflow: 'hidden', marginBottom: 8 }}>
+          {(() => {
+            const total = campaignRev + flowRev
+            if (total === 0) return <div style={{ flex: 1, background: 'var(--bp-surface-2)' }} />
+            return [
+              <div key="c" style={{ flex: campaignRev, background: 'var(--bp-blue)' }} title={`Campaigns £${campaignRev.toFixed(0)}`} />,
+              <div key="f" style={{ flex: flowRev, background: 'var(--bp-green)' }} title={`Flows £${flowRev.toFixed(0)}`} />,
+            ]
+          })()}
+        </div>
+        <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          <div><span style={{ color: 'var(--bp-blue)' }}>●</span> Campaigns: £{campaignRev.toFixed(0)}</div>
+          <div><span style={{ color: 'var(--bp-green)' }}>●</span> Flows: £{flowRev.toFixed(0)} (abandoned cart £{acRev.toFixed(0)})</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function KlaviyoCampaigns({ metrics }) {
+  const rows = latestData(metrics, 'klaviyo.campaigns_data') ?? []
+  if (!rows.length) return <EmptyState message="No campaigns in the last 30 days." />
+  const sorted = [...rows].sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Campaign</Th><Th>Sent</Th><Th align="right">Recipients</Th><Th align="right">Open %</Th><Th align="right">Click %</Th><Th align="right">Revenue</Th>
+        </tr></thead>
+        <tbody>{sorted.map((c, i) => (
+          <tr key={c.id || i} style={{ borderBottom: '1px solid var(--bp-border)', background: i === 0 ? 'rgba(0,201,167,0.05)' : 'transparent' }}>
+            <Td><strong>{c.name}</strong></Td>
+            <Td>{c.send_time ? format(parseISO(c.send_time), 'MMM d') : '—'}</Td>
+            <Td align="right">{(c.recipients || 0).toLocaleString()}</Td>
+            <Td align="right">{((c.open_rate || 0) * 100).toFixed(1)}%</Td>
+            <Td align="right">{((c.click_rate || 0) * 100).toFixed(1)}%</Td>
+            <Td align="right">£{(c.revenue || 0).toFixed(0)}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function KlaviyoFlows({ metrics }) {
+  const rows = latestData(metrics, 'klaviyo.flows_data') ?? []
+  if (!rows.length) return <EmptyState message="No live flows detected." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Flow</Th><Th>Class</Th><Th>Status</Th><Th align="right">Recipients</Th><Th align="right">Revenue (30d)</Th><Th align="right">£ / Recipient</Th>
+        </tr></thead>
+        <tbody>{rows.map((f, i) => (
+          <tr key={f.id || i} style={{ borderBottom: '1px solid var(--bp-border)', background: f.class === 'abandoned_cart' && (f.revenue || 0) > 0 ? 'rgba(0,201,167,0.05)' : 'transparent' }}>
+            <Td><strong>{f.name}</strong></Td>
+            <Td>{f.class || '—'}</Td>
+            <Td>{f.status}</Td>
+            <Td align="right">{(f.recipients || 0).toLocaleString()}</Td>
+            <Td align="right">£{(f.revenue || 0).toFixed(0)}</Td>
+            <Td align="right">£{(f.revenue_per_recipient || 0).toFixed(2)}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function KlaviyoLists({ metrics }) {
+  const rows = latestData(metrics, 'klaviyo.lists_data') ?? []
+  if (!rows.length) return <EmptyState message="No lists found." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}><Th>List</Th><Th align="right">Subscribers</Th><Th>Opt-in</Th><Th>Created</Th></tr></thead>
+        <tbody>{rows.map((l, i) => (
+          <tr key={l.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><strong>{l.name}</strong></Td>
+            <Td align="right">{(l.profile_count || 0).toLocaleString()}</Td>
+            <Td>{l.opt_in_process || '—'}</Td>
+            <Td>{l.created ? format(parseISO(l.created), 'MMM yyyy') : '—'}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function SemrushOverview({ metrics }) {
+  const rank = latestValue(metrics, 'semrush.domain_rank')
+  const keywords = latestValue(metrics, 'semrush.organic_keywords_total')
+  const traffic = latestValue(metrics, 'semrush.organic_traffic_estimate')
+  const value = latestValue(metrics, 'semrush.organic_cost_estimate')
+  const top3 = latestValue(metrics, 'semrush.keywords_top3')
+  const top10 = latestValue(metrics, 'semrush.keywords_top10')
+  const top20 = latestValue(metrics, 'semrush.keywords_top20')
+  const gained = latestValue(metrics, 'semrush.keywords_positions_gained_7d')
+  const lost = latestValue(metrics, 'semrush.keywords_positions_lost_7d')
+
+  const bars = [
+    { label: 'Top 3', count: top3, color: 'var(--bp-green)' },
+    { label: 'Top 10', count: top10 - top3, color: 'var(--bp-blue)' },
+    { label: 'Top 20', count: top20, color: 'var(--bp-amber)' },
+  ]
+  const maxBar = Math.max(1, ...bars.map(b => b.count))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Domain Rank" value={rank} />
+        <MetricCard label="Organic Keywords" value={keywords} />
+        <MetricCard label="Est. Monthly Traffic" value={traffic} accent="var(--bp-blue)" />
+        <MetricCard label="Traffic Value" value={value} format="currency" accent="var(--bp-green)" />
+      </div>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+          Position distribution
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', height: 120, marginBottom: 8 }}>
+          {bars.map(b => (
+            <div key={b.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <div style={{ width: '100%', height: Math.round((b.count / maxBar) * 90) || 2, background: b.color, borderRadius: '2px 2px 0 0' }} />
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, fontWeight: 700 }}>{b.count}</div>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>{b.label}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          <div><span style={{ color: 'var(--bp-green)' }}>▲</span> {gained} gained (7d)</div>
+          <div><span style={{ color: 'var(--bp-red)' }}>▼</span> {lost} lost (7d)</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SemrushKeywords({ metrics }) {
+  const rows = latestData(metrics, 'semrush.top_keywords_data') ?? []
+  if (!rows.length) return <EmptyState message="No keyword data yet. Sync the connector." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden', maxHeight: 600, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
+          <Th>Keyword</Th><Th align="right">Pos</Th><Th align="right">Δ</Th><Th align="right">Volume</Th><Th align="right">Traffic</Th><Th>URL</Th>
+        </tr></thead>
+        <tbody>{rows.map((k, i) => {
+          const diff = Number(k.position_difference) || 0
+          const diffColor = diff < 0 ? 'var(--bp-green)' : diff > 0 ? 'var(--bp-red)' : 'var(--bp-text-3)'
+          return (
+            <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+              <Td><strong>{k.keyword}</strong></Td>
+              <Td align="right">{Math.round(Number(k.position) || 0)}</Td>
+              <Td align="right"><span style={{ color: diffColor }}>{diff > 0 ? `+${diff}` : diff}</span></Td>
+              <Td align="right">{(Number(k.search_volume) || 0).toLocaleString()}</Td>
+              <Td align="right">{(Number(k.traffic) || 0).toLocaleString()}</Td>
+              <Td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url}</Td>
+            </tr>
+          )
+        })}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function SemrushCompetitors({ metrics }) {
+  const rows = latestData(metrics, 'semrush.competitors_data') ?? []
+  if (!rows.length) return <EmptyState message="No competitor data yet." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Domain</Th><Th align="right">Shared Keywords</Th><Th align="right">Their Keywords</Th><Th align="right">Their Traffic</Th>
+        </tr></thead>
+        <tbody>{rows.map((c, i) => (
+          <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><strong>{c.domain}</strong></Td>
+            <Td align="right">{(Number(c.shared_keywords) || 0).toLocaleString()}</Td>
+            <Td align="right">{(Number(c.organic_keywords) || 0).toLocaleString()}</Td>
+            <Td align="right">{(Number(c.organic_traffic) || 0).toLocaleString()}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function SemrushOpportunities({ metrics }) {
+  const rows = latestData(metrics, 'semrush.opportunities_data') ?? []
+  if (!rows.length) return <EmptyState message="No page-2 opportunities — either no data yet or all keywords already on page 1." />
+  return (
+    <>
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginBottom: 12 }}>
+        Keywords in positions 11–20. Content improvements could push them onto page 1.
+      </div>
+      <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+          <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+            <Th>Keyword</Th><Th align="right">Position</Th><Th align="right">Search Volume</Th><Th>Current URL</Th>
+          </tr></thead>
+          <tbody>{rows.map((k, i) => (
+            <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+              <Td><strong>{k.keyword}</strong></Td>
+              <Td align="right">{Math.round(Number(k.position) || 0)}</Td>
+              <Td align="right">{(Number(k.search_volume) || 0).toLocaleString()}</Td>
+              <Td style={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.url}</Td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </>
+  )
+}
+
+function SocialOverview({ metrics }) {
+  const fbFollowers = latestValue(metrics, 'fb.page_followers')
+  const fbReach = latestValue(metrics, 'fb.page_reach_30d')
+  const fbEngRate = latestValue(metrics, 'fb.page_engagement_rate') * 100
+  const fbPosts = latestValue(metrics, 'fb.posts_published_30d')
+  const igFollowers = latestValue(metrics, 'ig.followers')
+  const igReach = latestValue(metrics, 'ig.reach_30d')
+  const igProfileViews = latestValue(metrics, 'ig.profile_views_30d')
+  const igWebClicks = latestValue(metrics, 'ig.website_clicks_30d')
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Facebook</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <MetricCard label="Followers" value={fbFollowers} />
+          <MetricCard label="Reach (30d)" value={fbReach} />
+          <MetricCard label="Engagement Rate" value={fbEngRate} format="pct" />
+          <MetricCard label="Posts (30d)" value={fbPosts} />
+        </div>
+      </div>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 12 }}>Instagram</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <MetricCard label="Followers" value={igFollowers} />
+          <MetricCard label="Reach (30d)" value={igReach} />
+          <MetricCard label="Profile Views" value={igProfileViews} />
+          <MetricCard label="Website Clicks" value={igWebClicks} accent="var(--bp-blue)" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SocialPosts({ metrics }) {
+  const fb = latestData(metrics, 'fb.recent_posts_data') ?? []
+  const ig = latestData(metrics, 'ig.recent_posts_data') ?? []
+  const combined = [
+    ...fb.map(p => ({ platform: 'facebook', text: p.message, reach: p.reach, engagement: p.engaged_users, date: p.created_time, url: p.permalink_url })),
+    ...ig.map(p => ({ platform: 'instagram', text: p.caption, reach: p.reach, engagement: (p.likes || 0) + (p.comments || 0) + (p.saved || 0), date: p.timestamp, url: p.permalink })),
+  ].sort((a, b) => (b.reach || 0) - (a.reach || 0))
+  if (!combined.length) return <EmptyState message="No posts synced yet." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Platform</Th><Th>Post</Th><Th>Date</Th><Th align="right">Reach</Th><Th align="right">Engagement</Th>
+        </tr></thead>
+        <tbody>{combined.slice(0, 50).map((p, i) => (
+          <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td>{p.platform}</Td>
+            <Td style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {p.url
+                ? <a href={p.url} target="_blank" rel="noreferrer" style={{ color: 'var(--bp-text)' }}>{p.text || '(no caption)'}</a>
+                : (p.text || '(no caption)')}
+            </Td>
+            <Td>{p.date ? format(parseISO(p.date), 'MMM d') : '—'}</Td>
+            <Td align="right">{(p.reach || 0).toLocaleString()}</Td>
+            <Td align="right">{(p.engagement || 0).toLocaleString()}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function BufferOverview({ metrics }) {
+  const profiles = latestValue(metrics, 'buffer.profiles_connected')
+  const published = latestValue(metrics, 'buffer.posts_published_30d')
+  const pending = latestValue(metrics, 'buffer.posts_scheduled_pending')
+  const avgEng = latestValue(metrics, 'buffer.avg_post_engagement_30d')
+  const topMeta = latestData(metrics, 'buffer.top_performing_platform')
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Profiles Connected" value={profiles} />
+        <MetricCard label="Published (30d)" value={published} />
+        <MetricCard label="In Queue" value={pending} accent={pending === 0 ? 'var(--bp-red)' : pending < 5 ? 'var(--bp-amber)' : 'var(--bp-green)'} />
+        <MetricCard label="Avg Engagement" value={avgEng} />
+      </div>
+      {topMeta?.platform && (
+        <div className="bp-card" style={{ padding: 14, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          Top performing platform: <strong style={{ color: 'var(--bp-text)' }}>{topMeta.platform}</strong> (avg engagement {topMeta.avg_engagement})
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BufferQueue({ metrics }) {
+  const rows = latestData(metrics, 'buffer.scheduled_queue') ?? []
+  if (!rows.length) return <EmptyState message="No posts scheduled." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}><Th>Platform</Th><Th>Scheduled</Th><Th>Post</Th></tr></thead>
+        <tbody>{rows.map((u, i) => (
+          <tr key={u.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td>{u.service}</Td>
+            <Td>{u.scheduled_at_iso ? format(parseISO(u.scheduled_at_iso), 'MMM d HH:mm') : '—'}</Td>
+            <Td style={{ maxWidth: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.text || '(no text)'}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function BufferRecentPosts({ metrics }) {
+  const rows = latestData(metrics, 'buffer.recent_posts_data') ?? []
+  if (!rows.length) return <EmptyState message="No recent posts." />
+  const sorted = [...rows].sort((a, b) => (b.engagement || 0) - (a.engagement || 0))
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Platform</Th><Th>Post</Th><Th>Sent</Th><Th align="right">Reach</Th><Th align="right">Clicks</Th><Th align="right">Engagement</Th>
+        </tr></thead>
+        <tbody>{sorted.map((u, i) => (
+          <tr key={u.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td>{u.service}</Td>
+            <Td style={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.text || '(no text)'}</Td>
+            <Td>{u.sent_at_iso ? format(parseISO(u.sent_at_iso), 'MMM d') : '—'}</Td>
+            <Td align="right">{(u.reach || 0).toLocaleString()}</Td>
+            <Td align="right">{(u.clicks || 0).toLocaleString()}</Td>
+            <Td align="right">{(u.engagement || 0).toLocaleString()}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+// ─── Wix tabs ───────────────────────────────────────────────────────────────
+
+function WixOverview({ metrics }) {
+  const totalPages = latestValue(metrics, 'wix.total_pages')
+  const posts = latestValue(metrics, 'wix.blog_posts_total')
+  const score = latestValue(metrics, 'wix.seo_score')
+  const sessions = latestValue(metrics, 'wix.sessions_30d')
+  const noSeoTitle = latestValue(metrics, 'wix.pages_no_seo_title')
+  const noMetaDesc = latestValue(metrics, 'wix.pages_no_meta_description')
+  const noindex = latestValue(metrics, 'wix.pages_noindexed')
+
+  const scoreColor = score >= 80 ? 'var(--bp-green)'
+                   : score >= 60 ? 'var(--bp-amber)'
+                   : 'var(--bp-red)'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Total Pages" value={totalPages} />
+        <MetricCard label="Blog Posts" value={posts} />
+        <MetricCard label="SEO Score" value={score} accent={scoreColor} />
+        <MetricCard label="Sessions (30d)" value={sessions} />
+      </div>
+      <div className="bp-card" style={{ padding: 16 }}>
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+          SEO health
+        </div>
+        <div style={{ height: 8, background: 'var(--bp-surface-2)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 }}>
+          <div style={{ width: `${Math.max(0, Math.min(100, score))}%`, height: '100%', background: scoreColor, transition: 'width 0.3s' }} />
+        </div>
+        <div style={{ display: 'flex', gap: 16, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          <div>Missing title: <strong style={{ color: noSeoTitle > 0 ? 'var(--bp-amber)' : 'var(--bp-text)' }}>{noSeoTitle}</strong></div>
+          <div>Missing description: <strong style={{ color: noMetaDesc > 0 ? 'var(--bp-amber)' : 'var(--bp-text)' }}>{noMetaDesc}</strong></div>
+          <div>Noindexed: <strong style={{ color: noindex > 0 ? 'var(--bp-red)' : 'var(--bp-text)' }}>{noindex}</strong></div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function WixPages({ metrics }) {
+  const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
+  if (!audit.length) return <EmptyState message="No pages synced yet." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Page</Th><Th>URL</Th><Th>SEO Title</Th><Th>Meta Desc</Th><Th>Indexed</Th><Th align="right">Score</Th>
+        </tr></thead>
+        <tbody>{audit.map((p, i) => (
+          <tr key={p.pageId || i} style={{ borderBottom: '1px solid var(--bp-border)',
+            background: p.score < 60 ? 'rgba(255,82,82,0.05)' : 'transparent' }}>
+            <Td><strong>{p.pageTitle}</strong></Td>
+            <Td style={{ maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.pageUrl}</Td>
+            <Td>{p.has_seo_title ? (p.seo_title_ok ? '✓' : '! length') : '✗ missing'}</Td>
+            <Td>{p.has_meta_description ? (p.meta_desc_ok ? '✓' : '! length') : '✗ missing'}</Td>
+            <Td>{p.is_indexed ? '✓' : '✗ noindex'}</Td>
+            <Td align="right"><strong style={{ color: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)' }}>{p.score}</strong></Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function WixBlog({ metrics }) {
+  const posts = latestData(metrics, 'wix.posts_data') ?? []
+  if (!posts.length) return <EmptyState message="No blog posts found." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>Title</Th><Th>Published</Th><Th>Status</Th><Th>SEO</Th>
+        </tr></thead>
+        <tbody>{posts.map((p, i) => {
+          const seo = p.seo ?? {}
+          const hasSeo = !!(seo.title && seo.description)
+          return (
+            <tr key={p.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+              <Td><strong>{p.title}</strong></Td>
+              <Td>{p.publishedDate ? format(parseISO(p.publishedDate), 'MMM d yyyy') : '—'}</Td>
+              <Td>{p.status || '—'}</Td>
+              <Td>{hasSeo ? '✓' : <span style={{ color: 'var(--bp-amber)' }}>needs SEO</span>}</Td>
+            </tr>
+          )
+        })}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function WixSeoAudit({ metrics }) {
+  const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
+  if (!audit.length) return <EmptyState message="No SEO audit data yet." />
+  const worst = [...audit].sort((a, b) => a.score - b.score)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {worst.map((p, i) => (
+        <div key={p.pageId || i} className="bp-card" style={{ padding: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ flex: 1, fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)' }}>{p.pageTitle}</div>
+            <div style={{
+              fontFamily: 'var(--bp-font-mono)', fontSize: 14, fontWeight: 700,
+              color: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)',
+            }}>{p.score}</div>
+          </div>
+          <div style={{ height: 4, background: 'var(--bp-surface-2)', borderRadius: 2, overflow: 'hidden', marginBottom: 8 }}>
+            <div style={{
+              width: `${p.score}%`, height: '100%',
+              background: p.score >= 80 ? 'var(--bp-green)' : p.score >= 60 ? 'var(--bp-amber)' : 'var(--bp-red)',
+            }} />
+          </div>
+          {p.issues.length > 0 ? (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontFamily: 'var(--bp-font-mono)', fontSize: 9 }}>
+              {p.issues.map((issue, j) => (
+                <span key={j} style={{
+                  padding: '2px 6px', borderRadius: 3,
+                  background: 'rgba(245,158,11,0.15)', color: 'var(--bp-amber)',
+                }}>
+                  {issue.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-green)' }}>No issues</div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ─── Server-access tabs ─────────────────────────────────────────────────────
+
+function ServerAccessOverview({ connector, metrics }) {
+  const phpErrors = latestValue(metrics, 'server.php_errors_24h')
+  const fatalErrors = latestValue(metrics, 'server.php_fatal_errors_24h')
+  const disk = latestValue(metrics, 'server.disk_usage_pct')
+  const totalFiles = latestValue(metrics, 'server.files_total')
+  const siteType = connector?.config?.siteType || 'custom'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div className="bp-card" style={{ padding: 16, background: 'rgba(255,82,82,0.05)', border: '1px solid rgba(255,82,82,0.3)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <AlertTriangle size={18} style={{ color: 'var(--bp-red)', flexShrink: 0, marginTop: 1 }} />
+          <div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13, color: 'var(--bp-text)', marginBottom: 4 }}>
+              Write access is gated
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5 }}>
+              Agents can read files freely but every write creates a task with the exact diff. Writes only execute after you approve the task. Every write takes a backup first — rollback is one click away from the Changes tab.
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Site Type" value={siteType} />
+        <MetricCard label="Files Tracked" value={totalFiles} />
+        <MetricCard label="PHP Errors (24h)" value={phpErrors} accent={phpErrors > 0 ? 'var(--bp-amber)' : undefined} />
+        <MetricCard label="Disk Usage" value={disk} format="pct" accent={disk > 80 ? 'var(--bp-red)' : disk > 60 ? 'var(--bp-amber)' : 'var(--bp-green)'} />
+      </div>
+      {fatalErrors > 0 && (
+        <div className="bp-card" style={{ padding: 14, background: 'rgba(255,82,82,0.08)', border: '1px solid var(--bp-red)' }}>
+          <div style={{ color: 'var(--bp-red)', fontFamily: 'var(--bp-font-display)', fontWeight: 600, fontSize: 13 }}>
+            {fatalErrors} PHP fatal error(s) in the last 24 hours — check the Error Log tab.
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ServerAccessFileExplorer({ metrics }) {
+  const files = latestData(metrics, 'server.site_structure') ?? []
+  if (!files.length) return <EmptyState message="No files indexed yet. Trigger a sync." />
+  const grouped = {}
+  for (const f of files) {
+    const parts = f.path.split('/')
+    const dir = parts.slice(0, -1).join('/')
+    if (!grouped[dir]) grouped[dir] = []
+    grouped[dir].push(f)
+  }
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden', maxHeight: 600, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
+          <Th>Path</Th><Th align="right">Size</Th><Th>Modified</Th>
+        </tr></thead>
+        <tbody>{Object.entries(grouped).map(([dir, groupFiles]) => (
+          <React.Fragment key={dir}>
+            <tr><Td colSpan="3" style={{ background: 'var(--bp-surface-2)', fontWeight: 700, color: 'var(--bp-text-3)' }}>{dir || '/'}</Td></tr>
+            {groupFiles.map((f, i) => (
+              <tr key={f.path} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+                <Td style={{ paddingLeft: 28 }}>{f.name}</Td>
+                <Td align="right">{(f.size / 1024).toFixed(1)} KB</Td>
+                <Td>{f.modified ? format(parseISO(f.modified), 'MMM d HH:mm') : '—'}</Td>
+              </tr>
+            ))}
+          </React.Fragment>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessErrorLog({ metrics }) {
+  const entries = latestData(metrics, 'server.recent_errors') ?? []
+  if (!entries.length) return <EmptyState message="No server errors found (or error log not accessible)." />
+  const TYPE_COLORS = {
+    fatal: 'var(--bp-red)', error: 'var(--bp-red)',
+    '5xx': 'var(--bp-red)', warning: 'var(--bp-amber)',
+    notice: 'var(--bp-text-3)', '404': 'var(--bp-amber)',
+    info: 'var(--bp-text-3)',
+  }
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden', maxHeight: 600, overflowY: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
+          <Th>Type</Th><Th>Timestamp</Th><Th>Message</Th>
+        </tr></thead>
+        <tbody>{entries.map((e, i) => (
+          <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><span style={{ color: TYPE_COLORS[e.type] || 'var(--bp-text-3)', fontWeight: 600, textTransform: 'uppercase' }}>{e.type}</span></Td>
+            <Td>{e.timestamp || '—'}</Td>
+            <Td style={{ maxWidth: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.line}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessChanges({ connector }) {
+  // Lists every file_write Blueprint has performed via this connector.
+  // Each row shows the resulting backup id so the user can trigger a
+  // rollback task.
+  const [changes, setChanges] = useState([])
+  useEffect(() => {
+    if (!connector?.id) return
+    fetch(`/api/connectors/${connector.id}/file-changes`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() : [])
+      .then(setChanges)
+      .catch(() => setChanges([]))
+  }, [connector?.id])
+  if (!changes.length) return <EmptyState message="No file writes yet. Blueprint will record every approved write here, with a one-click rollback." />
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
+          <Th>File</Th><Th>Task</Th><Th>Written</Th><Th>Backup</Th>
+        </tr></thead>
+        <tbody>{changes.map((c) => (
+          <tr key={c.id} style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            <Td><strong style={{ fontFamily: 'var(--bp-font-mono)' }}>{c.remote_path}</strong></Td>
+            <Td>{c.task_title ?? c.task_id?.slice(0, 8)}</Td>
+            <Td>{c.backed_up_at ? format(parseISO(c.backed_up_at), 'MMM d HH:mm') : '—'}</Td>
+            <Td>{c.id.slice(0, 8)}</Td>
+          </tr>
+        ))}</tbody>
+      </table>
+    </div>
+  )
+}
+
+function ServerAccessBackups({ connector }) {
+  return <ServerAccessChanges connector={connector} />
 }
 
 // ─── Main Page ────────────────────────────────────────────────────────────────

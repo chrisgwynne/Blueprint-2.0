@@ -47,8 +47,13 @@ router.get('/', (req, res) => {
         SELECT id, started_at FROM agent_runs
         WHERE agent_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1
       `).get(a.id);
+      // Skipped runs (readiness gate blocked them) are not meaningful for
+      // "is this agent healthy" — exclude so we don't conclude an agent is
+      // fine just because it skipped cleanly N times in a row.
       const recentRuns = db.prepare(`
-        SELECT status FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT 5
+        SELECT status FROM agent_runs
+        WHERE agent_id = ? AND status != 'skipped'
+        ORDER BY started_at DESC LIMIT 5
       `).all(a.id);
       const consecutiveFails = recentRuns.findIndex(r => r.status !== 'failed');
       const failing = consecutiveFails === -1 ? recentRuns.length : consecutiveFails;
@@ -85,7 +90,7 @@ router.get('/', (req, res) => {
       "SELECT COALESCE(SUM(cost_usd), 0) as t FROM agent_runs WHERE started_at >= ?"
     ).get(todayStart.toISOString())?.t ?? 0;
     const runsToday = db.prepare(
-      "SELECT COUNT(*) as c FROM agent_runs WHERE started_at >= ?"
+      "SELECT COUNT(*) as c FROM agent_runs WHERE started_at >= ? AND status != 'skipped'"
     ).get(todayStart.toISOString())?.c ?? 0;
 
     const payload = {

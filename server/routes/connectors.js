@@ -384,4 +384,33 @@ router.get('/:id/health', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/connectors/:id/file-changes
+ * Lists all approved-and-executed file writes for a server-access connector,
+ * joined to their task titles so the Changes tab can show what each write was
+ * for. Each row includes the backup id so a rollback task can reference it.
+ */
+router.get('/:id/file-changes', (req, res) => {
+  try {
+    const row = db.prepare('SELECT id, type FROM connectors WHERE id = ?').get(req.params.id);
+    if (!row) return res.status(404).json({ error: 'Connector not found.' });
+    if (row.type !== 'server-access') {
+      return res.json([]);
+    }
+    const rows = db.prepare(`
+      SELECT fb.id, fb.remote_path, fb.task_id, fb.backed_up_at, fb.content_hash,
+             t.title as task_title, t.status as task_status
+      FROM file_backups fb
+      LEFT JOIN tasks t ON t.id = fb.task_id
+      WHERE fb.connector_id = ?
+      ORDER BY fb.backed_up_at DESC
+      LIMIT 100
+    `).all(req.params.id);
+    return res.json(rows);
+  } catch (err) {
+    console.error('[connectors] file-changes error:', err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

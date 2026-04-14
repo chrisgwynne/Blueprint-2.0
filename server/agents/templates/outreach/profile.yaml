@@ -17,6 +17,9 @@ connectors_required:
   - stannp
 connectors_optional:
   - gbp
+  - social
+  - buffer
+  - klaviyo
 schedule:
   - id: weekly-campaign-review
     cron: 0 10 * * 4
@@ -33,3 +36,6 @@ required_connectors:
   - stannp
 preferred_connectors:
   - gbp
+  - social
+  - buffer
+  - klaviyo

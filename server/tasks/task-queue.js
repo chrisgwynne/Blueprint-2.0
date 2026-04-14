@@ -66,6 +66,7 @@ export function createTask(taskData) {
     estimated_impact = null,
     rollback_data = null,
     approval_mode = 'requires_approval',
+    degraded_data = 0,
   } = taskData;
 
   if (!business_id) throw new Error('business_id is required.');
@@ -80,8 +81,8 @@ export function createTask(taskData) {
       id, business_id, signal_id, mission_id, title, description,
       proposed_by, assigned_to, action_type, action_payload,
       status, trust_tier, priority, confidence, estimated_impact,
-      rollback_data, approval_mode, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?)
+      rollback_data, approval_mode, degraded_data, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     business_id,
@@ -99,6 +100,7 @@ export function createTask(taskData) {
     estimated_impact,
     rollback_data ? JSON.stringify(rollback_data) : null,
     approval_mode,
+    degraded_data ? 1 : 0,
     now,
     now
   );

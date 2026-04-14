@@ -70,8 +70,15 @@ function extractJSONFromLLM(text) {
 /**
  * Run a hiring analysis for a single business. Returns the number of hire
  * proposals created plus the full recommendations list.
+ *
+ * @param {string} businessId
+ * @param {object} [opts]
+ * @param {boolean} [opts.dryRun=false]  — when true, skip creating hire_agent
+ *   tasks. Used by the onboarding preview flow which renders recommendations
+ *   inline and lets the user hire directly, bypassing the task queue.
  */
-export async function analyseAndProposeHires(businessId) {
+export async function analyseAndProposeHires(businessId, opts = {}) {
+  const { dryRun = false } = opts;
   if (!businessId) throw new Error('businessId required');
 
   // 1. Active connectors for this business
@@ -145,7 +152,27 @@ export async function analyseAndProposeHires(businessId) {
     }));
   }
 
-  // 6. Create a hire_agent task for each high-confidence recommendation
+  // 6. Enrich recommendations with candidate metadata so callers (incl. the
+  //    onboarding preview) can render the agent's required/preferred
+  //    connectors alongside Conductor's reasoning.
+  const enriched = recommendations.map((r) => {
+    const candidate = candidates.find((c) => c.id === r.agent_id);
+    return {
+      ...r,
+      name: candidate?.name ?? r.agent_id,
+      title: candidate?.title ?? null,
+      required_connectors: candidate?.required ?? [],
+      preferred_connectors: candidate?.preferred ?? [],
+      preferred_met: candidate?.preferred_met ?? [],
+    };
+  });
+
+  // 7. Dry run — caller handles hiring directly (onboarding preview flow).
+  if (dryRun) {
+    return { proposed_hires: 0, recommendations: enriched, reason: 'dry_run' };
+  }
+
+  // 8. Create a hire_agent task for each high-confidence recommendation
   let proposed = 0;
   for (const r of recommendations) {
     if (!r.agent_id || (r.confidence ?? 0) < 0.7) continue;
@@ -180,7 +207,7 @@ export async function analyseAndProposeHires(businessId) {
     }
   }
 
-  return { proposed_hires: proposed, recommendations, reason: null };
+  return { proposed_hires: proposed, recommendations: enriched, reason: null };
 }
 
 async function reasonAboutHires(businessId, activeConnectors, candidates) {
