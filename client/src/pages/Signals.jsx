@@ -268,6 +268,7 @@ function CreateTaskPanel({ signal, onClose, onCreated }) {
         })
       } else {
         await createTask({
+          business_id: signal.business_id,
           title: title.trim(),
           description: description.trim(),
           signal_id: signal.id,
