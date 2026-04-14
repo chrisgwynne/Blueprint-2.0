@@ -5,15 +5,10 @@
  * transitions the task through executing → complete/failed, and records
  * outcomes + task_events.
  *
- * Currently supported action types:
- *   - github_issue   — create a GitHub issue (uses GitHub connector createIssue)
- *   - github_pr      — create a draft GitHub PR (uses GitHub connector createPR)
- *   - investigation  — no-op execution; just marks complete with a note (human action expected)
- *   - content_draft  — no-op execution; logs that content has been drafted in proposal
- *
  * To add a new action type:
- *   1. Add a case to executeTask()
- *   2. Implement the handler returning { outcome, outcome_data }
+ *   1. Add to EXECUTABLE_ACTION_TYPES
+ *   2. Add a case to executeTask()
+ *   3. Implement the handler returning { outcome, outcome_data }
  */
 import crypto from 'node:crypto';
 import db from '../db/db.js';
@@ -26,6 +21,7 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   'github_pr',
   'investigation',
   'content_draft',
+  'meta_update',
   'shopify_product_create',
   'shopify_product_update',
   'shopify_description_update',
@@ -42,6 +38,10 @@ const EXECUTABLE_ACTION_TYPES = new Set([
   // Server-access write (requires approved task + backup-before-write)
   'server_file_write',
   'server_file_rollback',
+  // Soft write-backs: create KB drafts or issue instructions (no direct API write)
+  'gbp_update',
+  'klaviyo_flow_update',
+  'meta_ads_update',
 ]);
 
 export function isExecutable(actionType) {
@@ -187,141 +187,395 @@ async function executeGithubPR(task) {
   };
 }
 
+// ─── Investigation LLM system prompt ─────────────────────────────────────────
+
+const INVESTIGATION_SYSTEM_PROMPT = `You are Blueprint's investigation engine.
+You analyse business data and produce specific, actionable findings.
+Every claim must cite specific data provided in the user message.
+Never return null fields — if uncertain, say so explicitly with a low confidence score.
+Return only valid JSON. No prose outside the JSON object.`;
+
+function extractInvestigationJSON(content) {
+  if (!content) return null;
+  const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const str = fenced ? fenced[1] : (content.match(/\{[\s\S]*\}/)?.[0] ?? content);
+  try { return JSON.parse(str.trim()); } catch { return null; }
+}
+
+async function fileInvestigationToKB(task, findings) {
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const result = await getKBForBusiness(task.business_id);
+    if (!result?.engine) return;
+
+    const date = new Date().toISOString().split('T')[0];
+    const path = `research/investigation-${task.id.slice(0, 8)}-${date}.md`;
+
+    const actionTaskLines = (findings.action_tasks ?? []).map((t, i) =>
+      `${i + 1}. **${t.title}** (${t.action_type}, ${t.priority ?? 'p2'})\n   Expected: ${t.expected_impact ?? 'unknown'}`
+    ).join('\n');
+
+    const content = `# Investigation: ${task.title}
+
+**Date:** ${date}
+**Confidence:** ${Math.round((findings.confidence ?? 0) * 100)}%
+**Recommendation:** ${findings.recommendation ?? 'unknown'}
+
+## Summary
+${findings.summary ?? '(no summary)'}
+
+## Primary Cause
+${findings.primary_cause ?? '(unknown)'}
+
+## Evidence
+${(findings.evidence ?? []).map(e => `- ${e}`).join('\n') || '- (none recorded)'}
+
+## Explanation
+${findings.explanation ?? '(none)'}
+
+## Action Tasks Spawned
+${actionTaskLines || '(none — recommendation was not act_now)'}
+
+## Do Not Do
+${(findings.do_not_do ?? []).map(d => `- ${d}`).join('\n') || '- (none specified)'}
+
+## Measurement Plan
+- Metric: ${findings.measurement_plan?.primary_metric ?? 'unknown'}
+- Check at: ${findings.measurement_plan?.check_at_days ?? 14} days
+- Leading indicator: ${findings.measurement_plan?.leading_indicator?.metric ?? 'none'}
+`;
+
+    await result.engine.writeFile(
+      path, content,
+      {
+        title: `Investigation: ${task.title}`,
+        tags: ['investigation', findings.recommendation ?? 'unknown'],
+        written_by: 'conductor:investigation',
+        review_status: 'auto_approved',
+        task_id: task.id,
+        confidence: findings.confidence ?? null,
+      },
+      `investigation: ${task.title.slice(0, 60)}`
+    );
+  } catch (err) {
+    console.warn('[executor] fileInvestigationToKB failed (non-fatal):', err.message);
+  }
+}
+
 async function executeInvestigation(task) {
-  // Approving an investigation task should actually RUN the investigation,
-  // not mark it complete with a placeholder. Previously this returned a
-  // one-liner "queued for human review" and the task instantly landed in
-  // Complete with nothing to show.
-  const { runInvestigation } = await import('../brain/investigation-engine.js');
+  const { assembleInvestigationContext } = await import('./investigation/context-assembler.js');
+  const { buildInvestigationPrompt } = await import('./investigation/prompt-builder.js');
+  const { spawnFollowOnTasks } = await import('./investigation/task-spawner.js');
+  const { runLLM, resolveProfileLLM } = await import('../lib/llm-providers.js');
+  const { recordAgentActivity } = await import('../agents/activity.js');
 
-  // The investigation engine wants a specific metric OR a signal id OR a
-  // free-form question. For a task created from a signal, use the signal.
-  // Otherwise ship the task title + description as the question so the
-  // LLM has something to reason about.
-  const question = task.description
-    ? `${task.title}. ${task.description}`
-    : task.title;
+  // 1. Assemble full context from all relevant connectors
+  const context = await assembleInvestigationContext(task, task.business_id);
 
-  const investigation = await runInvestigation({
-    businessId: task.business_id,
-    signalId: task.signal_id ?? null,
-    metricName: task.action_payload?.metric_name ?? null,
-    question,
-    triggeredBy: `task:${task.id}`,
+  // 2. Build detailed prompt
+  const prompt = buildInvestigationPrompt(task, context);
+
+  // 3. Run LLM
+  const { providerId, model } = resolveProfileLLM({});
+  const startedAt = new Date().toISOString();
+  let llmResult;
+  try {
+    llmResult = await runLLM(providerId, model, {
+      system: INVESTIGATION_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.2,
+      max_tokens: 4096,
+    });
+  } catch (err) {
+    recordAgentActivity({
+      agentId: 'conductor', businessId: task.business_id, trigger: 'investigation',
+      status: 'failed', reasoning: `Investigation LLM failed: ${err.message.slice(0, 160)}`,
+      error: err.message.slice(0, 500), startedAt,
+    });
+    throw new Error(`Investigation LLM call failed (${providerId}/${model}): ${err.message}`);
+  }
+
+  recordAgentActivity({
+    agentId: 'conductor', businessId: task.business_id, trigger: 'investigation',
+    status: 'complete', reasoning: `Investigation: ${task.title.slice(0, 80)}`,
+    usage: llmResult?.usage, cost_usd: llmResult?.cost_usd, startedAt,
   });
 
-  if (!investigation) {
-    // Shouldn't happen now that runInvestigation throws on failure, but guard
-    // in case the engine returned a shape we didn't expect.
-    throw new Error('Investigation engine returned no result.');
+  // 4. Parse findings
+  const findings = extractInvestigationJSON(llmResult?.content ?? '');
+  if (!findings) {
+    const preview = (llmResult?.content ?? '').slice(0, 200);
+    throw new Error(`Investigation LLM returned invalid JSON.${preview ? ' Preview: ' + preview : ''}`);
   }
 
-  // Spawn follow-on action tasks if the investigation says act_now.
-  let spawnedCount = 0;
-  if (investigation.recommendation === 'act_now' && Array.isArray(investigation.action_tasks) && investigation.action_tasks.length > 0) {
-    spawnedCount = await spawnFollowOnTasks(investigation.action_tasks, task);
+  // 5. File investigation to KB
+  await fileInvestigationToKB(task, findings);
+
+  // 6. Handle 'monitor' recommendation — create deferred re-investigation
+  if (findings.recommendation === 'monitor') {
+    try {
+      const checkDays = findings.measurement_plan?.check_at_days ?? 7;
+      const checkAt = new Date();
+      checkAt.setDate(checkAt.getDate() + checkDays);
+
+      db.prepare(`
+        INSERT INTO tasks (
+          id, business_id, title, description, status,
+          proposed_by, trust_tier, priority, action_type,
+          parent_task_id, deferred_until, deferred_reason,
+          created_at, updated_at
+        ) VALUES (
+          ?, ?, ?, ?, 'deferred',
+          'conductor:investigation', 'green', 'p2', 'investigation',
+          ?, ?, ?,
+          CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+        )
+      `).run(
+        crypto.randomUUID(),
+        task.business_id,
+        `Follow-up: ${task.title}`,
+        `Re-investigate after monitoring period.\n\nOriginal finding: ${findings.summary ?? ''}\n\nWhat to check: ${findings.measurement_plan?.leading_indicator?.good_sign ?? 'Check if metrics have improved.'}`,
+        task.id,
+        checkAt.toISOString(),
+        `Monitoring period — check again after ${checkDays} days`
+      );
+    } catch (err) {
+      console.warn('[executor] Failed to create deferred re-investigation:', err.message);
+    }
   }
 
-  const outcomeNote = spawnedCount > 0
-    ? ` ${spawnedCount} follow-on task${spawnedCount > 1 ? 's' : ''} queued for approval.`
+  // 7. Spawn follow-on tasks if act_now
+  let followOns = [];
+  if (findings.recommendation === 'act_now') {
+    followOns = await spawnFollowOnTasks(findings, task);
+  }
+
+  const summary = findings.summary ?? `Investigation complete. Primary cause: ${findings.primary_cause ?? 'unknown'}.`;
+  const outcomeNote = followOns.length > 0
+    ? ` ${followOns.length} follow-on task${followOns.length > 1 ? 's' : ''} queued.`
     : '';
 
   return {
-    outcome: `Investigation complete.${outcomeNote}`,
+    outcome: summary.slice(0, 200) + outcomeNote,
     outcome_data: {
       type: 'investigation',
-      investigation_id: investigation.id,
-      primary_cause: investigation.primary_cause ?? null,
-      primary_confidence: investigation.primary_confidence ?? null,
-      supporting_evidence: investigation.supporting_evidence ?? [],
-      alternative_causes: investigation.alternative_causes ?? [],
-      recommendation: investigation.recommendation ?? null,
-      recommended_action: investigation.recommended_action ?? null,
-      plain_english: investigation.plain_english ?? null,
-      confidence_note: investigation.confidence_note ?? null,
-      spawned_tasks: spawnedCount,
+      primary_cause: findings.primary_cause ?? null,
+      primary_confidence: findings.confidence ?? null,
+      supporting_evidence: findings.evidence ?? [],
+      alternative_causes: findings.alternatives ?? [],
+      recommendation: findings.recommendation ?? null,
+      recommended_action: findings.recommendation_reason ?? null,
+      plain_english: findings.explanation ?? null,
+      confidence_note: null,
+      summary: findings.summary ?? null,
+      do_not_do: findings.do_not_do ?? [],
+      measurement_plan: findings.measurement_plan ?? null,
+      spawned_tasks: followOns.length,
+      spawned_task_ids: followOns.map(t => t.id),
     },
   };
 }
 
-/**
- * Spawn follow-on action tasks from investigation action_tasks array.
- * Each task is created as proposed and an approval notification is sent.
- * Returns the count of tasks successfully created.
- */
-async function spawnFollowOnTasks(actionTasks, parentTask) {
-  const { createTask } = await import('./task-queue.js');
-  const { sendApprovalRequest, shouldAutoApprove } = await import('./approval.js');
+async function executeContentDraft(task) {
+  // File the draft content to KB as wiki/drafts/{slug}.md with pending_review status.
+  // Human reviews the KB draft before publishing — we never push directly to CMS.
+  const payload = task.action_payload ?? {};
 
-  const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(parentTask.business_id);
-  if (!business) return 0;
+  let kbPath = null;
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const result = await getKBForBusiness(task.business_id);
+    if (result?.engine) {
+      const date = new Date().toISOString().split('T')[0];
+      const slug = (task.title ?? 'draft')
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+      kbPath = `wiki/drafts/${date}-${slug}.md`;
 
-  let count = 0;
-  for (const at of actionTasks) {
-    if (!at?.title || !at?.action_type) continue;
-    try {
-      const newTask = createTask({
-        business_id: parentTask.business_id,
-        signal_id: parentTask.signal_id ?? null,
-        title: at.title,
-        description: at.description ?? null,
-        proposed_by: 'conductor:investigation',
-        action_type: at.action_type,
-        action_payload: at.action_payload ?? {},
-        trust_tier: 'yellow',
-        priority: at.priority ?? 'p2',
-        confidence: at.confidence ?? null,
-        estimated_impact: at.estimated_impact ?? null,
-        approval_mode: 'requires_approval',
-      });
+      const draftContent = buildDraftContent(task, payload);
 
-      // Link to parent investigation task
-      db.prepare('UPDATE tasks SET parent_task_id = ? WHERE id = ?')
-        .run(parentTask.id, newTask.id);
+      await result.engine.writeFile(
+        kbPath, draftContent,
+        {
+          title: task.title,
+          type: payload.content_type ?? 'content_draft',
+          status: 'draft',
+          target_keyword: payload.target_keyword ?? null,
+          word_count: payload.word_count ?? null,
+          created_by: task.proposed_by,
+          task_id: task.id,
+          review_status: 'pending_review',
+        },
+        `draft: ${task.title.slice(0, 60)}`
+      );
+    }
+  } catch (err) {
+    console.warn('[executor] content_draft KB write failed (non-fatal):', err.message);
+    kbPath = null;
+  }
 
-      if (shouldAutoApprove(newTask)) {
-        const { approveTask } = await import('./task-queue.js');
-        approveTask(newTask.id, 'system:investigation');
-      } else {
-        await sendApprovalRequest(newTask, business);
-      }
-      count++;
-    } catch (err) {
-      console.warn('[executor] Failed to spawn follow-on task:', err.message);
+  return {
+    outcome: kbPath ? `Content draft filed to KB: ${kbPath}` : 'Content draft prepared (KB unavailable)',
+    outcome_data: {
+      type: 'content_draft',
+      kb_path: kbPath,
+      title: task.title,
+      content_type: payload.content_type ?? null,
+      target_keyword: payload.target_keyword ?? null,
+      word_count: payload.word_count ?? null,
+      proposed_by: task.proposed_by,
+    },
+  };
+}
+
+function buildDraftContent(task, payload) {
+  const lines = [
+    `# ${task.title}`,
+    '',
+    '> **Review status:** Draft — pending human review before publishing.',
+    '',
+  ];
+
+  if (payload.brief) {
+    lines.push('## Brief', '', payload.brief, '');
+  }
+  if (payload.target_keyword) {
+    lines.push(`**Target keyword:** ${payload.target_keyword}`, '');
+  }
+  if (payload.word_count) {
+    lines.push(`**Target word count:** ${payload.word_count}`, '');
+  }
+  if (task.description) {
+    lines.push('## Description', '', task.description, '');
+  }
+  lines.push('## Draft Content', '', '*(Write your content here)*', '');
+  return lines.join('\n');
+}
+
+// ─── Meta update (routes to correct CMS connector) ───────────────────────────
+
+async function executeMetaUpdate(task) {
+  const payload = task.action_payload ?? {};
+
+  // Try Shopify first
+  const shopifyConnector = db.prepare(
+    `SELECT id FROM connectors WHERE business_id = ? AND type = 'shopify' AND status = 'connected' LIMIT 1`
+  ).get(task.business_id);
+  if (shopifyConnector && payload.resource_id) {
+    const { shopify, credentials, config } = await getShopify(task);
+    const updates = {};
+    if (payload.field === 'title' || payload.proposed_title) updates.title = payload.proposed ?? payload.proposed_title;
+    if (payload.field === 'description' || payload.proposed_description) updates.body_html = payload.proposed ?? payload.proposed_description;
+
+    if (Object.keys(updates).length > 0) {
+      await shopify.updateProduct(credentials, config, payload.resource_id, updates);
+      return {
+        outcome: `Meta updated on Shopify product ${payload.resource_id}`,
+        outcome_data: { resource_id: payload.resource_id, field: payload.field, changes: updates },
+      };
     }
   }
 
-  // Single summary dashboard notification when multiple tasks spawned
-  if (count > 0) {
-    try {
-      const { generateId } = await import('../db/db.js');
-      db.prepare(`
-        INSERT INTO notifications (id, business_id, channel, severity, title, body, entity_type, entity_id, created_at)
-        VALUES (?, ?, 'dashboard', 'info', ?, ?, 'task', ?, CURRENT_TIMESTAMP)
-      `).run(
-        generateId(),
-        parentTask.business_id,
-        `Investigation spawned ${count} action task${count > 1 ? 's' : ''}`,
-        `From: "${parentTask.title}". Review and approve the follow-on tasks.`,
-        parentTask.id,
-      );
-    } catch { /* non-fatal */ }
+  // Try Wix
+  const wixConnector = db.prepare(
+    `SELECT * FROM connectors WHERE business_id = ? AND type = 'wix' AND status = 'connected' LIMIT 1`
+  ).get(task.business_id);
+  if (wixConnector && payload.page_id) {
+    const credentials = JSON.parse(decrypt(wixConnector.credentials));
+    const { default: wix } = await import('../connectors/wix/index.js');
+    await wix.updatePageSeo(credentials, {
+      pageId: payload.page_id,
+      title: payload.proposed_title ?? payload.proposed ?? null,
+      description: payload.proposed_description ?? null,
+    });
+    return {
+      outcome: `Meta SEO updated on Wix page ${payload.page_id}`,
+      outcome_data: { page_id: payload.page_id, field: payload.field },
+    };
   }
 
-  return count;
+  // No matching connector — file to KB as instructions
+  return await fileInstructionDraft(task, payload, 'meta_update',
+    `Update the ${payload.field ?? 'meta'} on: ${payload.url ?? payload.resource_id ?? 'the target page'}\n\nProposed: ${payload.proposed ?? payload.proposed_title ?? '(see task description)'}`
+  );
 }
 
-function executeContentDraft(task) {
-  // Content draft tasks: the proposal IS the draft. Marking complete records
-  // that the agent has done its work; human downstream action is taken via KB
-  // editing or CMS publishing.
+// ─── GBP update (soft — creates KB instruction draft, no direct write API) ───
+
+async function executeGbpUpdate(task) {
+  const payload = task.action_payload ?? {};
+  return await fileInstructionDraft(task, payload, 'gbp_update',
+    `Update Google Business Profile — ${payload.field ?? 'field'}:\n\nCurrent: ${payload.current ?? '(see GBP)'}\nProposed: ${payload.proposed ?? '(see task description)'}\n\nLog in to Google Business Profile to apply this change manually.`
+  );
+}
+
+// ─── Klaviyo flow update (soft — creates KB instruction draft) ───────────────
+
+async function executeKlaviyoFlowUpdate(task) {
+  const payload = task.action_payload ?? {};
+  return await fileInstructionDraft(task, payload, 'klaviyo_flow_update',
+    `Update Klaviyo flow "${payload.flow_name ?? payload.flow_id ?? 'unknown'}":\n\n${payload.change_description ?? task.description ?? '(see task description)'}\n\nApply this change in the Klaviyo flow editor.`
+  );
+}
+
+// ─── Meta Ads update (soft — creates KB instruction draft) ───────────────────
+
+async function executeMetaAdsUpdate(task) {
+  const payload = task.action_payload ?? {};
+  return await fileInstructionDraft(task, payload, 'meta_ads_update',
+    `Update Meta Ads campaign "${payload.campaign_id ?? 'unknown'}" — ${payload.change_type ?? 'change'}:\n\n${payload.change_description ?? task.description ?? '(see task description)'}\n\nApply this change in Meta Ads Manager.`
+  );
+}
+
+// ─── Shared: file instructions to KB when no connector write API exists ──────
+
+async function fileInstructionDraft(task, payload, actionType, instructions) {
+  let kbPath = null;
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const result = await getKBForBusiness(task.business_id);
+    if (result?.engine) {
+      const date = new Date().toISOString().split('T')[0];
+      const slug = (task.title ?? actionType)
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+      kbPath = `wiki/drafts/${date}-${actionType}-${slug}.md`;
+
+      const content = `# Action Required: ${task.title}
+
+> **Type:** ${actionType}
+> **Priority:** ${task.priority ?? 'p2'}
+> **Review status:** Pending manual action
+
+## Instructions
+
+${instructions}
+
+## Context
+
+${task.description ?? '(no additional context)'}
+
+---
+*Created by Blueprint conductor. Task ID: ${task.id}*
+`;
+      await result.engine.writeFile(
+        kbPath, content,
+        { title: task.title, type: actionType, review_status: 'pending_action', task_id: task.id },
+        `action-required: ${task.title.slice(0, 60)}`
+      );
+    }
+  } catch (err) {
+    console.warn(`[executor] fileInstructionDraft failed for ${actionType}:`, err.message);
+    kbPath = null;
+  }
+
   return {
-    outcome: `Content draft prepared`,
+    outcome: kbPath
+      ? `Instructions filed to KB: ${kbPath} — manual action required`
+      : `Action required: ${task.title}`,
     outcome_data: {
-      type: 'content_draft',
-      title: task.title,
-      description: task.description ?? null,
-      proposed_by: task.proposed_by,
+      type: actionType,
+      kb_path: kbPath,
+      instructions,
+      requires_manual_action: true,
     },
   };
 }
@@ -719,7 +973,8 @@ export async function executeTask(taskId) {
       case 'github_issue':             result = await executeGithubIssue(task); break;
       case 'github_pr':                result = await executeGithubPR(task);    break;
       case 'investigation':            result = await executeInvestigation(task);  break;
-      case 'content_draft':            result = executeContentDraft(task);       break;
+      case 'content_draft':            result = await executeContentDraft(task);  break;
+      case 'meta_update':              result = await executeMetaUpdate(task);    break;
       case 'shopify_product_create':   result = await executeShopifyProductCreate(task); break;
       case 'shopify_product_update':
       case 'shopify_description_update':
@@ -734,6 +989,9 @@ export async function executeTask(taskId) {
       case 'wix_seo_update':            result = await executeWixSeoUpdate(task); break;
       case 'server_file_write':         result = await executeServerFileWrite(task); break;
       case 'server_file_rollback':      result = await executeServerFileRollback(task); break;
+      case 'gbp_update':                result = await executeGbpUpdate(task); break;
+      case 'klaviyo_flow_update':       result = await executeKlaviyoFlowUpdate(task); break;
+      case 'meta_ads_update':           result = await executeMetaAdsUpdate(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }

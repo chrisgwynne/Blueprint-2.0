@@ -441,6 +441,8 @@ const STARTUP_MIGRATIONS = [
   // Investigation → action loop: link follow-on tasks to their parent investigation task
   `ALTER TABLE tasks ADD COLUMN parent_task_id TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id)`,
+  // Measurement window for follow-on tasks (days to check metric after execution)
+  `ALTER TABLE tasks ADD COLUMN measurement_window_days INTEGER`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }
