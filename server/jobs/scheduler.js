@@ -537,6 +537,35 @@ export function startScheduler() {
     }
   });
 
+  // Weekly full-KB analysis — Sunday at 4am.
+  // The debounced per-write trigger in KBEngine covers the "recent activity"
+  // case. This weekly pass looks at the same window (168h = 7d) so that KBs
+  // with steady but never-bursty updates still get analysed at least once
+  // a week, and so contradictions between older + newer entries get noticed.
+  cron.schedule('0 4 * * 0', async () => {
+    console.log('[scheduler] Running weekly KB analysis pass...');
+    try {
+      const { analyseKBForSignals } = await import('../kb/kb-analyser.js');
+      const businesses = db.prepare('SELECT id, slug FROM businesses').all();
+      for (const business of businesses) {
+        try {
+          const r = await analyseKBForSignals(business.id, { hours: 168, force: true });
+          if (r && !r.skipped) {
+            console.log(
+              `[scheduler] KB analysis ${business.slug}: ` +
+              `${r.signals} signals, ${r.tasks} tasks, ${r.gaps} gaps, ` +
+              `${r.insights} insights, ${r.contradictions} contradictions`
+            );
+          }
+        } catch (bizErr) {
+          console.warn(`[scheduler] KB analysis failed for ${business.slug}:`, bizErr.message);
+        }
+      }
+    } catch (err) {
+      console.error('[scheduler] Weekly KB analysis failed:', err);
+    }
+  });
+
   // Weekly git maintenance — Sunday 3am
   cron.schedule('0 3 * * 0', async () => {
     try {

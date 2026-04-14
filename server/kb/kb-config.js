@@ -57,7 +57,7 @@ export async function getKBForBusiness(businessId) {
     saveKBConfig(businessId, config);
   }
 
-  const engine = new KBEngine(config.root, business.slug);
+  const engine = new KBEngine(config.root, business.slug, business.id);
   if (!config.initialized || !existsSync(join(config.root, 'WIKI.md'))) {
     await engine.init(business.name);
     config.initialized = true;
