@@ -49,7 +49,14 @@ Which agents are most relevant to the goal, and what they should focus on. For a
 - Quill → brief two content pieces per week targeting the traffic gaps
 - Trend Spotter → surface seasonal keywords to target
 
-These briefings influence how agents prioritise their proposals during runs.
+These briefings influence how agents prioritise their proposals during runs. The briefing is injected into each agent's system prompt context on subsequent runs and looks like this in the LLM context:
+
+```
+## Active goal context
+Goal: Grow organic sessions to 15,000/month by September 2026
+Your focus: Surface high-impression, low-CTR keywords — these are the fastest path to the traffic target.
+Avoid: Proposing content for keywords already ranking in positions 1–5.
+```
 
 ### Conflict check
 
@@ -60,6 +67,9 @@ Blueprint checks whether a new goal conflicts with existing active goals. Common
 - Resource conflicts (e.g. two goals both requiring Quill to produce 4+ pieces per week)
 
 Conflicts are flagged with a warning banner. You can acknowledge them or modify a goal to resolve them.
+
+> [!WARNING]
+> Running two conflicting active goals simultaneously pollutes Blueprint's attribution data. If both goals require changes to the same pages or metrics within overlapping timeframes, Blueprint cannot determine which goal's actions caused a given metric movement. Resolve conflicts before activating a second goal, or accept that attribution quality will be reduced for both.
 
 ## Scenario planning
 
