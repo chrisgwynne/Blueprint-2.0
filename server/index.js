@@ -372,6 +372,43 @@ const mountRoutes = async () => {
     res.json({ ok: true });
   });
 
+  // ─── Blueprint GitHub settings ─────────────────────────────────────────────
+  // SEPARATE from business GitHub connectors in the connectors table.
+  // Used by: self-healer, connector discovery. Targets chrisgwynne/Blueprint only.
+
+  app.get('/api/settings/blueprint-github/status', _isAuth, async (req, res) => {
+    try {
+      const { isBlueprintGitHubConfigured } = await import('./lib/blueprint-github.js');
+      const status = await isBlueprintGitHubConfigured(db);
+      res.json(status);
+    } catch (err) {
+      res.json({ configured: false, error: err.message });
+    }
+  });
+
+  app.post('/api/settings/blueprint-github', _isAuth, (req, res) => {
+    const { token, owner, repo } = req.body ?? {};
+    const upsert = db.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    );
+    if (token  !== undefined) upsert.run('blueprint_github_token', JSON.stringify(token));
+    if (owner  !== undefined) upsert.run('blueprint_github_owner', JSON.stringify(owner));
+    if (repo   !== undefined) upsert.run('blueprint_github_repo',  JSON.stringify(repo));
+    res.json({ ok: true });
+  });
+
+  app.post('/api/settings/blueprint-github/test', _isAuth, async (req, res) => {
+    try {
+      const { isBlueprintGitHubConfigured } = await import('./lib/blueprint-github.js');
+      const status = await isBlueprintGitHubConfigured(db);
+      res.json(status);
+    } catch (err) {
+      res.json({ configured: false, error: err.message });
+    }
+  });
+
   // System maintenance endpoint
   app.post('/api/system/db-init', _isAuth, async (req, res) => {
     try {

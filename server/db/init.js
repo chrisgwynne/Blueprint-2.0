@@ -42,6 +42,11 @@ function seedSettings() {
     { key: 'agents.default_trust_tier', value: 'yellow' },
     { key: 'agents.default_approval_mode', value: 'requires_approval' },
     { key: 'notifications.telegram.enabled', value: false },
+    // Blueprint system GitHub — for self-healing and connector discovery issues/PRs.
+    // SEPARATE from business GitHub connectors (which are per-business in connectors table).
+    { key: 'blueprint_github_owner', value: process.env.BLUEPRINT_GITHUB_OWNER || 'chrisgwynne' },
+    { key: 'blueprint_github_repo',  value: process.env.BLUEPRINT_GITHUB_REPO  || 'Blueprint'   },
+    { key: 'blueprint_github_token', value: process.env.BLUEPRINT_GITHUB_TOKEN || ''             },
   ];
 
   const upsert = db.prepare(`

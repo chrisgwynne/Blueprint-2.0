@@ -14,6 +14,7 @@ import crypto from 'node:crypto';
 import db from '../db/db.js';
 import { decrypt } from '../crypto.js';
 import { updateTaskStatus } from './task-queue.js';
+import { createBlueprintIssue } from '../lib/blueprint-github.js';
 import { createTaskEvent } from './task-events.js';
 
 const EXECUTABLE_ACTION_TYPES = new Set([
@@ -1337,33 +1338,24 @@ Produce a connector proposal as JSON:
     console.warn('[executor] research_connector KB write failed (non-fatal):', kbErr.message);
   }
 
-  // Create GitHub issue for worthwhile connectors
+  // Create GitHub issue on the Blueprint repo for worthwhile connectors.
+  // This goes to chrisgwynne/Blueprint — NOT the business's GitHub connector.
   let issueUrl = null;
   if (spec.recommendation !== 'not_worth_it') {
     try {
-      const ghRow = db.prepare(
-        `SELECT * FROM connectors WHERE business_id = ? AND type = 'github' AND status = 'active' LIMIT 1`
-      ).get(task.business_id);
-      if (ghRow) {
-        const ghCreds = JSON.parse(decrypt(ghRow.credentials));
-        const ghConfig = JSON.parse(ghRow.config || '{}');
-        const owner = ghCreds.owner || ghConfig.owner;
-        const repo = (ghCreds.repos || ghConfig.repos || '').split(',')[0]?.trim();
-        if (owner && repo) {
-          const { default: github } = await import('../connectors/github/index.js');
-          const issue = await github.createIssue(ghCreds, owner, repo, {
-            title: `Connector request: ${spec.connector_name}`,
-            body: buildConnectorIssueBody(spec, task),
-            labels: [
-              'connector-request',
-              spec.recommendation === 'build_now' ? 'priority' : 'backlog',
-            ],
-          });
-          issueUrl = issue?.html_url ?? null;
-        }
-      }
+      const issue = await createBlueprintIssue({
+        title: `Connector request: ${spec.connector_name}`,
+        body: buildConnectorIssueBody(spec, task),
+        labels: [
+          'connector-request',
+          spec.recommendation === 'build_now' ? 'priority' : 'backlog',
+          spec.build_complexity,
+        ],
+      }, db);
+      issueUrl = issue?.url ?? null;
+      if (issue) console.log(`[executor] Connector request issue created: ${issue.url}`);
     } catch (ghErr) {
-      console.warn('[executor] research_connector GitHub issue failed (non-fatal):', ghErr.message);
+      console.warn('[executor] research_connector Blueprint GitHub issue failed (non-fatal):', ghErr.message);
     }
   }
 

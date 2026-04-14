@@ -476,6 +476,12 @@ const STARTUP_MIGRATIONS = [
 
   // Connector wishlist / data gap requests from agents
   `ALTER TABLE tasks ADD COLUMN wishlist_connector_type TEXT`,
+
+  // Blueprint system GitHub settings (separate from business GitHub connectors).
+  // Seeded here so existing installs get the rows; ON CONFLICT does nothing if already present.
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_owner', '"chrisgwynne"', CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_repo',  '"Blueprint"',   CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token', '""',            CURRENT_TIMESTAMP)`,
 ];
 for (const sql of STARTUP_MIGRATIONS) {
   try { db.exec(sql); }

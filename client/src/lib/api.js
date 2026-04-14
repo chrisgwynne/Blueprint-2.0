@@ -393,3 +393,9 @@ export const overrideDeferredTask = (businessId, taskId) => post(`/brain/${busin
 // ─── Google OAuth app configuration ────────────────────────────────────────
 export const getGoogleOAuthConfig = () => get('/oauth/google/config')
 export const saveGoogleOAuthConfig = (body) => request('PUT', '/oauth/google/config', body)
+
+// ─── Blueprint system GitHub (self-healing + connector discovery) ─────────────
+// Separate from business GitHub connectors — targets chrisgwynne/Blueprint only.
+export const getBlueprintGitHubStatus   = ()     => get('/settings/blueprint-github/status')
+export const saveBlueprintGitHubSettings = (data) => post('/settings/blueprint-github', data)
+export const testBlueprintGitHubConnection = ()  => post('/settings/blueprint-github/test', {})

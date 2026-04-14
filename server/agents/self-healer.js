@@ -23,7 +23,7 @@ import { dirname } from 'path';
 import crypto from 'node:crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
-import { decrypt } from '../crypto.js';
+import { createBlueprintIssue, createBlueprintPR, isBlueprintGitHubConfigured } from '../lib/blueprint-github.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '../..');
@@ -97,11 +97,12 @@ async function _heal(error, ctx) {
     }
 
     const issue = await createHealingIssue(healing, error, { agentId, runId, businessId, trigger, label });
+    let pr = null;
     if (healing.code_diff && healing.confidence >= 0.75 && healing.safe_to_auto_propose) {
-      await createHealingPR(healing, issue, { agentId, runId, businessId, label });
+      pr = await createHealingPR(healing, issue, { agentId, runId, businessId, label });
     }
 
-    await recordHealingNotification(healing, issue, error, { agentId, businessId, label });
+    await recordHealingNotification(healing, issue, pr, error, { agentId, businessId, label });
     await fileHealingToKB(healing, error, { agentId, runId, businessId });
   } catch (healErr) {
     console.warn(`[self-heal] Healing pipeline failed for '${label}':`, healErr.message);
@@ -229,13 +230,15 @@ Set code_diff to null if you are not confident in the fix.`;
   }
 }
 
-// ─── GitHub issue ─────────────────────────────────────────────────────────────
+// ─── GitHub issue (Blueprint repo only) ──────────────────────────────────────
 
 async function createHealingIssue(healing, error, { agentId, runId, businessId, label }) {
-  const ghRow = db.prepare(
-    `SELECT * FROM connectors WHERE business_id = ? AND type = 'github' AND status = 'active' LIMIT 1`
-  ).get(businessId);
-  if (!ghRow) return null;
+  // Verify Blueprint GitHub is configured before attempting
+  const githubStatus = await isBlueprintGitHubConfigured(db).catch(() => ({ configured: false, error: 'check failed' }));
+  if (!githubStatus.configured) {
+    console.warn('[self-heal] Blueprint GitHub not configured:', githubStatus.error);
+    return null;
+  }
 
   const business = db.prepare('SELECT name FROM businesses WHERE id = ?').get(businessId);
 
@@ -244,7 +247,7 @@ async function createHealingIssue(healing, error, { agentId, runId, businessId, 
 **Detected by:** Blueprint Self-Healing System
 **Component:** \`${label}\`
 **Run ID:** \`${runId}\`
-**Business:** ${business?.name ?? businessId}
+**Business context:** ${business?.name ?? businessId}
 **Error type:** ${healing.error_type}
 **Severity:** ${healing.severity}
 
@@ -279,19 +282,12 @@ ${healing.affects_other_files?.length ? `\n## Other files that may need the same
 ${healing.safe_to_auto_propose && healing.code_diff ? '*A draft PR has been opened with the proposed fix.*' : ''}`;
 
   try {
-    const ghCreds = JSON.parse(decrypt(ghRow.credentials));
-    const ghConfig = JSON.parse(ghRow.config || '{}');
-    const owner = ghCreds.owner || ghConfig.owner;
-    const repo = (ghCreds.repos || ghConfig.repos || '').split(',')[0]?.trim();
-    if (!owner || !repo) return null;
-
-    const { default: github } = await import('../connectors/github/index.js');
-    const issue = await github.createIssue(ghCreds, owner, repo, {
+    const issue = await createBlueprintIssue({
       title: `[Auto] ${healing.root_cause.slice(0, 80)} in ${label}`,
       body: issueBody,
       labels: ['bug', 'self-healing', healing.severity, `blueprint:${label.split(':')[0]}`],
-    });
-    console.log(`[self-heal] GitHub issue #${issue?.number} created for '${label}'`);
+    }, db);
+    console.log(`[self-heal] Blueprint GitHub issue #${issue?.number} created for '${label}'`);
     return issue;
   } catch (ghErr) {
     console.warn('[self-heal] GitHub issue creation failed (non-fatal):', ghErr.message);
@@ -299,15 +295,10 @@ ${healing.safe_to_auto_propose && healing.code_diff ? '*A draft PR has been open
   }
 }
 
-// ─── Draft PR ─────────────────────────────────────────────────────────────────
+// ─── Draft PR (Blueprint repo only) ──────────────────────────────────────────
 
-async function createHealingPR(healing, issue, { agentId, businessId, label }) {
-  if (!healing.code_diff) return;
-
-  const ghRow = db.prepare(
-    `SELECT * FROM connectors WHERE business_id = ? AND type = 'github' AND status = 'active' LIMIT 1`
-  ).get(businessId);
-  if (!ghRow) return;
+async function createHealingPR(healing, issue, { agentId, runId, businessId, label }) {
+  if (!healing.code_diff) return null;
 
   const prBody = `## Fix: ${healing.root_cause}
 
@@ -331,51 +322,80 @@ ${healing.test_to_verify}
 - This PR targets \`develop\` — never \`main\``;
 
   try {
-    const ghCreds = JSON.parse(decrypt(ghRow.credentials));
-    const ghConfig = JSON.parse(ghRow.config || '{}');
-    const owner = ghCreds.owner || ghConfig.owner;
-    const repo = (ghCreds.repos || ghConfig.repos || '').split(',')[0]?.trim();
-    if (!owner || !repo) return;
-
-    const { default: github } = await import('../connectors/github/index.js');
-    // SAFETY: always draft: true, always base: 'develop', never 'main'
-    const pr = await github.createPR(ghCreds, owner, repo, {
+    // SAFETY: createBlueprintPR always sets draft:true and base:'develop'
+    const pr = await createBlueprintPR({
       title: `fix: ${healing.root_cause.slice(0, 70)} in ${label}`,
       body: prBody,
-      head: `self-heal/${label.replace(/[^a-z0-9-]/gi, '-')}-${Date.now()}`,
-      base: 'develop',   // NEVER main
-      draft: true,       // ALWAYS draft
-    });
+      branch: `${label.replace(/[^a-z0-9-]/gi, '-')}-${(runId ?? '').slice(0, 8)}`,
+      diff: healing.code_diff,
+    }, db);
     console.log(`[self-heal] Draft PR #${pr?.number} created for '${label}'`);
+    return pr;
   } catch (prErr) {
     console.warn('[self-heal] Draft PR creation failed (non-fatal):', prErr.message);
+    return null;
   }
 }
 
 // ─── Notification + KB ────────────────────────────────────────────────────────
 
-async function recordHealingNotification(healing, issue, error, { agentId, businessId, label }) {
+async function recordHealingNotification(healing, issue, pr, error, { agentId, businessId, label }) {
+  const severity = healing.severity === 'critical' ? 'critical' : 'warning';
+  const title = `Self-heal: ${label} error detected`;
+
+  const bodyLines = [
+    `Error: ${error.message.slice(0, 100)}`,
+    `Diagnosis: ${(healing.diagnosis ?? '').slice(0, 150)}`,
+    issue?.url
+      ? `GitHub issue #${issue.number}: ${issue.url}`
+      : issue?.number
+        ? `GitHub issue #${issue.number} created`
+        : 'Blueprint GitHub not configured — no issue created',
+    pr?.url
+      ? `Draft PR #${pr.number}: ${pr.url}`
+      : (healing.code_diff && (healing.confidence ?? 0) >= 0.75)
+        ? 'Draft PR not created — configure BLUEPRINT_GITHUB_TOKEN'
+        : 'Manual fix needed',
+  ].filter(Boolean);
+
   try {
-    const { generateId } = await import('../db/db.js');
-    db.prepare(`
-      INSERT INTO notifications
-        (id, business_id, channel, severity, title, body, entity_type, entity_id, created_at)
-      VALUES (?, ?, 'dashboard', ?, ?, ?, 'self_heal', ?, CURRENT_TIMESTAMP)
-    `).run(
-      generateId(),
-      businessId,
-      healing.severity === 'critical' ? 'critical' : 'warning',
-      `Self-heal: ${label} error detected`,
-      [
-        `Error: ${error.message.slice(0, 100)}`,
-        `Diagnosis: ${(healing.diagnosis ?? '').slice(0, 150)}`,
-        issue?.number ? `GitHub issue #${issue.number} created` : '',
-        (healing.code_diff && (healing.confidence ?? 0) >= 0.75)
-          ? 'Draft PR created — review before merging'
-          : 'Manual review needed',
-      ].filter(Boolean).join('\n'),
-      null
-    );
+    const { dispatch } = await import('../notifications/dispatcher.js');
+
+    // Dashboard notification
+    await dispatch({
+      business_id: businessId,
+      channel: 'dashboard',
+      severity,
+      title,
+      body: bodyLines.join('\n'),
+      entity_type: 'self_heal',
+      entity_id: null,
+    }).catch(() => {});
+
+    // Telegram notification if configured
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      await dispatch({
+        business_id: businessId,
+        channel: 'telegram',
+        severity,
+        title: `🔧 Blueprint Self-Heal: ${label}`,
+        body: [
+          `Error: ${error.message.slice(0, 80)}`,
+          `Diagnosis: ${(healing.diagnosis ?? '').slice(0, 100)}`,
+          '',
+          issue?.url
+            ? `📋 Issue: github.com/chrisgwynne/Blueprint/issues/${issue.number}`
+            : '⚠️ No GitHub issue (token not configured)',
+          pr?.url
+            ? `🔀 Draft PR: github.com/chrisgwynne/Blueprint/pull/${pr.number}`
+            : (healing.confidence ?? 0) >= 0.75
+              ? '⚠️ PR not created (configure BLUEPRINT_GITHUB_TOKEN)'
+              : 'Manual fix needed',
+        ].join('\n'),
+        entity_type: 'self_heal',
+        entity_id: null,
+      }).catch(() => {});
+    }
   } catch {}
 }
 
