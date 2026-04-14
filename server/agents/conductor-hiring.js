@@ -213,9 +213,7 @@ export async function analyseAndProposeHires(businessId, opts = {}) {
 }
 
 async function reasonAboutHires(businessId, activeConnectors, candidates) {
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
   const biz = db.prepare('SELECT name, type FROM businesses WHERE id = ?').get(businessId);
 

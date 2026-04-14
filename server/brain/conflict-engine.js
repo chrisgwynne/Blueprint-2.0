@@ -78,9 +78,7 @@ Goal B: "${goalB.title}" — metric ${goalB.metric_name ?? 'none'}, target ${goa
 
 Do these two goals strategically conflict? (e.g. one requires expanding content while the other requires reducing it; one optimises for SEO while the other deliberately hides pages.)`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
   try {
     const result = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,
@@ -178,9 +176,7 @@ Proposed task: "${task.title}". Description: ${task.description ?? '(none)'}. Ac
 
 Does this task work AGAINST this goal (i.e. if we run this task, it will hurt our ability to achieve the goal)?`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
   try {
     const result = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,

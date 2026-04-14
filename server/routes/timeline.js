@@ -61,6 +61,8 @@ router.get('/:businessId', (req, res) => {
           severity: r.status === 'failed' ? 'error' : 'info',
           created_at: r.started_at,
           ref: { run_id: r.id },
+          // UI can call /produced/agent_run/<run_id> to see what this run did
+          produces: { source_type: 'agent_run', source_id: r.id },
         });
       }
     }
@@ -85,6 +87,7 @@ router.get('/:businessId', (req, res) => {
           severity: r.priority === 'p1' ? 'warning' : 'info',
           created_at: r.created_at,
           ref: { task_id: r.id },
+          produces: { source_type: 'task', source_id: r.id },
         });
       }
     }
@@ -112,6 +115,7 @@ router.get('/:businessId', (req, res) => {
           severity: r.severity === 'critical' || r.severity === 'alert' ? 'error' : 'info',
           created_at: r.created_at,
           ref: { signal_id: r.id },
+          produces: { source_type: 'signal', source_id: r.id },
         });
       }
     }
@@ -199,5 +203,81 @@ router.get('/:businessId', (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─── Intelligence events (mesh flow) ─────────────────────────────────────────
+//
+// Every time one part of the mesh produces output that another consumes
+// (KB → signal, signal → task, agent → brief, chat → gap) an intelligence
+// event is logged. These endpoints let the Timeline UI show "what did this
+// event produce downstream".
+
+/**
+ * List recent intelligence events for a business.
+ * Query params: ?limit=50, ?source_type=kb|signal|task|..., ?target_type=...
+ */
+router.get('/:businessId/intelligence', (req, res) => {
+  try {
+    const { businessId } = req.params;
+    const limit = Math.min(200, parseInt(req.query.limit, 10) || 50);
+    const sourceType = req.query.source_type ?? null;
+    const targetType = req.query.target_type ?? null;
+    const since = req.query.since ?? null;
+
+    const clauses = ['business_id = ?'];
+    const args = [businessId];
+    if (sourceType) { clauses.push('source_type = ?'); args.push(sourceType); }
+    if (targetType) { clauses.push('target_type = ?'); args.push(targetType); }
+    if (since)      { clauses.push('created_at > ?'); args.push(since); }
+
+    const rows = db.prepare(`
+      SELECT * FROM intelligence_events
+       WHERE ${clauses.join(' AND ')}
+       ORDER BY created_at DESC
+       LIMIT ?
+    `).all(...args, limit);
+
+    const events = rows.map((r) => ({
+      ...r,
+      metadata: r.metadata ? safeJSON(r.metadata) : null,
+    }));
+    res.json(events);
+  } catch (err) {
+    console.error('[timeline/intelligence] error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * Fetch the intelligence events PRODUCED BY a specific timeline event.
+ * E.g. "What did this agent run produce?" → events where source matches.
+ */
+router.get('/:businessId/produced/:sourceType/:sourceId', (req, res) => {
+  try {
+    const { businessId, sourceType, sourceId } = req.params;
+    const limit = Math.min(100, parseInt(req.query.limit, 10) || 25);
+
+    const rows = db.prepare(`
+      SELECT * FROM intelligence_events
+       WHERE business_id = ?
+         AND source_type = ?
+         AND source_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?
+    `).all(businessId, sourceType, sourceId, limit);
+
+    const events = rows.map((r) => ({
+      ...r,
+      metadata: r.metadata ? safeJSON(r.metadata) : null,
+    }));
+    res.json(events);
+  } catch (err) {
+    console.error('[timeline/produced] error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function safeJSON(s) {
+  try { return JSON.parse(s); } catch { return null; }
+}
 
 export default router;

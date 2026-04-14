@@ -11,20 +11,45 @@ function fmtRel(iso) {
   try { return formatDistanceToNow(parseTimestamp(iso) || new Date(), { addSuffix: true }) } catch { return '' }
 }
 
+// Status values emitted by /api/agents-status. Event-driven execution
+// (Tranche 6B) introduced SLEEPING (work-check returned false) and STALE
+// (hasn't run in 2× poll interval), plus PENDING_HIRE for templates that
+// aren't installed yet.
+const STATUS_COLORS = {
+  running:      'var(--bp-green)',
+  idle:         'var(--bp-green)',
+  sleeping:     'var(--bp-cyan)',      // distinct from idle — deliberately quiet
+  stale:        'var(--bp-amber)',
+  error:        'var(--bp-red)',
+  paused:       'var(--bp-text-3)',
+  pending_hire: 'var(--bp-text-3)',
+  scheduled:    'var(--bp-amber)',
+}
+
+const STATUS_LABELS = {
+  running:      'RUNNING',
+  idle:         'IDLE',
+  sleeping:     'SLEEPING',
+  stale:        'STALE',
+  error:        'FAILED',
+  paused:       'PAUSED',
+  pending_hire: 'PENDING HIRE',
+  scheduled:    'SCHEDULED',
+}
+
 function StatusDot({ status }) {
-  const color = {
-    running: 'var(--bp-green)',
-    idle:    'var(--bp-green)',
-    paused:  'var(--bp-text-3)',
-    error:   'var(--bp-red)',
-    scheduled: 'var(--bp-amber)',
-  }[status] ?? 'var(--bp-text-3)'
+  const color = STATUS_COLORS[status] ?? 'var(--bp-text-3)'
   const isAnimated = status === 'running'
+  // Sleeping gets a muted outline rather than a solid dot — visual
+  // distinction between "actively idle" and "deliberately resting".
+  const isSleeping = status === 'sleeping'
   return (
     <span style={{
-      width: 6, height: 6, borderRadius: '50%', background: color,
+      width: 6, height: 6, borderRadius: '50%',
+      background: isSleeping ? 'transparent' : color,
+      border: isSleeping ? `1.5px solid ${color}` : 'none',
       animation: isAnimated ? 'bp-pulse 1.5s ease-in-out infinite' : 'none',
-      boxShadow: status === 'running' ? `0 0 6px ${color}` : 'none',
+      boxShadow: isAnimated ? `0 0 6px ${color}` : 'none',
       display: 'inline-block', flexShrink: 0,
     }} />
   )
@@ -65,14 +90,30 @@ function AgentRow({ agent, onRun, running, collapsed }) {
         </span>
         <StatusDot status={agent.status} />
         <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-          {agent.status}
+          {STATUS_LABELS[agent.status] ?? String(agent.status).toUpperCase()}
         </span>
       </div>
       <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginBottom: 6, paddingLeft: 20 }}>
         {agent.last_run ? `Last: ${fmtRel(agent.last_run)}` : 'never run'}
+        {agent.last_run_trigger ? ` · ${agent.last_run_trigger}` : ''}
         {agent.cost_today_usd > 0 ? ` · $${agent.cost_today_usd.toFixed(3)} today` : ''}
         {agent.consecutive_failures > 0 ? ` · ⚠ ${agent.consecutive_failures} failures` : ''}
       </div>
+      {agent.status === 'sleeping' && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', fontStyle: 'italic', paddingLeft: 20, marginBottom: 6 }}>
+          {`Waiting for the next event or ${agent.poll_interval_minutes ?? 60}-min poll`}
+        </div>
+      )}
+      {agent.status === 'stale' && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-amber)', paddingLeft: 20, marginBottom: 6 }}>
+          {`Hasn't run in over ${Math.round((agent.poll_interval_minutes ?? 60) * 2 / 60)} h — investigate`}
+        </div>
+      )}
+      {agent.status === 'pending_hire' && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', fontStyle: 'italic', paddingLeft: 20, marginBottom: 6 }}>
+          Connect required data sources to activate
+        </div>
+      )}
       {isRunning && agent.current_task && (
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-2)', fontStyle: 'italic', paddingLeft: 20, marginBottom: 6 }}>
           {agent.current_task}

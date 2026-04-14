@@ -180,6 +180,17 @@ export async function runSignalEngine(businessId, connectorId, currentData, prev
         });
       }
     } catch {}
+
+    // Signal intelligence — file to KB, check goal impact, trigger agents
+    // (alert/critical only), and check connector implications. Fire-and-forget.
+    (async () => {
+      try {
+        const { processNewSignal } = await import('./signal-intelligence.js');
+        await processNewSignal(signalId, businessId);
+      } catch (err) {
+        console.warn('[signal-intel] processNewSignal failed:', err.message);
+      }
+    })();
   }
 
   // If we created at least one new signal, kick the Conductor so it can

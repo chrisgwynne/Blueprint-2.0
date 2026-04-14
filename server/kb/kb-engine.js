@@ -213,10 +213,13 @@ export class KBEngine {
   /**
    * @param {string} root - absolute path to the KB root for this business
    * @param {string} businessSlug
+   * @param {string} [businessId] - business UUID (optional; required for
+   *   mesh features like the KB analyser that write signals/tasks/events)
    */
-  constructor(root, businessSlug) {
+  constructor(root, businessSlug, businessId = null) {
     this.root = root;
     this.slug = businessSlug;
+    this.businessId = businessId;
   }
 
   // ── Init ────────────────────────────────────────────────────────────────────
@@ -295,6 +298,35 @@ export class KBEngine {
       size: stat.size,
       modified: stat.mtime.toISOString(),
     };
+  }
+
+  /**
+   * Return KB files modified within the last `hours`, newest first.
+   * Each entry: { path, modified (ISO string), size (bytes) }.
+   *
+   * Used by the KB analyser and the mesh orchestrator to find what's
+   * changed recently without re-reading every file.
+   */
+  async getRecentlyModified(hours = 48) {
+    const cutoffMs = Date.now() - Number(hours) * 3600 * 1000;
+    const files = await this.listFiles();
+    const out = [];
+    for (const path of files) {
+      if (path.startsWith('_archived/')) continue;
+      const full = join(this.root, path);
+      try {
+        const stat = statSync(full);
+        if (stat.mtimeMs >= cutoffMs) {
+          out.push({
+            path,
+            modified: stat.mtime.toISOString(),
+            size: stat.size,
+          });
+        }
+      } catch {}
+    }
+    out.sort((a, b) => b.modified.localeCompare(a.modified));
+    return out;
   }
 
   /**
@@ -425,6 +457,22 @@ export class KBEngine {
 
     const message = commitMessage ?? `update: ${relativePath}`;
     await this._commit(message, [relativePath]);
+
+    // ─── Mesh: schedule KB analysis ───────────────────────────────────────
+    // Every meaningful KB write triggers a debounced analysis (5-min window
+    // per business). We skip triggers for:
+    //   - writes coming from the analyser itself (prevents re-entrant loops)
+    //   - special root files (schema/index/log/hot are metadata churn)
+    //   - engines that weren't constructed with a businessId (tests etc.)
+    // Fire-and-forget — the write returns immediately, analysis runs later.
+    const writtenBy = effectiveFrontmatter?.written_by;
+    const isAnalyserWrite = writtenBy === 'kb-analyser';
+    const isSpecial = SPECIAL_FILES.has(relativePath);
+    if (this.businessId && !isAnalyserWrite && !isSpecial) {
+      import('./kb-analyser.js')
+        .then(({ scheduleKBAnalysis }) => scheduleKBAnalysis(this.businessId))
+        .catch(() => {});
+    }
 
     return {
       path: relativePath,

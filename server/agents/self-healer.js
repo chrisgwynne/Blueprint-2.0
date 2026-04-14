@@ -21,9 +21,15 @@ import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import crypto from 'node:crypto';
+import os from 'node:os';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
-import { createBlueprintIssue, createBlueprintPR, isBlueprintGitHubConfigured } from '../lib/blueprint-github.js';
+import {
+  createBlueprintIssue,
+  createBlueprintPR,
+  isBlueprintGitHubConfigured,
+  isBlueprintGitHubEnabled,
+} from '../lib/blueprint-github.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -47,28 +53,34 @@ const SEARCHABLE_PATTERNS = [
  * Fire-and-forget: diagnose an agent run failure and propose a fix.
  * Call from agent-runner.js catch block.
  */
-export async function healAgentError(error, { agentId, runId, businessId, trigger }) {
+export async function healAgentError(error, { agentId, runId, businessId, trigger, requestContext }) {
   console.log(`[self-heal] Analysing error in '${agentId}' run ${runId}`);
-  await _heal(error, { agentId: `agent:${agentId}`, runId, businessId, trigger, label: agentId });
+  await _heal(error, {
+    agentId: `agent:${agentId}`, runId, businessId, trigger,
+    label: agentId, requestContext,
+  });
 }
 
 /**
  * Fire-and-forget: diagnose an executor task failure.
  * Call from executor.js catch block.
  */
-export async function healExecutorError(error, task) {
+export async function healExecutorError(error, task, requestContext) {
   const businessId = task?.business_id;
   if (!businessId) return;
   const label = `executor:${task.action_type}`;
   console.log(`[self-heal] Analysing executor error in '${task.action_type}'`);
-  await _heal(error, { agentId: label, runId: task.id, businessId, trigger: task.action_type, label });
+  await _heal(error, {
+    agentId: label, runId: task.id, businessId, trigger: task.action_type,
+    label, requestContext,
+  });
 }
 
 /**
  * Fire-and-forget: diagnose a connector sync failure.
  * Call from scheduler.js sync catch block.
  */
-export async function healConnectorError(error, connectorType, businessId) {
+export async function healConnectorError(error, connectorType, businessId, requestContext) {
   if (!businessId) return;
   const label = `connector:${connectorType}`;
   console.log(`[self-heal] Analysing connector error in '${connectorType}'`);
@@ -79,35 +91,303 @@ export async function healConnectorError(error, connectorType, businessId) {
     trigger: 'connector_sync',
     label,
     extraContext: `connector source: server/connectors/${connectorType}/index.js`,
+    requestContext,
   });
 }
 
 // ─── Core healing pipeline ────────────────────────────────────────────────────
 
 async function _heal(error, ctx) {
-  const { agentId, runId, businessId, trigger, label, extraContext } = ctx;
+  const { agentId, runId, businessId, trigger, label, extraContext, requestContext } = ctx;
 
   try {
+    // Fingerprint the error so we can dedup and track recurrence.
+    const fingerprint = createErrorFingerprint(error, label);
+
+    // Check if we've seen this exact error before.
+    const prior = loadPriorOccurrence(fingerprint);
+
+    // Capture the environment (node, os, process + any request context
+    // the caller was able to pass in — UA, IP, etc.)
+    const envContext = captureEnvContext(requestContext);
+
+    // If we've seen this fingerprint before, just bump the counter and decide
+    // whether to re-notify. No new LLM diagnosis, no new GitHub issue.
+    if (prior) {
+      const { shouldNotify, reason } = shouldRenotify(prior);
+      bumpOccurrence(fingerprint, { businessId, runId, envContext });
+      console.log(
+        `[self-heal] Recurrence #${prior.occurrence_count + 1} for '${label}' ` +
+        `(fingerprint ${fingerprint.slice(0, 8)}): ${shouldNotify ? `notify — ${reason}` : 'throttled'}`
+      );
+      if (shouldNotify) {
+        markNotified(fingerprint);
+        await sendRecurrenceNotification(prior, error, {
+          agentId, businessId, label, occurrenceCount: prior.occurrence_count + 1,
+        });
+      }
+      return;
+    }
+
+    // First time seeing this fingerprint — run full diagnosis pipeline.
     const sourceCtx = gatherSourceContext(error);
     const searchResults = await searchForSolution(error, businessId).catch(() => null);
     const healing = await diagnoseAndFix(error, sourceCtx, searchResults, label, extraContext);
 
     if (!healing) {
       console.log(`[self-heal] Could not diagnose error in '${label}' (no healing output)`);
+      // Still record the fingerprint so future identical errors can dedup.
+      recordFirstOccurrence(fingerprint, {
+        component: label, errorMessage: error.message,
+        businessId, runId, envContext,
+      });
       return;
     }
 
-    const issue = await createHealingIssue(healing, error, { agentId, runId, businessId, trigger, label });
+    // Opt-out check: only reach GitHub if the user hasn't disabled the
+    // integration in Settings. When disabled, we still log, notify, and
+    // file to KB — we just don't touch GitHub.
+    const ghEnabled = isBlueprintGitHubEnabled(db);
+
+    let issue = null;
     let pr = null;
-    if (healing.code_diff && healing.confidence >= 0.75 && healing.safe_to_auto_propose) {
-      pr = await createHealingPR(healing, issue, { agentId, runId, businessId, label });
+    if (ghEnabled) {
+      issue = await createHealingIssue(healing, error, {
+        agentId, runId, businessId, trigger, label, envContext,
+      });
+      if (healing.code_diff && healing.confidence >= 0.75 && healing.safe_to_auto_propose) {
+        pr = await createHealingPR(healing, issue, { agentId, runId, businessId, label });
+      }
+    } else {
+      console.log(
+        `[self-heal] Blueprint GitHub disabled in Settings — skipping issue/PR for '${label}'`
+      );
     }
 
+    // Persist the first occurrence with issue/PR links so future duplicates
+    // know where the existing report lives.
+    recordFirstOccurrence(fingerprint, {
+      component: label,
+      errorType: healing.error_type,
+      errorMessage: error.message,
+      diagnosis: healing.diagnosis,
+      severity: healing.severity,
+      confidence: healing.confidence,
+      issue, pr,
+      businessId, runId, envContext,
+    });
+
     await recordHealingNotification(healing, issue, pr, error, { agentId, businessId, label });
+    markNotified(fingerprint);
     await fileHealingToKB(healing, error, { agentId, runId, businessId });
   } catch (healErr) {
     console.warn(`[self-heal] Healing pipeline failed for '${label}':`, healErr.message);
   }
+}
+
+// ─── Fingerprinting + recurrence tracking ────────────────────────────────────
+
+/**
+ * Produce a stable hash identifying an error so that repeat occurrences
+ * collapse onto a single self_heal_log row. Based on:
+ *   - component label (agent:seo-sentinel, executor:shopify_post, etc.)
+ *   - normalised error message (numbers/ids stripped)
+ *   - first Blueprint stack frame (file + line)
+ *
+ * Designed so "same bug" → same fingerprint even if the message contains
+ * a fresh run-id or timestamp.
+ */
+function createErrorFingerprint(error, label) {
+  const rawMsg = error?.message ?? '';
+  const normalisedMsg = rawMsg
+    .replace(/\b[0-9a-f]{8,}\b/gi, '{id}')       // hex ids / uuids
+    .replace(/\b\d{10,}\b/g, '{ts}')              // unix timestamps
+    .replace(/\b\d+\b/g, '{n}')                   // loose numbers
+    .replace(/\s+/g, ' ')
+    .slice(0, 240);
+
+  const stackLine = (error?.stack ?? '')
+    .split('\n')
+    .find(l => l.includes('.js:') && !l.includes('node_modules')) || '';
+  const framePart = (stackLine.match(/\((.+\.js):(\d+):/) || stackLine.match(/at (.+\.js):(\d+):/) || [])
+    .slice(1, 3).join(':');
+
+  return crypto
+    .createHash('sha256')
+    .update(`${label}|${normalisedMsg}|${framePart}`)
+    .digest('hex');
+}
+
+function loadPriorOccurrence(fingerprint) {
+  try {
+    return db.prepare(
+      'SELECT * FROM self_heal_log WHERE fingerprint = ?'
+    ).get(fingerprint) || null;
+  } catch {
+    return null;
+  }
+}
+
+function recordFirstOccurrence(fingerprint, data) {
+  try {
+    db.prepare(`
+      INSERT INTO self_heal_log (
+        fingerprint, component, error_type, error_message, diagnosis,
+        severity, confidence, occurrence_count,
+        first_seen_at, last_seen_at,
+        github_issue_number, github_issue_url,
+        github_pr_number, github_pr_url,
+        env_context, last_business_id, last_run_id
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, 1,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+        ?, ?, ?, ?, ?, ?, ?
+      )
+      ON CONFLICT(fingerprint) DO UPDATE SET
+        last_seen_at     = CURRENT_TIMESTAMP,
+        occurrence_count = occurrence_count + 1,
+        last_business_id = excluded.last_business_id,
+        last_run_id      = excluded.last_run_id
+    `).run(
+      fingerprint,
+      data.component,
+      data.errorType ?? null,
+      (data.errorMessage ?? '').slice(0, 2000),
+      (data.diagnosis ?? '').slice(0, 2000),
+      data.severity ?? null,
+      data.confidence ?? null,
+      data.issue?.number ?? null,
+      data.issue?.url ?? null,
+      data.pr?.number ?? null,
+      data.pr?.url ?? null,
+      JSON.stringify(data.envContext ?? {}),
+      data.businessId ?? null,
+      data.runId ?? null,
+    );
+  } catch (err) {
+    console.warn('[self-heal] Could not record first occurrence:', err.message);
+  }
+}
+
+function bumpOccurrence(fingerprint, { businessId, runId, envContext }) {
+  try {
+    db.prepare(`
+      UPDATE self_heal_log
+         SET occurrence_count = occurrence_count + 1,
+             last_seen_at     = CURRENT_TIMESTAMP,
+             last_business_id = COALESCE(?, last_business_id),
+             last_run_id      = COALESCE(?, last_run_id),
+             env_context      = COALESCE(?, env_context)
+       WHERE fingerprint = ?
+    `).run(
+      businessId ?? null,
+      runId ?? null,
+      envContext ? JSON.stringify(envContext) : null,
+      fingerprint,
+    );
+  } catch (err) {
+    console.warn('[self-heal] Could not bump occurrence:', err.message);
+  }
+}
+
+function markNotified(fingerprint) {
+  try {
+    db.prepare(
+      'UPDATE self_heal_log SET last_notified_at = CURRENT_TIMESTAMP WHERE fingerprint = ?'
+    ).run(fingerprint);
+  } catch {}
+}
+
+// ─── Notification throttling ────────────────────────────────────────────────
+//
+// To avoid spamming Telegram with "same error again" pings, we only re-notify:
+//   - on the 1st, 10th, 50th, 100th, 500th, 1000th occurrence
+//   - OR if >24h have passed since the last notification
+// Everything in between is silent — the count is still incremented in the
+// self_heal_log row so the UI shows accurate numbers.
+
+const NOTIFY_AT_COUNTS = new Set([1, 10, 50, 100, 500, 1000, 5000, 10000]);
+const NOTIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
+function shouldRenotify(prior) {
+  const nextCount = (prior.occurrence_count ?? 0) + 1;
+  if (NOTIFY_AT_COUNTS.has(nextCount)) {
+    return { shouldNotify: true, reason: `milestone count=${nextCount}` };
+  }
+  if (!prior.last_notified_at) {
+    return { shouldNotify: true, reason: 'no prior notification' };
+  }
+  const lastMs = new Date(prior.last_notified_at + 'Z').getTime();
+  if (Number.isFinite(lastMs) && Date.now() - lastMs > NOTIFY_COOLDOWN_MS) {
+    return { shouldNotify: true, reason: 'cooldown elapsed' };
+  }
+  return { shouldNotify: false, reason: 'throttled' };
+}
+
+async function sendRecurrenceNotification(prior, error, { agentId, businessId, label, occurrenceCount }) {
+  try {
+    const { dispatch } = await import('../notifications/dispatcher.js');
+    const body = [
+      `Error has now occurred ${occurrenceCount}× (first seen ${prior.first_seen_at}).`,
+      `Message: ${(error.message ?? '').slice(0, 120)}`,
+      prior.github_issue_url
+        ? `Existing issue: ${prior.github_issue_url}`
+        : 'No GitHub issue (disabled or not configured).',
+      prior.github_pr_url
+        ? `Existing draft PR: ${prior.github_pr_url}`
+        : '',
+    ].filter(Boolean).join('\n');
+
+    await dispatch({
+      business_id: businessId,
+      channel: 'dashboard',
+      severity: 'warning',
+      title: `Self-heal recurrence: ${label} (×${occurrenceCount})`,
+      body,
+      entity_type: 'self_heal',
+      entity_id: null,
+    }).catch(() => {});
+
+    if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+      await dispatch({
+        business_id: businessId,
+        channel: 'telegram',
+        severity: 'warning',
+        title: `🔁 Self-heal recurrence: ${label} (×${occurrenceCount})`,
+        body,
+        entity_type: 'self_heal',
+        entity_id: null,
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+// ─── Environment context capture ─────────────────────────────────────────────
+//
+// Records where/how the error occurred so we can diagnose patterns later.
+// For server-side entry points (scheduler, agent-runner) there is no browser
+// UA — we still capture node + os info. If the caller was triggered by an
+// HTTP request, they can pass { userAgent, ip, referer } via requestContext.
+
+function captureEnvContext(requestContext) {
+  const ctx = {
+    node_version: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    os_type: os.type(),
+    os_release: os.release(),
+    hostname: os.hostname(),
+    uptime_seconds: Math.round(process.uptime()),
+    timestamp: new Date().toISOString(),
+  };
+  if (requestContext && typeof requestContext === 'object') {
+    if (requestContext.userAgent) ctx.user_agent = String(requestContext.userAgent).slice(0, 500);
+    if (requestContext.ip)        ctx.ip         = String(requestContext.ip).slice(0, 64);
+    if (requestContext.referer)   ctx.referer    = String(requestContext.referer).slice(0, 500);
+    if (requestContext.device)    ctx.device     = String(requestContext.device).slice(0, 120);
+    if (requestContext.os)        ctx.os         = String(requestContext.os).slice(0, 120);
+  }
+  return ctx;
 }
 
 // ─── Source context ───────────────────────────────────────────────────────────
@@ -218,7 +498,8 @@ Set it false for any change that affects logic or behaviour.
 Set code_diff to null if you are not confident in the fix.`;
 
   try {
-    const { providerId, model } = resolveProfileLLM({ model: 'claude-sonnet-4-5' });
+    // Use whatever LLM the user has configured — never hardcode.
+    const { providerId, model } = resolveProfileLLM({});
     const result = await runLLM(providerId, model, {
       messages: [{ role: 'user', content: prompt }],
       system: 'Return only valid JSON. Be conservative — only propose fixes you are confident about.',
@@ -236,7 +517,7 @@ Set code_diff to null if you are not confident in the fix.`;
 
 // ─── GitHub issue (Blueprint repo only) ──────────────────────────────────────
 
-async function createHealingIssue(healing, error, { agentId, runId, businessId, label }) {
+async function createHealingIssue(healing, error, { agentId, runId, businessId, label, envContext }) {
   // Verify Blueprint GitHub is configured before attempting
   const githubStatus = await isBlueprintGitHubConfigured(db).catch(() => ({ configured: false, error: 'check failed' }));
   if (!githubStatus.configured) {
@@ -245,6 +526,9 @@ async function createHealingIssue(healing, error, { agentId, runId, businessId, 
   }
 
   const business = db.prepare('SELECT name FROM businesses WHERE id = ?').get(businessId);
+  const envLines = envContext
+    ? Object.entries(envContext).map(([k, v]) => `- **${k}**: ${v}`).join('\n')
+    : '(not captured)';
 
   const issueBody = `## Bug Report: ${healing.root_cause}
 
@@ -254,6 +538,9 @@ async function createHealingIssue(healing, error, { agentId, runId, businessId, 
 **Business context:** ${business?.name ?? businessId}
 **Error type:** ${healing.error_type}
 **Severity:** ${healing.severity}
+
+## Environment
+${envLines}
 
 ## Error
 \`\`\`

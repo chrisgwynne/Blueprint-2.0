@@ -32,16 +32,21 @@ function agentLiveDir(agentId) {
  * exists so /agents/status and /system-health can show "ran but skipped
  * because GSC hasn't synced yet", and audits can reconstruct intent.
  */
-function recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, reason) {
+function recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, reason, opts = {}) {
   try {
     db.prepare(`
       INSERT INTO agent_runs (
         id, agent_id, business_id, trigger, trigger_id,
         status, reasoning, started_at, completed_at,
         prompt_tokens, completion_tokens, cost_usd,
-        signals_detected, tasks_proposed
-      ) VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0)
-    `).run(runId, agentId, businessId, trigger, triggerId, reason, startedAt);
+        signals_detected, tasks_proposed,
+        trigger_type, work_reasons
+      ) VALUES (?, ?, ?, ?, ?, 'skipped', ?, ?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0, ?, ?)
+    `).run(
+      runId, agentId, businessId, trigger, triggerId, reason, startedAt,
+      opts.trigger_type ?? null,
+      opts.work_reasons ? JSON.stringify(opts.work_reasons) : null,
+    );
   } catch (err) {
     console.warn(`[agent-runner] Failed to record skipped run for '${agentId}':`, err.message);
   }
@@ -158,6 +163,31 @@ Structure:
       "search_for_api": true
     }
   ],
+  "kb_entries": [
+    {
+      "path": "research/or/entities/or/decisions/filename.md",
+      "title": "Entry title",
+      "content": "Full markdown body — what's worth keeping long-term",
+      "tags": ["tag1", "tag2"],
+      "why": "Why this is worth filing to the KB"
+    }
+  ],
+  "agent_briefs": [
+    {
+      "to_agent": "agent id that should know this (e.g. 'seo-sentinel', 'quill')",
+      "brief": "What you want the target agent to know or investigate",
+      "priority": "immediate | next_run | fyi"
+    }
+  ],
+  "signals_to_create": [
+    {
+      "title": "Short title",
+      "type": "anomaly | opportunity | risk | correlation",
+      "severity": "info | warning | alert | critical",
+      "description": "What you observed and why it matters",
+      "confidence": 0.85
+    }
+  ],
   "learnings": ["Any pattern or insight worth remembering for future runs"],
   "summary": "One-sentence summary of this run's findings"
 }
@@ -171,7 +201,10 @@ Rules:
 - learnings array: 0-3 concise strings, patterns useful for future runs
 - search_queries: only include if you genuinely need external data not in your context. Maximum 3.
 - data_gaps: only include data you actually needed and was genuinely missing. Do not pad.
-- connector_wishlist: only for data sources Blueprint has no connector for. Omit if empty.`;
+- connector_wishlist: only for data sources Blueprint has no connector for. Omit if empty.
+- kb_entries: only file things worth keeping long-term — insights, decisions, named entities, research you produced. Max 3. Omit if empty.
+- agent_briefs: only when another agent genuinely needs to know something from your run. Use 'immediate' sparingly — it triggers an immediate run. Omit if empty.
+- signals_to_create: only for anomalies/opportunities not already signalled. Confidence >= 0.7 to be acted on. Omit if empty.`;
 }
 
 function buildLegacySystemPrompt(profile) {
@@ -234,33 +267,30 @@ function appendRunLog(agentId, entry) {
 }
 
 // ─── Conductor briefing ───────────────────────────────────────────────────────
+//
+// Every agent run posts a summary brief to Conductor's inbox so Conductor has
+// a running picture of specialist activity. Uses the generalised agent-inbox
+// helper so the same mechanism works for cross-agent briefs (see
+// server/agents/agent-inbox.js).
 
-function briefConductor(agentId, parsed, businessId) {
+async function briefConductor(agentId, parsed, businessId, runId) {
   if (agentId === 'conductor') return; // conductor doesn't brief itself
   try {
-    const conductorDir = agentLiveDir('conductor');
-    mkdirSync(conductorDir, { recursive: true });
-    const inboxPath = join(conductorDir, 'inbox.jsonl');
-
-    const entry = {
-      from: agentId,
-      business_id: businessId,
-      timestamp: new Date().toISOString(),
-      summary: parsed.summary ?? null,
-      signals_detected: parsed.signals_detected ?? 0,
-      tasks_proposed: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
-      reasoning_excerpt: parsed.reasoning ? parsed.reasoning.slice(0, 500) : null,
-    };
-
-    appendFileSync(inboxPath, JSON.stringify(entry) + '\n', 'utf8');
-
-    // Keep last 50 entries
-    try {
-      const lines = readFileSync(inboxPath, 'utf8').trim().split('\n').filter(Boolean);
-      if (lines.length > 50) {
-        writeFileSync(inboxPath, lines.slice(-50).join('\n') + '\n', 'utf8');
-      }
-    } catch {}
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
+    await deliverAgentBrief({
+      from: `agent:${agentId}`,
+      source_label: runId ? `agent_run:${runId}` : `agent:${agentId}`,
+      to: 'conductor',
+      businessId,
+      priority: 'fyi',
+      brief: parsed.summary ?? parsed.reasoning?.slice(0, 300) ?? '(no summary)',
+      metadata: {
+        run_id: runId ?? null,
+        signals_detected: parsed.signals_detected ?? 0,
+        tasks_proposed: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
+        reasoning_excerpt: parsed.reasoning ? parsed.reasoning.slice(0, 500) : null,
+      },
+    });
   } catch (err) {
     console.warn('[agent-runner] briefConductor failed (non-fatal):', err.message);
   }
@@ -268,7 +298,7 @@ function briefConductor(agentId, parsed, businessId) {
 
 // ─── User context builder ─────────────────────────────────────────────────────
 
-async function buildUserContext({ agentId, profile, business, signals, existingTasks, connectors, trigger, triggerId, extraUserMessage }) {
+async function buildUserContext({ agentId, profile, business, signals, existingTasks, connectors, trigger, triggerId, extraUserMessage, workResult }) {
   const lines = [];
 
   lines.push(`## Current Run`);
@@ -277,23 +307,70 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   lines.push(`Timestamp: ${new Date().toISOString()}`);
   lines.push('');
 
-  // Conductor inbox (only for conductor)
-  if (agentId === 'conductor') {
-    const inboxPath = join(agentLiveDir('conductor'), 'inbox.jsonl');
-    if (existsSync(inboxPath)) {
-      try {
-        const lines2 = readFileSync(inboxPath, 'utf8').trim().split('\n').filter(Boolean);
-        const recent = lines2.slice(-20).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-        if (recent.length > 0) {
-          lines.push('## Recent Agent Briefings (last 20)');
-          for (const b of recent) {
-            lines.push(`- [${b.timestamp}] ${b.from}: ${b.summary ?? 'no summary'} (${b.tasks_proposed} tasks proposed)`);
-          }
-          lines.push('');
-        }
-      } catch {}
-    }
+  // Focus context — why this run was gated through, what to address.
+  // Manual runs skip the work check and so may have no reasons here.
+  if (workResult?.reasons?.length && !workResult.reasons.includes('bypass_work_check')) {
+    lines.push('## This run was activated because:');
+    for (const r of workResult.reasons) lines.push(`- ${r}`);
+    lines.push('');
+    lines.push(
+      'Focus on the specific item(s) above. Do not do a general sweep — ' +
+      'address what triggered this run. If these items turn out to already ' +
+      'be handled or non-actionable on closer inspection, return an empty ' +
+      'result (no tasks, no signals). An empty run is a valid outcome.'
+    );
+    lines.push('');
   }
+
+  // Inbox — every agent reads its own inbox so cross-agent briefs surface
+  // in the system prompt. Unread briefs are shown; entries are marked read
+  // after this run so they don't appear again on the next one. Conductor
+  // continues to get richer treatment because its inbox contains structured
+  // specialist summaries.
+  try {
+    const { readInbox, markAllInboxAsRead } = await import('./agent-inbox.js');
+    const unread = readInbox(agentId, { limit: 20, unreadOnly: true });
+    // For conductor, also include fyi entries even after they've been "read"
+    // so it always has recent context — conductor's role is to orchestrate.
+    const allRecent = agentId === 'conductor'
+      ? readInbox(agentId, { limit: 20, unreadOnly: false })
+      : unread;
+    const entriesToShow = allRecent.filter((e) =>
+      agentId === 'conductor' ? true : (businessId ? e.business_id === businessId : true)
+    );
+
+    if (entriesToShow.length > 0) {
+      const immediate = entriesToShow.filter((e) => e.priority === 'immediate');
+      const nextRun = entriesToShow.filter((e) => e.priority === 'next_run');
+      const fyi = entriesToShow.filter((e) => e.priority === 'fyi' || !e.priority);
+
+      lines.push(`## Inbox (${entriesToShow.length} brief${entriesToShow.length === 1 ? '' : 's'})`);
+      const renderEntry = (b) => {
+        const from = b.from ?? 'unknown';
+        const when = b.timestamp ? ` [${b.timestamp}]` : '';
+        const meta = b.metadata?.tasks_proposed != null
+          ? ` (${b.metadata.tasks_proposed} tasks proposed)` : '';
+        return `- ${from}${when}: ${b.brief ?? b.summary ?? '(no summary)'}${meta}`;
+      };
+      if (immediate.length) {
+        lines.push('', '### ⚡ Immediate — address these in your analysis');
+        immediate.forEach((b) => lines.push(renderEntry(b)));
+      }
+      if (nextRun.length) {
+        lines.push('', '### Next run — consider in this run');
+        nextRun.forEach((b) => lines.push(renderEntry(b)));
+      }
+      if (fyi.length) {
+        lines.push('', '### FYI — background context');
+        fyi.forEach((b) => lines.push(renderEntry(b)));
+      }
+      lines.push('');
+    }
+
+    // Mark all unread as read so the same brief doesn't surface every run.
+    // Conductor's "fyi" entries stay visible via the allRecent branch above.
+    if (unread.length > 0) markAllInboxAsRead(agentId);
+  } catch {}
 
   lines.push(`## Business Context`);
   lines.push(`Name: ${business.name}`);
@@ -568,86 +645,213 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
     lines.push('You have been triggered manually. Review all available context and propose the highest-value actions you can identify.');
   }
 
+  // ROI context — every agent sees its own performance data so it adapts.
+  // Conductor and Reporter get broader context blocks; specialists get a
+  // focused scorecard with specific feedback when their ROI warrants it.
+  try {
+    const { buildAgentROIContext, buildConductorROIContext, buildReporterROIContext } =
+      await import('../roi/agent-context.js');
+    let roiBlock = '';
+    if (agentId === 'conductor') {
+      roiBlock = buildConductorROIContext(business?.id);
+    } else if (agentId === 'reporter') {
+      roiBlock = buildReporterROIContext(business?.id);
+    } else {
+      roiBlock = buildAgentROIContext(agentId, business?.id);
+    }
+    if (roiBlock) {
+      lines.push('');
+      lines.push(roiBlock);
+    }
+  } catch (err) {
+    console.warn('[agent-runner] ROI context injection failed:', err.message);
+  }
+
   return lines.join('\n');
 }
 
 // ─── Data gap + connector wishlist processors ─────────────────────────────────
+//
+// Both of these used to have their own task-creation + dedup logic. They now
+// funnel through surfaceConnectorGap() so KB, signals, chat, and agents all
+// share the same connector-gap pipeline (with a single dedup row per
+// business+connector and a single place to change policy).
 
 /**
  * Handle data_gaps from an agent response.
- * For built-in connectors that aren't connected, propose a connect task.
+ * For built-in connectors that aren't connected, surface a gap.
  */
 async function processDataGaps(gaps, agentId, businessId) {
   if (!Array.isArray(gaps) || gaps.length === 0) return;
-  const { createTask } = await import('../tasks/task-queue.js');
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const gap of gaps) {
     if (!gap?.connector_type || gap.priority === 'low') continue;
 
-    // Avoid duplicate connect tasks
-    const existing = db.prepare(`
-      SELECT id FROM tasks
-      WHERE business_id = ?
-        AND action_type = 'connect_connector'
-        AND status IN ('proposed', 'approved')
-        AND json_extract(action_payload, '$.connector_type') = ?
-    `).get(businessId, gap.connector_type);
-    if (existing) continue;
-
-    createTask({
+    await surfaceConnectorGap({
       business_id: businessId,
-      title: `Connect ${gap.connector_name || gap.connector_type} — requested by ${agentId}`,
-      description: `**Why ${agentId} needs this:**\n\n${gap.description}\n\n**Impact on analysis:** ${gap.impact}\n\nThis connector is built into Blueprint and ready to connect. Go to: Settings → Connectors → Add Connector.`,
-      proposed_by: agentId,
-      action_type: 'connect_connector',
+      connector_name: gap.connector_name || gap.connector_type,
+      source: `agent:${agentId}`,
+      reason: gap.description,
+      use_case: gap.impact,
+      implied_by: `${agentId} analysis`,
       priority: gap.priority === 'high' ? 'p2' : 'p3',
-      trust_tier: 'green',
-      confidence: 0.8,
-      action_payload: {
-        connector_type: gap.connector_type,
-        connector_name: gap.connector_name || gap.connector_type,
-        requested_by: agentId,
-        reason: gap.description,
-      },
-    });
+    }).catch((err) =>
+      console.warn(`[agent-runner] surfaceConnectorGap failed for ${gap.connector_type}:`, err.message)
+    );
+  }
+}
+
+/**
+ * Handle kb_entries from an agent response.
+ * Files each entry to the business KB tagged with the agent as author so the
+ * KB analyser can see it in future passes without re-entrant loops.
+ * runId flows through so intelligence_events attribute the write to THIS run.
+ */
+async function processAgentKBEntries(entries, agentId, businessId, runId) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const { logIntelligenceEvent } = await import('../lib/intelligence-events.js');
+    const kbResult = await getKBForBusiness(businessId);
+    if (!kbResult?.engine) return;
+
+    for (const entry of entries.slice(0, 3)) {
+      if (!entry?.path || !entry?.content) continue;
+      // Reject writes to raw/ or special root files — agents must not overwrite those
+      if (entry.path.startsWith('raw/')) continue;
+      if (['WIKI.md', 'index.md', 'log.md', 'hot.md'].includes(entry.path)) continue;
+
+      try {
+        await kbResult.engine.writeFile(
+          entry.path,
+          String(entry.content),
+          {
+            title: (entry.title ?? entry.path.split('/').pop()?.replace(/\.md$/, '') ?? 'untitled').slice(0, 140),
+            tags: Array.isArray(entry.tags) ? [...entry.tags, agentId].slice(0, 8) : [agentId],
+            written_by: `agent:${agentId}`,
+            review_status: 'pending_review',
+            why: entry.why ? String(entry.why).slice(0, 400) : undefined,
+          },
+          `${agentId}: ${String(entry.title ?? entry.path).slice(0, 60)}`
+        );
+
+        // Log so the Timeline can show "this run produced a KB entry".
+        // kb.writeFile doesn't log intelligence events itself.
+        if (runId) {
+          logIntelligenceEvent({
+            business_id: businessId,
+            source_type: 'agent_run',
+            source_id: runId,
+            target_type: 'kb_entry',
+            target_id: entry.path,
+            event_type: 'filed_kb',
+            description: `${agentId}: ${String(entry.title ?? entry.path).slice(0, 140)}`,
+            metadata: { agent_id: agentId, why: entry.why ?? null },
+          });
+        }
+      } catch (err) {
+        console.warn(`[agent-runner] kb_entries write for ${entry.path} failed:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentKBEntries failed:', err.message);
+  }
+}
+
+/**
+ * Handle agent_briefs from an agent response — deliver each to the target
+ * agent's inbox via the shared helper. Target validated against installed agents.
+ * runId flows through so intelligence_events attribute the brief to THIS run.
+ */
+async function processAgentBriefs(briefs, fromAgentId, businessId, runId) {
+  if (!Array.isArray(briefs) || briefs.length === 0) return;
+  try {
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
+
+    for (const b of briefs.slice(0, 5)) {
+      if (!b?.to_agent || !b?.brief) continue;
+      if (b.to_agent === fromAgentId) continue; // never self-brief
+
+      // Only deliver to installed, active agents
+      const target = db.prepare("SELECT id FROM agents WHERE id = ? AND status = 'active'").get(b.to_agent);
+      if (!target) continue;
+
+      await deliverAgentBrief({
+        // `from` is human-readable for the inbox display
+        from: `agent:${fromAgentId}`,
+        // `source_label` is run-scoped for precise Timeline attribution
+        source_label: runId ? `agent_run:${runId}` : `agent:${fromAgentId}`,
+        to: b.to_agent,
+        businessId,
+        brief: b.brief,
+        priority: ['immediate', 'next_run', 'fyi'].includes(b.priority) ? b.priority : 'next_run',
+      }).catch((err) =>
+        console.warn(`[agent-runner] agent_brief to ${b.to_agent} failed:`, err.message)
+      );
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentBriefs failed:', err.message);
+  }
+}
+
+/**
+ * Handle signals_to_create from an agent response — route through the
+ * createSignalIfNotDuplicate helper so each signal dedups, files to KB,
+ * checks goal impact, and surfaces connector implications like any other.
+ * runId flows through so intelligence_events attribute the signal to THIS run.
+ */
+async function processAgentSignals(signals, agentId, businessId, runId) {
+  if (!Array.isArray(signals) || signals.length === 0) return;
+  try {
+    const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
+    for (const s of signals.slice(0, 5)) {
+      if (!s?.title) continue;
+      if ((s.confidence ?? 0) < 0.65) continue;
+
+      const slug = String(s.title)
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+      const ruleId = `agent:${agentId}:${slug || 'signal'}`;
+
+      createSignalIfNotDuplicate({
+        business_id: businessId,
+        rule_id: ruleId,
+        type: s.type || 'anomaly',
+        severity: s.severity || 'info',
+        title: s.title,
+        description: s.description ?? null,
+        confidence: Number(s.confidence) || 0.7,
+        data: { source_agent: agentId, run_id: runId ?? null, raw: s },
+        source_label: runId ? `agent_run:${runId}` : `agent:${agentId}`,
+      });
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentSignals failed:', err.message);
   }
 }
 
 /**
  * Handle connector_wishlist from an agent response.
- * Creates research_connector tasks for data sources that don't have a Blueprint connector yet.
+ * Surfaces research-needed gaps for data sources without a built-in connector.
  */
 async function processConnectorWishlist(wishlist, agentId, businessId) {
   if (!Array.isArray(wishlist) || wishlist.length === 0) return;
-  const { createTask } = await import('../tasks/task-queue.js');
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const item of wishlist) {
     if (!item?.description || !item.search_for_api) continue;
 
-    const existing = db.prepare(`
-      SELECT id FROM tasks
-      WHERE business_id = ?
-        AND action_type = 'research_connector'
-        AND status IN ('proposed', 'approved', 'executing')
-        AND title LIKE ?
-    `).get(businessId, `%${item.description.slice(0, 30)}%`);
-    if (existing) continue;
-
-    createTask({
+    await surfaceConnectorGap({
       business_id: businessId,
-      title: `Research connector: ${item.description.slice(0, 80)}`,
-      description: `**Requested by:** ${agentId}\n\n**Use case:** ${item.use_case}\n\nThis data source doesn't have a Blueprint connector yet. Blueprint will research available APIs and produce a connector spec.`,
-      proposed_by: agentId,
-      action_type: 'research_connector',
+      connector_name: item.description,  // free-form → research_connector path
+      source: `agent:${agentId}`,
+      reason: item.use_case,
+      use_case: item.description,
+      implied_by: `${agentId} connector wishlist`,
       priority: 'p3',
-      trust_tier: 'green',
-      confidence: 0.7,
-      action_payload: {
-        description: item.description,
-        use_case: item.use_case,
-        requested_by: agentId,
-      },
-    });
+    }).catch((err) =>
+      console.warn(`[agent-runner] surfaceConnectorGap failed for wishlist item:`, err.message)
+    );
   }
 }
 
@@ -659,6 +863,10 @@ async function processConnectorWishlist(wishlist, agentId, businessId) {
 export async function runAgent(agentId, businessId, trigger, triggerId = null, options = {}) {
   const runId = generateId();
   const startedAt = new Date().toISOString();
+
+  // Import lazy to avoid top-of-file import chain growth
+  const { categoriseTrigger, hasWorkToDo } = await import('./work-checker.js');
+  const triggerType = categoriseTrigger(trigger);
 
   // 0. Check global kill switch
   const globallyPaused = db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get();
@@ -676,7 +884,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   // notification — pending/paused agents should simply not run quietly.
   if (agentRow.status !== 'active') {
     recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt,
-      `Agent status is '${agentRow.status}'; only 'active' agents run.`);
+      `Agent status is '${agentRow.status}'; only 'active' agents run.`,
+      { trigger_type: triggerType });
     return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: `status_${agentRow.status}` };
   }
 
@@ -686,7 +895,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
   const { checkAgentReadiness } = await import('./readiness.js');
   const readiness = checkAgentReadiness(agentId, businessId);
   if (!readiness.ready) {
-    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason);
+    recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason,
+      { trigger_type: triggerType });
     return {
       runId,
       tasksProposed: 0,
@@ -694,6 +904,33 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       skipped: true,
       reason: readiness.status,
       readiness,
+    };
+  }
+
+  // 1c. Work-check gate — even if the agent CAN run (readiness passed), is
+  // there actually anything for it to do? This is the cheap pre-LLM gate
+  // that makes event-driven architecture actually save tokens: when an event
+  // woke the agent but the work has already been addressed (or was never
+  // material to this agent's domain), we skip cleanly with zero LLM cost.
+  //
+  // Manual runs bypass the gate — the user explicitly asked, so run.
+  const bypassWorkCheck = trigger === 'manual' || options.bypass_work_check === true;
+  const workResult = bypassWorkCheck
+    ? { hasWork: true, reasons: ['bypass_work_check'], lastRunAt: null }
+    : hasWorkToDo(agentId, businessId);
+  if (!bypassWorkCheck && !workResult.hasWork) {
+    recordSkippedRun(
+      runId, agentId, businessId, trigger, triggerId, startedAt,
+      `Nothing to do at run time (trigger=${trigger}).`,
+      { trigger_type: triggerType, work_reasons: [] },
+    );
+    return {
+      runId,
+      tasksProposed: 0,
+      signalsDetected: 0,
+      skipped: true,
+      reason: 'no_work',
+      work_reasons: [],
     };
   }
 
@@ -716,15 +953,32 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     profile = yaml.load(readFileSync(found, 'utf8'));
   }
 
-  // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model)
-  const llmConfig = profile.llm ?? {
-    model: profile.model?.primary ?? 'claude-sonnet-4-20250514',
-    temperature: 0.7,
-    max_tokens: profile.model?.max_tokens ?? 4096,
-    fallback_provider: null,
-    fallback_model: profile.model?.fallback ?? null,
-    cost_cap_daily_usd: profile.model?.cost_cap_daily_usd ?? 2.0,
-  };
+  // 3. Resolve LLM settings.
+  //
+  // Provider and model ALWAYS come from user settings (never baked into
+  // the profile). The profile only declares per-agent tuning — temperature,
+  // max_tokens, daily cost cap — and optionally opts into the triage tier
+  // for event/poll runs by providing an `llm_triage` block.
+  //
+  // Tier selection:
+  //   trigger is event/poll AND profile.llm_triage present → triage tier
+  //   otherwise                                            → default tier
+  //
+  // resolveProfileLLM reads the tier's provider/model from settings
+  // (llm_triage_provider/model, llm_default_provider/model) and overlays
+  // the profile's temperature/max_tokens.
+  const wantsTriage = (triggerType === 'event' || triggerType === 'poll') && !!profile.llm_triage;
+  const tier = wantsTriage ? 'triage' : 'default';
+  const profileBlock = wantsTriage ? profile.llm_triage : (profile.llm ?? {});
+  // Strip any stale `provider`/`model` that might still be lurking in an
+  // old profile.yaml — we never read them. Keep tuning-only keys.
+  const { provider: _ignoredP, model: _ignoredM, ...tuning } = profileBlock;
+  const llmConfig = { ...tuning, _tier: wantsTriage ? 'triage' : 'full' };
+  if (profile.llm_triage) {
+    console.log(
+      `[agent-runner] ${agentId} tier=${llmConfig._tier} (trigger_type=${triggerType})`
+    );
+  }
 
   // 3b. Check global monthly budget
   const monthlyBudget = JSON.parse(
@@ -756,9 +1010,15 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
 
   // Create the run record
   db.prepare(`
-    INSERT INTO agent_runs (id, agent_id, business_id, trigger, trigger_id, status, started_at)
-    VALUES (?, ?, ?, ?, ?, 'running', ?)
-  `).run(runId, agentId, businessId, trigger, triggerId, startedAt);
+    INSERT INTO agent_runs (
+      id, agent_id, business_id, trigger, trigger_id, status, started_at,
+      trigger_type, work_reasons
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)
+  `).run(
+    runId, agentId, businessId, trigger, triggerId, startedAt,
+    triggerType,
+    workResult.reasons?.length ? JSON.stringify(workResult.reasons) : null,
+  );
 
   try {
     const { pushDashboardEvent } = await import('../lib/sse-bus.js');
@@ -793,7 +1053,8 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     // 7. Assemble system prompt from soul files
     const systemPrompt = assembleSystemPrompt(agentId, profile);
 
-    // 8. Build user context message
+    // 8. Build user context message (with the work-check reasons so the agent
+    // knows exactly why it was activated and what to focus on)
     const userContext = await buildUserContext({
       agentId,
       profile,
@@ -804,10 +1065,11 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       trigger,
       triggerId,
       extraUserMessage: options.extra_user_message,
+      workResult,
     });
 
     // 9. Run LLM (with fallback)
-    const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig);
+    const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig, { tier });
 
     let llmResult;
     try {
@@ -819,10 +1081,15 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       });
     } catch (primaryErr) {
       console.warn(`[agent-runner] Primary provider '${providerId}' failed: ${primaryErr.message}`);
-      if (llmConfig.fallback_provider) {
+      // Fallback provider + model come from settings (llm_fallback_provider /
+      // llm_fallback_model). If the user hasn't configured a fallback, the
+      // primary failure propagates.
+      const { getFallbackLLM } = await import('../lib/llm-providers.js');
+      const fallback = getFallbackLLM();
+      if (fallback) {
         const { providerId: fbPid, model: fbModel } = resolveProfileLLM({
-          provider: llmConfig.fallback_provider,
-          model: llmConfig.fallback_model,
+          provider: fallback.provider,
+          model: fallback.model,
           temperature,
           max_tokens,
         });
@@ -1186,11 +1453,20 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
-    // 14. Process data gaps and connector wishlist (non-blocking)
+    // 14. Process mesh outputs from the agent run (all fire-and-forget).
+    // runId is threaded through so intelligence_events attribute each output
+    // to THIS specific run — the Timeline UI needs that precision to answer
+    // "what did this particular run produce?"
     processDataGaps(parsed.data_gaps, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processDataGaps failed (non-fatal):', e.message));
     processConnectorWishlist(parsed.connector_wishlist, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processConnectorWishlist failed (non-fatal):', e.message));
+    processAgentKBEntries(parsed.kb_entries, agentId, businessId, runId)
+      .catch(e => console.warn('[agent-runner] processAgentKBEntries failed (non-fatal):', e.message));
+    processAgentBriefs(parsed.agent_briefs, agentId, businessId, runId)
+      .catch(e => console.warn('[agent-runner] processAgentBriefs failed (non-fatal):', e.message));
+    processAgentSignals(parsed.signals_to_create, agentId, businessId, runId)
+      .catch(e => console.warn('[agent-runner] processAgentSignals failed (non-fatal):', e.message));
 
     // 15. Update memory with learnings
     const learnings = Array.isArray(parsed.learnings) ? parsed.learnings : [];
@@ -1216,8 +1492,9 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       summary: parsed.summary ?? null,
     });
 
-    // 16. Brief conductor (non-conductor runs only)
-    briefConductor(agentId, parsed, businessId);
+    // 16. Brief conductor (non-conductor runs only) — fire-and-forget
+    briefConductor(agentId, parsed, businessId, runId)
+      .catch((err) => console.warn('[agent-runner] briefConductor failed (non-fatal):', err.message));
 
     // 16b. Dispatch BAP webhook for agent.run.complete
     try {

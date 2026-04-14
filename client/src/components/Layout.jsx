@@ -53,6 +53,7 @@ const PAGE_TITLES = {
   '/agents':     'Agents',
   '/connectors': 'Connectors',
   '/outcomes':   'Outcomes',
+  '/roi':        'ROI',
   '/workflows':  'Workflows',
   '/goals':      'Goals',
   '/projects':   'Projects',

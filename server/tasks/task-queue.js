@@ -108,9 +108,19 @@ export function createTask(taskData) {
   const created = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id));
   audit(business_id, 'task', id, 'create', proposed_by, null, created);
 
-  // Auto-populate target_metric for outcome tracking
+  // Auto-populate target_metric for outcome tracking, then generate the
+  // counterfactual estimate ("cost of inaction") so the approver sees it
+  // inline in the task description before deciding.
   try {
-    import('./outcomes.js').then((m) => m.setTaskTargetMetric(id, business_id, action_type)).catch(() => {});
+    import('./outcomes.js').then(async (m) => {
+      m.setTaskTargetMetric(id, business_id, action_type);
+      try {
+        const { generateCounterfactual } = await import('../roi/counterfactual.js');
+        await generateCounterfactual(id);
+      } catch (err) {
+        console.warn('[tasks] counterfactual failed:', err.message);
+      }
+    }).catch(() => {});
   } catch {}
 
   // Brain — fire-and-forget conflict detection against goals + action windows

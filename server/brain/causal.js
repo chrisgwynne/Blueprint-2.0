@@ -159,9 +159,7 @@ Consider: timing match, direction match, other plausible explanations (seasonal,
 A correlating social post is a candidate cause only when timing AND reach/engagement plausibly explain the magnitude.
 Be conservative — only claim a likely_cause with confidence >= 0.7.`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
   try {
     const result = await runLLM(providerId, model, {

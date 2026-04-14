@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -877,11 +877,291 @@ function LLMTab() {
           ))}
         </div>
       </Section>
+
+      <TierConfigSection providers={providers ?? []} />
     </div>
   )
 }
 
+// Tier configuration — lets the user pick provider+model per tier
+// (default / triage / fallback). Triage and fallback fall back to default
+// when not set. No hardcoded model strings anywhere in the system — every
+// LLM call resolves its model through these settings.
+function TierConfigSection({ providers }) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [tiers, setTiers] = useState({ default: {}, triage: {}, fallback: {} })
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState({})  // { [tier]: { provider, model } }
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await getLLMTiers()
+      setTiers(res?.tiers ?? { default: {}, triage: {}, fallback: {} })
+    } catch (err) {
+      addNotification({ type: 'error', message: 'Failed to load tiers: ' + err.message })
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (tier) => {
+    const draft = pending[tier] ?? {}
+    const provider = draft.provider ?? tiers[tier].provider
+    const model = draft.model ?? tiers[tier].model
+    try {
+      await setLLMTier(tier, { provider, model })
+      addNotification({ type: 'success', message: `${tier} tier updated.` })
+      setPending((p) => ({ ...p, [tier]: undefined }))
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+  const clear = async (tier) => {
+    try {
+      await clearLLMTier(tier)
+      addNotification({ type: 'success', message: `${tier} tier cleared — falls back to default.` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  const modelsFor = (providerId) => {
+    const p = providers.find((x) => x.id === providerId)
+    return p?.models ?? []
+  }
+
+  const TierRow = ({ tier, description }) => {
+    const cur = tiers[tier] ?? {}
+    const draft = pending[tier] ?? {}
+    const provider = draft.provider ?? cur.provider ?? ''
+    const model = draft.model ?? cur.model ?? ''
+    const dirty = (draft.provider !== undefined && draft.provider !== cur.provider) ||
+                  (draft.model !== undefined && draft.model !== cur.model)
+    const isDefault = tier === 'default'
+    const configured = !!(cur.provider && cur.model)
+    return (
+      <div className="p-3 rounded border border-blueprint-border bg-blueprint-bg">
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <div className="text-xs font-medium text-slate-300 capitalize">{tier} tier</div>
+            <div className="text-[10px] text-blueprint-muted">{description}</div>
+          </div>
+          <div className="text-[10px] text-blueprint-muted">
+            {configured ? '✓ configured' : isDefault ? '⚠ not set' : 'falls back to default'}
+          </div>
+        </div>
+        <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+          <select
+            value={provider}
+            onChange={(e) => setPending((p) => ({
+              ...p,
+              [tier]: { ...(p[tier] ?? {}), provider: e.target.value || null, model: null },
+            }))}
+            className="bp-select text-xs"
+          >
+            <option value="">— not set —</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={model}
+            onChange={(e) => setPending((p) => ({
+              ...p,
+              [tier]: { ...(p[tier] ?? {}), model: e.target.value || null },
+            }))}
+            disabled={!provider}
+            className="bp-select text-xs"
+          >
+            <option value="">— pick a model —</option>
+            {modelsFor(provider).map((m) => (
+              <option key={m.id ?? m} value={m.id ?? m}>{m.name ?? m.id ?? m}</option>
+            ))}
+          </select>
+          <div className="flex gap-1">
+            <button
+              onClick={() => save(tier)}
+              disabled={!dirty}
+              className="bp-btn bp-btn-secondary text-[10px]"
+            >
+              Save
+            </button>
+            {!isDefault && configured && (
+              <button
+                onClick={() => clear(tier)}
+                className="bp-btn bp-btn-ghost text-[10px]"
+                title="Clear — falls back to default"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <Section
+      title="LLM Tiers"
+      description="Pick which provider + model drives each tier. Blueprint never hardcodes a model — every LLM call resolves through these settings."
+    >
+      {loading ? (
+        <div className="text-xs text-blueprint-muted">Loading…</div>
+      ) : (
+        <div className="space-y-2">
+          <TierRow
+            tier="default"
+            description="Used for every run unless the call explicitly asks for another tier. Required."
+          />
+          <TierRow
+            tier="triage"
+            description="Fast/cheap model for routing, intent extraction, attribution, summaries. Optional — falls back to default."
+          />
+          <TierRow
+            tier="fallback"
+            description="Retry model when the primary provider fails mid-run. Optional — if unset, primary failure propagates."
+          />
+        </div>
+      )}
+    </Section>
+  )
+}
+
 // ============================================
+// Poll-interval section (Tranche 6D) — controls how often each agent's
+// safety-net poll fires when no event has woken it. Primary triggers are
+// still event-based; this is the "fallback in case an event was missed".
+// ============================================
+function PollIntervalsSection() {
+  const addNotification = useStore((s) => s.addNotification)
+  const [rows, setRows] = useState([])
+  const [bounds, setBounds] = useState({ min: 1, max: 20160 })
+  const [loading, setLoading] = useState(true)
+  const [pending, setPending] = useState({}) // agentId -> minutes being edited
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const res = await getAgentPollIntervals()
+      setRows(res?.agents ?? [])
+      if (res?.bounds) setBounds(res.bounds)
+      setPending({})
+    } catch (err) {
+      addNotification({ type: 'error', message: `Failed to load poll intervals: ${err.message}` })
+    } finally {
+      setLoading(false)
+    }
+  }
+  useEffect(() => { load() }, [])
+
+  const save = async (agentId) => {
+    const minutes = Number(pending[agentId])
+    if (!Number.isFinite(minutes) || minutes < bounds.min || minutes > bounds.max) {
+      addNotification({ type: 'error', message: `Interval must be between ${bounds.min} and ${bounds.max} minutes` })
+      return
+    }
+    try {
+      await setAgentPollInterval(agentId, minutes)
+      addNotification({ type: 'success', message: `${agentId} poll interval set to ${minutes} min` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+  const reset = async (agentId) => {
+    try {
+      await resetAgentPollInterval(agentId)
+      addNotification({ type: 'success', message: `${agentId} reverted to default` })
+      await load()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  return (
+    <Section
+      title="Poll Intervals"
+      description="How often each agent's safety-net poll fires. Primary triggers are events (connector syncs, signals, chat mentions). This controls the fallback when events are missed."
+    >
+      {loading && (
+        <div className="text-xs text-blueprint-muted">Loading…</div>
+      )}
+      {!loading && rows.length === 0 && (
+        <div className="text-xs text-blueprint-muted">No agents installed.</div>
+      )}
+      {!loading && rows.length > 0 && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-[1fr_110px_90px_110px] gap-2 text-[10px] uppercase tracking-wider text-blueprint-muted font-mono pb-1 border-b border-blueprint-border">
+            <div>Agent</div>
+            <div>Current</div>
+            <div>Default</div>
+            <div>Actions</div>
+          </div>
+          {rows.map((r) => {
+            const isOverridden = r.is_overridden
+            const effective = pending[r.agent_id] ?? r.current_minutes
+            const warnLowInterval = Number(effective) < 15 && r.agent_id !== 'sentinel'
+            return (
+              <div key={r.agent_id} className="grid grid-cols-[1fr_110px_90px_110px] gap-2 items-center text-xs font-mono">
+                <div className="flex flex-col">
+                  <span className="text-slate-300">{r.name}</span>
+                  <span className="text-blueprint-muted text-[10px]">{r.agent_id}</span>
+                </div>
+                <div>
+                  <input
+                    type="number"
+                    min={bounds.min}
+                    max={bounds.max}
+                    value={effective}
+                    onChange={(e) => setPending({ ...pending, [r.agent_id]: e.target.value })}
+                    className="bp-input text-xs w-24 font-mono"
+                  />
+                  <span className="text-[10px] text-blueprint-muted ml-1">min</span>
+                </div>
+                <div className="text-[10px] text-blueprint-muted">
+                  {r.default_minutes} min
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => save(r.agent_id)}
+                    disabled={Number(effective) === r.current_minutes}
+                    className="bp-btn bp-btn-secondary text-[10px] px-2 py-0.5"
+                  >
+                    Save
+                  </button>
+                  {isOverridden && (
+                    <button
+                      onClick={() => reset(r.agent_id)}
+                      className="bp-btn bp-btn-ghost text-[10px] px-2 py-0.5"
+                      title="Revert to default"
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {warnLowInterval && (
+                    <span title="Frequent runs can be costly" className="text-[10px] text-amber-400">⚠</span>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+          <p className="text-[10px] text-blueprint-muted mt-2">
+            Intervals below 15 min for non-uptime agents can produce real LLM
+            cost — the work-check gate limits wasted runs but tight loops on
+            genuinely new data will still fire. Conductor is polled every 15
+            min on its own schedule.
+          </p>
+        </div>
+      )}
+    </Section>
+  )
+}
+
 // Tab: Agent Defaults
 // ============================================
 function AgentDefaultsTab() {
@@ -896,6 +1176,7 @@ function AgentDefaultsTab() {
 
   return (
     <div className="space-y-4">
+      <PollIntervalsSection />
       <Section title="Cost Controls" description="Prevent runaway agent spend">
         <Field label="Global Daily Cost Cap (USD)" hint="Agents will stop running when this limit is hit">
           <div className="relative w-36">
@@ -1037,11 +1318,13 @@ function SystemTab() {
   const [health, setHealth] = useState(null)
 
   // Blueprint GitHub state
+  // Owner/repo are hardcoded on the server to chrisgwynne/Blueprint — we only
+  // let the user edit the token and toggle the integration on/off.
+  const BLUEPRINT_REPO_LABEL = 'chrisgwynne/Blueprint'
   const [ghToken, setGhToken]       = useState('')
-  const [ghOwner, setGhOwner]       = useState('chrisgwynne')
-  const [ghRepo, setGhRepo]         = useState('Blueprint')
+  const [ghEnabled, setGhEnabled]   = useState(true)
   const [ghShowToken, setGhShowToken] = useState(false)
-  const [ghStatus, setGhStatus]     = useState(null)   // { configured, repo, error }
+  const [ghStatus, setGhStatus]     = useState(null)   // { configured, enabled, repo, error }
   const [ghTesting, setGhTesting]   = useState(false)
   const [ghSaving, setGhSaving]     = useState(false)
 
@@ -1051,8 +1334,7 @@ function SystemTab() {
     getBlueprintGitHubStatus()
       .then((s) => {
         setGhStatus(s)
-        if (s.owner) setGhOwner(s.owner)
-        if (s.repo)  setGhRepo(s.repo.split('/').pop() || 'Blueprint')
+        if (typeof s.enabled === 'boolean') setGhEnabled(s.enabled)
       })
       .catch(() => {})
   }, [])
@@ -1078,7 +1360,10 @@ function SystemTab() {
   async function handleGhSave() {
     setGhSaving(true)
     try {
-      await saveBlueprintGitHubSettings({ token: ghToken || undefined, owner: ghOwner, repo: ghRepo })
+      await saveBlueprintGitHubSettings({
+        token: ghToken || undefined,
+        enabled: ghEnabled,
+      })
       addNotification({ type: 'success', message: 'Blueprint GitHub settings saved' })
       // Re-check status
       const s = await getBlueprintGitHubStatus()
@@ -1157,24 +1442,26 @@ function SystemTab() {
         )}
 
         <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Owner / Org">
+          <Field label="Target repository" hint="Hardcoded — Blueprint never files issues or PRs on any other repo.">
+            <div className="bp-input text-xs w-full opacity-70 flex items-center justify-between">
+              <span className="mono">{BLUEPRINT_REPO_LABEL}</span>
+              <span className="text-[10px] uppercase tracking-wider text-blueprint-muted">read-only</span>
+            </div>
+          </Field>
+
+          <Field
+            label="Enable self-healing on GitHub"
+            hint="When off, Blueprint still diagnoses errors locally but does not create issues or draft PRs on GitHub."
+          >
+            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
               <input
-                className="bp-input text-xs w-full"
-                value={ghOwner}
-                onChange={(e) => setGhOwner(e.target.value)}
-                placeholder="chrisgwynne"
+                type="checkbox"
+                checked={ghEnabled}
+                onChange={(e) => setGhEnabled(e.target.checked)}
               />
-            </Field>
-            <Field label="Repository">
-              <input
-                className="bp-input text-xs w-full"
-                value={ghRepo}
-                onChange={(e) => setGhRepo(e.target.value)}
-                placeholder="Blueprint"
-              />
-            </Field>
-          </div>
+              <span>{ghEnabled ? 'Enabled' : 'Disabled — no GitHub issues or PRs will be created'}</span>
+            </label>
+          </Field>
 
           <Field label="Personal Access Token" hint="Fine-grained token: Issues + Pull requests + Contents (read/write). Repo: chrisgwynne/Blueprint only.">
             <div className="relative">
@@ -1184,6 +1471,7 @@ function SystemTab() {
                 value={ghToken}
                 onChange={(e) => setGhToken(e.target.value)}
                 placeholder={ghStatus?.configured ? '••••••••••••••••••••••••••••••••' : 'ghp_...'}
+                disabled={!ghEnabled}
               />
               <button
                 type="button"

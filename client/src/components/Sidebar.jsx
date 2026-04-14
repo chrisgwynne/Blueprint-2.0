@@ -30,7 +30,7 @@ import {
   CreditCard,
   GitBranch,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, Zap as ZapIcon, BookMarked, AlertTriangle } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, Zap as ZapIcon, BookMarked, AlertTriangle, PiggyBank } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -87,6 +87,7 @@ const NAV_ITEMS = [
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },
   { label: 'Outcomes',      to: '/outcomes',   icon: Target },
+  { label: 'ROI',           to: '/roi',        icon: PiggyBank },
   { label: 'Knowledge Base',to: '/kb',         icon: BookOpen },
   { label: 'System Health', to: '/health',     icon: Activity,        healthDot: true },
   { label: 'Settings',      to: '/settings',   icon: Settings },

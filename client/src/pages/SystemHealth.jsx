@@ -6,7 +6,7 @@ import {
   AlertTriangle, CheckCircle2, XCircle, Pause, Database,
   BookOpen, Clock, Zap, Wrench, ExternalLink,
 } from 'lucide-react'
-import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks } from '../lib/api.js'
+import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks, getAgentEfficiency } from '../lib/api.js'
 import useStore from '../lib/store.js'
 
 const STATUS_COLORS = {
@@ -394,6 +394,138 @@ function SchedulerSection({ scheduler }) {
   )
 }
 
+// Token efficiency — surfaces the business value of the Tranche 6A
+// work-check gate and the Tranche 6B event dispatcher: event-triggered
+// runs beat poll-triggered runs, and skipped runs save real money.
+function TokenEfficiencySection() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    getAgentEfficiency({ days: 7 })
+      .then((d) => { if (!cancelled) setData(d) })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
+
+  if (loading) {
+    return <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>Loading…</div>
+  }
+  if (!data) {
+    return <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>No data yet — run some agents to see efficiency stats.</div>
+  }
+
+  const byType = Object.fromEntries((data.by_trigger_type ?? []).map(r => [r.trigger_type, r]))
+  const eventCount = byType.event?.count ?? 0
+  const pollCount = byType.poll?.count ?? 0
+  const scheduleCount = byType.schedule?.count ?? 0
+  const manualCount = byType.manual?.count ?? 0
+  const sleepers = [...(data.per_agent ?? [])]
+    .filter(a => a.runs > 0)
+    .sort((a, b) => (b.skipped / Math.max(1, b.runs)) - (a.skipped / Math.max(1, a.runs)))
+    .slice(0, 3)
+
+  const Stat = ({ label, value, color, hint }) => (
+    <div style={{ padding: '10px 12px', background: 'var(--bp-bg)', border: '1px solid var(--bp-border)', borderRadius: 4 }}>
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 18, fontWeight: 600, color: color ?? 'var(--bp-text)' }}>
+        {value}
+      </div>
+      {hint && (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginTop: 2 }}>
+          {hint}
+        </div>
+      )}
+    </div>
+  )
+
+  return (
+    <div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8, marginBottom: 12 }}>
+        <Stat
+          label="Event-triggered"
+          value={eventCount}
+          color="var(--bp-green)"
+          hint="Ideal — woken by what actually happened"
+        />
+        <Stat
+          label="Poll-triggered"
+          value={pollCount}
+          color="var(--bp-cyan)"
+          hint="Safety-net fallback runs"
+        />
+        <Stat
+          label="Skipped (work-check)"
+          value={data.total_skipped}
+          color="var(--bp-text-2)"
+          hint={`${Math.round((data.skip_rate ?? 0) * 100)}% of all runs cost zero tokens`}
+        />
+        <Stat
+          label="Est. token savings"
+          value={data.estimated_savings?.tokens != null ? data.estimated_savings.tokens.toLocaleString() : '—'}
+          color="var(--bp-amber)"
+          hint={data.estimated_savings?.cost_usd != null ? `≈ $${data.estimated_savings.cost_usd.toFixed(4)}` : ''}
+        />
+      </div>
+
+      {/* Breakdown row */}
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginBottom: 10, paddingLeft: 2 }}>
+        <strong style={{ color: 'var(--bp-text)' }}>{data.total_complete}</strong> completed,{' '}
+        <strong style={{ color: 'var(--bp-text)' }}>{manualCount}</strong> manual,{' '}
+        <strong style={{ color: 'var(--bp-text)' }}>{scheduleCount}</strong> scheduled,{' '}
+        <strong style={{ color: 'var(--bp-text)' }}>{data.total_runs}</strong> total runs{' '}
+        over the last {data.window_days} days — ${data.total_cost_usd?.toFixed(4) ?? '0.0000'} spent.
+      </div>
+
+      {/* Top event triggers */}
+      {data.top_event_triggers?.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+            Most active event triggers
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {data.top_event_triggers.slice(0, 5).map((t) => (
+              <span key={t.trigger} style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 10,
+                padding: '2px 8px', background: 'var(--bp-bg)',
+                border: '1px solid var(--bp-border)', borderRadius: 3,
+                color: 'var(--bp-text-2)',
+              }}>
+                {t.trigger} · {t.count}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Most-sleeping agents */}
+      {sleepers.length > 0 && (
+        <div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 4 }}>
+            Most frequently sleeping
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {sleepers.map((a) => (
+              <span key={a.agent_id} style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 10,
+                padding: '2px 8px', background: 'var(--bp-bg)',
+                border: '1px solid var(--bp-border)', borderRadius: 3,
+                color: 'var(--bp-text-2)',
+              }}>
+                {a.agent_id} · {a.skipped}/{a.runs} skipped
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SelfHealingSection() {
   const currentBusiness = useStore((s) => s.currentBusiness)
   const [healingTasks, setHealingTasks] = useState([])
@@ -600,6 +732,10 @@ export default function SystemHealth() {
 
       <Section title="Brain">
         <BrainSection />
+      </Section>
+
+      <Section title="Token Efficiency (last 7 days)">
+        <TokenEfficiencySection />
       </Section>
 
       <Section title="Self-Healing">

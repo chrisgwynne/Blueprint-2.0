@@ -10,7 +10,7 @@
  * Uses the unified runLLM() interface so it works with claude-cli, anthropic,
  * openai, ollama, etc.
  */
-import { runLLM } from '../lib/llm-providers.js';
+import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 
 function todayISO() {
   return new Date().toISOString().split('T')[0];
@@ -54,11 +54,25 @@ export class KBAgent {
   /**
    * @param {KBEngine} kb
    * @param {{ provider?: string, model?: string }} options
+   *   If provider/model are omitted, the agent resolves them via
+   *   resolveProfileLLM({}) — i.e. from user settings — on every LLM call.
+   *   An explicit provider+model override the settings resolution.
    */
-  constructor(kb, { provider = 'claude-cli', model = 'claude-sonnet-4-20250514' } = {}) {
+  constructor(kb, { provider = null, model = null } = {}) {
     this.kb = kb;
-    this.provider = provider;
-    this.model = model;
+    this._explicitProvider = provider;
+    this._explicitModel = model;
+  }
+
+  // Lazy getters — resolve from settings at access time so changes to
+  // Settings → LLM Providers take effect without restarting the agent.
+  get provider() {
+    if (this._explicitProvider) return this._explicitProvider;
+    return resolveProfileLLM({}).providerId;
+  }
+  get model() {
+    if (this._explicitModel) return this._explicitModel;
+    return resolveProfileLLM({}).model;
   }
 
   /**
@@ -477,6 +491,421 @@ Respond with valid JSON only:
     await this.kb.appendLog('lint', `${totalIssues} issues found`);
 
     return { issues, suggestions };
+  }
+
+  // ── Auto-fix ────────────────────────────────────────────────────────────────
+
+  /**
+   * Apply safe, mechanical fixes to lint issues without human intervention.
+   *
+   * Fixed automatically:
+   *   - missing_frontmatter  → LLM generates title/tags from page content
+   *   - dead_links           → fuzzy-match to renamed page, or strip [[]] to plain text
+   *   - orphans              → add to index.md + LLM places one contextual backlink
+   *
+   * Escalated to tasks (not auto-fixed — too risky):
+   *   - stale_pages          → created task for human review
+   *   - contradictions       → created task for human review
+   *
+   * @param {object} issues  — result of this.kb.lint()
+   * @param {Function} createTask  — optional task-queue createTask() to escalate
+   * @param {string} businessId    — needed for escalation tasks
+   * @returns {{ applied: string[], escalated: string[], errors: string[] }}
+   */
+  async autoFix(issues, createTask = null, businessId = null) {
+    const applied = [];
+    const escalated = [];
+    const errors = [];
+
+    // ── 1. Missing frontmatter ──────────────────────────────────────────────
+    if (issues.missing_frontmatter?.length > 0) {
+      try {
+        const r = await this._fixMissingFrontmatter(issues.missing_frontmatter);
+        applied.push(...r.applied);
+        errors.push(...r.errors);
+      } catch (err) {
+        errors.push(`frontmatter batch failed: ${err.message}`);
+      }
+    }
+
+    // ── 2. Dead links ───────────────────────────────────────────────────────
+    if (issues.dead_links?.length > 0) {
+      try {
+        const r = await this._fixDeadLinks(issues.dead_links);
+        applied.push(...r.applied);
+        errors.push(...r.errors);
+      } catch (err) {
+        errors.push(`dead-link batch failed: ${err.message}`);
+      }
+    }
+
+    // ── 3. Orphan pages ─────────────────────────────────────────────────────
+    if (issues.orphans?.length > 0) {
+      try {
+        const r = await this._fixOrphans(issues.orphans);
+        applied.push(...r.applied);
+        errors.push(...r.errors);
+      } catch (err) {
+        errors.push(`orphan batch failed: ${err.message}`);
+      }
+    }
+
+    // ── 4. Stale pages → escalate ───────────────────────────────────────────
+    if (issues.stale_pages?.length > 0) {
+      const msg = `${issues.stale_pages.length} stale pages need review`;
+      escalated.push(msg);
+      if (createTask && businessId) {
+        try {
+          createTask({
+            business_id: businessId,
+            title: 'KB: review stale pages',
+            description: `${issues.stale_pages.length} wiki pages haven't been updated in 90+ days:\n${issues.stale_pages.map((s) => `- ${s.file} (last updated ${s.last_updated})`).join('\n')}`,
+            proposed_by: 'system:kb-autofix',
+            action_type: 'investigation',
+            priority: 'p3',
+            trust_tier: 'green',
+          });
+        } catch {}
+      }
+    }
+
+    // ── 5. Contradictions → escalate ────────────────────────────────────────
+    if (issues.contradictions?.length > 0) {
+      const msg = `${issues.contradictions.length} contradictions need human resolution`;
+      escalated.push(msg);
+      if (createTask && businessId) {
+        try {
+          createTask({
+            business_id: businessId,
+            title: 'KB: resolve contradictions',
+            description: `${issues.contradictions.length} unresolved contradictions in the wiki:\n${issues.contradictions.map((f) => `- ${f}`).join('\n')}`,
+            proposed_by: 'system:kb-autofix',
+            action_type: 'investigation',
+            priority: 'p2',
+            trust_tier: 'green',
+          });
+        } catch {}
+      }
+    }
+
+    await this.kb.appendLog(
+      'auto-fix',
+      `${applied.length} fixes applied, ${escalated.length} escalated, ${errors.length} errors`
+    );
+
+    return { applied, escalated, errors };
+  }
+
+  /**
+   * Generate and inject frontmatter for pages that are missing it.
+   * Batches up to 5 pages per LLM call to keep prompts manageable.
+   */
+  async _fixMissingFrontmatter(paths) {
+    const applied = [];
+    const errors = [];
+
+    const BATCH = 5;
+    for (let i = 0; i < paths.length; i += BATCH) {
+      const batch = paths.slice(i, i + BATCH);
+
+      // Read each file's content
+      const pages = [];
+      for (const p of batch) {
+        try {
+          const f = await this.kb.readFile(p);
+          pages.push({ path: p, content: f.content.slice(0, 1200) });
+        } catch (err) {
+          errors.push(`read ${p}: ${err.message}`);
+        }
+      }
+      if (pages.length === 0) continue;
+
+      const prompt = `You are maintaining a wiki knowledge base. The following pages are missing YAML frontmatter.
+For each page, return a frontmatter object with: title (human-readable), tags (array of 2-5 keywords), category (one of: wiki, entities, concepts, sources, signals, research, decisions).
+
+Pages:
+${pages.map((p, idx) => `--- PAGE ${idx + 1}: ${p.path}\n${p.content}\n`).join('\n')}
+
+Return ONLY valid JSON in this exact shape, using the page paths as keys:
+{
+  "path/to/page.md": { "title": "...", "tags": ["a", "b"], "category": "..." }
+}`;
+
+      let result = {};
+      try {
+        const response = await runLLM(this.provider, this.model, {
+          system: 'Return only valid JSON.',
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+          max_tokens: 1024,
+        });
+        result = extractJSON(response.content) ?? {};
+      } catch (err) {
+        errors.push(`LLM frontmatter batch ${i}: ${err.message}`);
+        continue;
+      }
+
+      for (const p of pages) {
+        const meta = result[p.path];
+        if (!meta?.title) {
+          errors.push(`no frontmatter returned for ${p.path}`);
+          continue;
+        }
+        try {
+          const file = await this.kb.readFile(p.path);
+          await this.kb.writeFile(
+            p.path,
+            file.content,
+            {
+              ...(file.frontmatter ?? {}),
+              title: meta.title,
+              tags: meta.tags ?? [],
+              category: meta.category ?? p.path.split('/')[0],
+              written_by: 'agent:kb-autofix',
+              review_status: 'auto_approved',
+            },
+            `fix: add frontmatter to ${p.path}`
+          );
+          applied.push(`frontmatter: ${p.path}`);
+        } catch (err) {
+          errors.push(`write ${p.path}: ${err.message}`);
+        }
+      }
+    }
+
+    return { applied, errors };
+  }
+
+  /**
+   * Fix dead wikilinks.
+   * Strategy: fuzzy-match against existing files. If a confident rename is
+   * found, rewrite to the new slug. Otherwise strip the [[brackets]] to plain
+   * text — better a working sentence than a broken link.
+   * Groups edits by file so each file is read and written at most once.
+   */
+  async _fixDeadLinks(deadLinks) {
+    const applied = [];
+    const errors = [];
+
+    // Load file list once for matching
+    let allFiles = [];
+    try { allFiles = await this.kb.listFiles(); } catch {}
+
+    // Group dead links by source file
+    const byFile = new Map();
+    for (const { file, link } of deadLinks) {
+      if (!byFile.has(file)) byFile.set(file, []);
+      byFile.get(file).push(link);
+    }
+
+    for (const [filePath, brokenLinks] of byFile) {
+      let parsed;
+      try {
+        parsed = await this.kb.readFile(filePath);
+      } catch (err) {
+        errors.push(`read ${filePath}: ${err.message}`);
+        continue;
+      }
+
+      let content = parsed.content;
+      let changed = false;
+
+      for (const link of brokenLinks) {
+        const pattern = new RegExp(
+          `\\[\\[${link.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\|[^\\]]+)?\\]\\]`,
+          'g'
+        );
+
+        const resolved = this._fuzzyMatchFile(link, allFiles);
+
+        if (resolved) {
+          // Replace with the resolved path, preserve any display text
+          content = content.replace(pattern, (match) => {
+            const displayMatch = match.match(/\|([^\]]+)\]\]$/);
+            const display = displayMatch ? displayMatch[1] : link;
+            return `[[${resolved}|${display}]]`;
+          });
+          applied.push(`dead-link: ${filePath}: [[${link}]] → [[${resolved}]]`);
+        } else {
+          // Strip brackets — leave just the display text
+          content = content.replace(pattern, (match) => {
+            const displayMatch = match.match(/\|([^\]]+)\]\]$/);
+            return displayMatch ? displayMatch[1] : link;
+          });
+          applied.push(`dead-link: ${filePath}: [[${link}]] stripped to plain text`);
+        }
+        changed = true;
+      }
+
+      if (changed) {
+        try {
+          await this.kb.writeFile(
+            filePath,
+            content,
+            parsed.frontmatter && Object.keys(parsed.frontmatter).length > 0
+              ? parsed.frontmatter
+              : null,
+            `fix: dead links in ${filePath}`
+          );
+        } catch (err) {
+          errors.push(`write ${filePath}: ${err.message}`);
+        }
+      }
+    }
+
+    return { applied, errors };
+  }
+
+  /**
+   * Find the closest existing file for a broken wikilink.
+   * Returns the best match path, or null if no confident match.
+   */
+  _fuzzyMatchFile(linkText, allFiles) {
+    const slug = slugify(linkText);
+    if (!slug) return null;
+
+    // Exact slug match
+    const exact = allFiles.find((f) => {
+      const name = f.split('/').pop().replace(/\.md$/, '');
+      return name === slug || name.toLowerCase() === linkText.toLowerCase();
+    });
+    if (exact) return exact;
+
+    // The link slug is contained in a file name (or vice versa)
+    // Only accept if unique to avoid wrong rewrites
+    const partials = allFiles.filter((f) => {
+      const name = f.split('/').pop().replace(/\.md$/, '').toLowerCase();
+      return name.includes(slug) || slug.includes(name);
+    });
+    if (partials.length === 1) return partials[0];
+
+    return null;
+  }
+
+  /**
+   * Connect orphan pages by:
+   *   1. Ensuring all orphans appear in index.md (guaranteed at least one inbound link)
+   *   2. Asking the LLM to suggest one contextual backlink per orphan from existing pages
+   */
+  async _fixOrphans(orphanPaths) {
+    const applied = [];
+    const errors = [];
+
+    // ── Step 1: Update index.md ─────────────────────────────────────────────
+    try {
+      const indexFile = await this.kb.readFile('index.md').catch(() => ({ content: '', frontmatter: {} }));
+      const existingContent = indexFile.content;
+
+      // Collect which orphans are already mentioned in index.md
+      const unlinked = orphanPaths.filter((p) => !existingContent.includes(`[[${p}]]`) &&
+        !existingContent.includes(`[[${p.replace(/\.md$/, '')}]]`));
+
+      if (unlinked.length > 0) {
+        const orphanSection = `\n\n## Recently added (needs review)\n\n` +
+          unlinked.map((p) => {
+            const name = p.split('/').pop().replace(/\.md$/, '');
+            return `- [[${p}|${name}]]`;
+          }).join('\n') + '\n';
+
+        const updatedContent = existingContent.trimEnd() + orphanSection;
+        await this.kb.writeFile(
+          'index.md',
+          updatedContent,
+          indexFile.frontmatter && Object.keys(indexFile.frontmatter).length > 0
+            ? indexFile.frontmatter
+            : null,
+          `fix: link ${unlinked.length} orphan pages in index`
+        );
+        for (const p of unlinked) applied.push(`orphan→index: ${p}`);
+      }
+    } catch (err) {
+      errors.push(`index.md update: ${err.message}`);
+    }
+
+    // ── Step 2: LLM-suggested contextual backlinks ──────────────────────────
+    // Only attempt if there are orphans in content dirs — skip if all signal/decisions
+    const contentOrphans = orphanPaths.filter((p) =>
+      !p.startsWith('signals/') && !p.startsWith('decisions/')
+    );
+
+    if (contentOrphans.length === 0) return { applied, errors };
+
+    let allFiles = [];
+    try { allFiles = await this.kb.listFiles(); } catch {}
+
+    // Build a compact map of existing pages for the LLM to reason about
+    const existingPagesSnapshot = allFiles
+      .filter((f) => !f.startsWith('raw/') && !f.startsWith('signals/') && !f.startsWith('_archived/'))
+      .slice(0, 60)
+      .join('\n');
+
+    const orphanSummaries = [];
+    for (const p of contentOrphans.slice(0, 10)) { // cap at 10 to control cost
+      try {
+        const f = await this.kb.readFile(p);
+        orphanSummaries.push({ path: p, excerpt: f.content.slice(0, 400) });
+      } catch {}
+    }
+    if (orphanSummaries.length === 0) return { applied, errors };
+
+    const prompt = `You are maintaining a wiki. The following pages are orphans — no other pages link to them.
+For each orphan, identify the single best EXISTING page that should link to it.
+Only suggest pages from the list of existing files below.
+
+Orphan pages:
+${orphanSummaries.map((o) => `PATH: ${o.path}\nEXCERPT: ${o.excerpt}\n`).join('\n---\n')}
+
+Existing pages (candidates for backlinks):
+${existingPagesSnapshot}
+
+Return ONLY valid JSON:
+{
+  "path/to/orphan.md": "path/to/best/linker.md"
+}
+If there is no good match for an orphan, omit it from the result.`;
+
+    let linkMap = {};
+    try {
+      const response = await runLLM(this.provider, this.model, {
+        system: 'Return only valid JSON. Be conservative — only suggest high-confidence matches.',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        max_tokens: 1024,
+      });
+      linkMap = extractJSON(response.content) ?? {};
+    } catch (err) {
+      errors.push(`LLM backlink suggestion failed: ${err.message}`);
+      return { applied, errors };
+    }
+
+    for (const [orphanPath, linkerPath] of Object.entries(linkMap)) {
+      if (!allFiles.includes(linkerPath)) continue; // LLM hallucinated a path
+      try {
+        const linkerFile = await this.kb.readFile(linkerPath);
+        const orphanName = orphanPath.split('/').pop().replace(/\.md$/, '');
+
+        // Append a "See also" entry — never modify existing content, only append
+        const seeAlso = `\n\n## See also\n\n- [[${orphanPath}|${orphanName}]]\n`;
+
+        // Don't add if already linked
+        if (linkerFile.content.includes(`[[${orphanPath}]]`) ||
+            linkerFile.content.includes(`[[${orphanName}]]`)) continue;
+
+        await this.kb.writeFile(
+          linkerPath,
+          linkerFile.content + seeAlso,
+          linkerFile.frontmatter && Object.keys(linkerFile.frontmatter).length > 0
+            ? linkerFile.frontmatter
+            : null,
+          `fix: link [[${orphanName}]] from ${linkerPath}`
+        );
+        applied.push(`orphan-backlink: ${orphanPath} ← ${linkerPath}`);
+      } catch (err) {
+        errors.push(`backlink ${linkerPath}: ${err.message}`);
+      }
+    }
+
+    return { applied, errors };
   }
 
   // ── Signal ingest (no LLM — direct write) ───────────────────────────────────

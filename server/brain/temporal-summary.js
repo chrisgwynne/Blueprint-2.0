@@ -57,9 +57,7 @@ in-flight changes? Are outcomes ready to measure? Are there areas to be
 patient about? Plain text, no markdown.`;
 
   try {
-    const { providerId, model } = resolveProfileLLM({
-      model: 'claude-haiku-4-5-20251001',
-    });
+    const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
     const result = await runLLM(providerId, model, {
       system: 'Write a concise 2-3 sentence temporal health summary. Plain text. No JSON. No markdown.',
       messages: [{ role: 'user', content: userMessage }],

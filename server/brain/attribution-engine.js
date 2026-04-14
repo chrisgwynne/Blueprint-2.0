@@ -131,9 +131,7 @@ export async function analyseAndStore(signal) {
     const evidence = gatherEvidence(signal, signal.business_id);
     const prompt = buildPrompt(signal, evidence);
 
-    const { providerId, model } = resolveProfileLLM({
-      model: 'claude-haiku-4-5-20251001',
-    });
+    const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
     const result = await runLLM(providerId, model, {
       system: SYSTEM_PROMPT,

@@ -14,11 +14,16 @@ personality: |
   in flight.
 
 llm:
-  provider: claude-cli
-  model: claude-sonnet-4-20250514
+  # Deep analysis — manual runs, weekly reviews, anything marked deep.
   temperature: 0.4
   max_tokens: 4096
   cost_cap_daily_usd: 2.00
+llm_triage:
+  # Fast triage — event + poll runs. Routing, not analysis.
+  # agent-runner auto-selects this for conductor when trigger_type is
+  # 'event' or 'poll'. Other agents ignore this block.
+  temperature: 0.1
+  max_tokens: 1024
 
 connectors_required: []
 

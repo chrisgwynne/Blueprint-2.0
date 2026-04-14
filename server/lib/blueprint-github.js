@@ -14,14 +14,46 @@
 const GITHUB_API = 'https://api.github.com';
 
 // ─── Config ───────────────────────────────────────────────────────────────────
+//
+// The Blueprint repo is hardcoded — self-healing always targets
+// chrisgwynne/Blueprint. Users cannot point this at a different repo
+// (that would mean filing Blueprint's bug reports against someone else's code).
+// The only configurable piece is the access token.
+
+const BLUEPRINT_OWNER = 'chrisgwynne';
+const BLUEPRINT_REPO  = 'Blueprint';
+
+function parseJsonValue(raw) {
+  if (raw == null) return null;
+  try { return JSON.parse(raw); } catch { return raw; }
+}
+
+/**
+ * Is the user's Blueprint GitHub integration enabled?
+ * Defaults to true (on) — users must explicitly opt out.
+ * When disabled: no issues, no PRs — the diagnosis is logged locally only.
+ */
+export function isBlueprintGitHubEnabled(db) {
+  try {
+    const row = db.prepare(
+      "SELECT value FROM settings WHERE key = 'blueprint_github_enabled'"
+    ).get();
+    const val = parseJsonValue(row?.value);
+    return val === null || val === undefined ? true : val !== false;
+  } catch {
+    return true;
+  }
+}
 
 function getBlueprintGitHubConfig(db) {
-  const getVal = (key) =>
-    db.prepare('SELECT value FROM settings WHERE key = ?').get(key)?.value;
+  if (!isBlueprintGitHubEnabled(db)) {
+    throw new Error('Blueprint GitHub integration is disabled in Settings.');
+  }
 
-  const token  = getVal('blueprint_github_token')  || process.env.BLUEPRINT_GITHUB_TOKEN;
-  const owner  = getVal('blueprint_github_owner')  || process.env.BLUEPRINT_GITHUB_OWNER  || 'chrisgwynne';
-  const repo   = getVal('blueprint_github_repo')   || process.env.BLUEPRINT_GITHUB_REPO   || 'Blueprint';
+  const row = db.prepare(
+    "SELECT value FROM settings WHERE key = 'blueprint_github_token'"
+  ).get();
+  const token = parseJsonValue(row?.value) || process.env.BLUEPRINT_GITHUB_TOKEN;
 
   if (!token) {
     throw new Error(
@@ -31,7 +63,7 @@ function getBlueprintGitHubConfig(db) {
     );
   }
 
-  return { token, owner, repo };
+  return { token, owner: BLUEPRINT_OWNER, repo: BLUEPRINT_REPO };
 }
 
 // ─── HTTP ─────────────────────────────────────────────────────────────────────
@@ -198,18 +230,35 @@ export async function createBlueprintPR({ title, body, branch, diff }, db) {
  *         { configured: false, error: string }
  */
 export async function isBlueprintGitHubConfigured(db) {
+  const enabled = isBlueprintGitHubEnabled(db);
+  if (!enabled) {
+    return {
+      configured: false,
+      enabled: false,
+      repo: `${BLUEPRINT_OWNER}/${BLUEPRINT_REPO}`,
+      owner: BLUEPRINT_OWNER,
+      error: 'Blueprint GitHub integration is disabled in Settings.',
+    };
+  }
   try {
     const config = getBlueprintGitHubConfig(db);
     // Use rate_limit endpoint — cheap, doesn't count against limit
     const rateLimit = await githubRootRequest('/rate_limit', config.token);
     return {
       configured: true,
+      enabled: true,
       repo: `${config.owner}/${config.repo}`,
       owner: config.owner,
       rate_limit_remaining: rateLimit?.rate?.remaining ?? null,
     };
   } catch (err) {
-    return { configured: false, error: err.message };
+    return {
+      configured: false,
+      enabled: true,
+      repo: `${BLUEPRINT_OWNER}/${BLUEPRINT_REPO}`,
+      owner: BLUEPRINT_OWNER,
+      error: err.message,
+    };
   }
 }
 

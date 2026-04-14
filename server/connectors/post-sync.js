@@ -4,8 +4,8 @@
  * Responsibilities:
  *   1. Promote any 'pending' agents whose required connectors are now ready.
  *   2. Ask Conductor whether new specialist agents are worth hiring.
- *   3. Queue scheduled runs for agents that care about this connector type
- *      (respecting readiness + minimum-hours-between-runs throttle).
+ *   3. Dispatch a connector.sync.complete event so the event-triggers module
+ *      wakes any agents that care (gated by work-check + cooldown).
  *
  * Every step is fire-and-forget: sync completion path must not slow down for
  * agent orchestration, and agent orchestration must not block the sync.
@@ -13,51 +13,10 @@
 
 import db from '../db/db.js';
 import { checkAgentReadiness } from '../agents/readiness.js';
+import { dispatchAgentEvent, CONNECTOR_AGENT_MAP } from '../agents/event-triggers.js';
 
-/**
- * Which specialist agents care about a given connector type. An agent run is
- * queued when the connector it depends on has fresh data.
- */
-export const CONNECTOR_AGENT_MAP = {
-  gsc:          ['seo-sentinel', 'trend-spotter', 'quill'],
-  ga4:          ['trend-spotter', 'seo-sentinel', 'quill'],
-  pagespeed:    ['velocity'],
-  shopify:      ['merchant', 'quill'],
-  stripe:       ['ledger'],
-  uptimerobot:  ['sentinel'],
-  github:       ['dev'],
-  gbp:          ['outreach'],
-  stannp:       ['outreach'],
-  brevo:        ['outreach', 'quill'],
-  'meta-ads':   ['outreach', 'merchant'],
-};
-
-/**
- * Minimum hours between runs for each agent. Prevents firing the same agent
- * on every connector sync when multiple connectors sync in quick succession.
- */
-const MIN_HOURS_BETWEEN_RUNS = {
-  'seo-sentinel': 6,
-  'trend-spotter': 12,
-  'merchant': 4,
-  'velocity': 12,
-  'sentinel': 1,
-  'ledger': 12,
-  'dev': 12,
-  'outreach': 12,
-  'quill': 12,
-};
-const DEFAULT_MIN_HOURS = 6;
-
-function hoursSince(isoLike) {
-  if (!isoLike) return Infinity;
-  const iso = typeof isoLike === 'string' && !/[zZ]|[+-]\d{2}/.test(isoLike)
-    ? isoLike.replace(' ', 'T') + 'Z'
-    : isoLike;
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return Infinity;
-  return (Date.now() - t) / 3600_000;
-}
+// Re-export so callers that imported CONNECTOR_AGENT_MAP from here keep working
+export { CONNECTOR_AGENT_MAP };
 
 /**
  * Promote any 'pending' agents whose readiness has flipped to ready.
@@ -84,46 +43,6 @@ export function promotePendingAgents(businessId) {
     })();
   }
   return promoted;
-}
-
-/**
- * Queue runs for agents that care about this connector type, throttled by
- * MIN_HOURS_BETWEEN_RUNS and gated by readiness.
- */
-export async function queueAgentsForConnector(connectorType, businessId) {
-  const interested = CONNECTOR_AGENT_MAP[connectorType] || [];
-  if (interested.length === 0) return [];
-
-  const queued = [];
-  for (const agentId of interested) {
-    const agentRow = db.prepare(
-      `SELECT id, status FROM agents WHERE id = ? AND status = 'active'`
-    ).get(agentId);
-    if (!agentRow) continue; // not installed or not active
-
-    const r = checkAgentReadiness(agentId, businessId);
-    if (!r.ready) continue;
-
-    const lastRun = db.prepare(`
-      SELECT started_at FROM agent_runs
-      WHERE agent_id = ? AND business_id = ? AND status = 'complete'
-      ORDER BY started_at DESC LIMIT 1
-    `).get(agentId, businessId);
-    const minHours = MIN_HOURS_BETWEEN_RUNS[agentId] ?? DEFAULT_MIN_HOURS;
-    if (hoursSince(lastRun?.started_at) < minHours) continue;
-
-    // Queue a run — fire and forget, don't block the sync completion path.
-    (async () => {
-      try {
-        const { runAgent } = await import('../agents/agent-runner.js');
-        await runAgent(agentId, businessId, `connector_sync_${connectorType}`, null);
-      } catch (err) {
-        console.warn(`[post-sync] run of '${agentId}' failed:`, err.message);
-      }
-    })();
-    queued.push(agentId);
-  }
-  return queued;
 }
 
 /**
@@ -162,9 +81,26 @@ export function onConnectorSyncSuccess(connectorType, businessId) {
   try { promoted = promotePendingAgents(businessId); }
   catch (err) { console.warn('[post-sync] promote failed:', err.message); }
 
-  // 2. Queue runs for agents that care about this connector (fire-and-forget)
-  queueAgentsForConnector(connectorType, businessId).catch((err) =>
-    console.warn('[post-sync] queueAgents failed:', err.message));
+  // 2. Capture ROI baselines for any metric this connector type produces.
+  // Idempotent via unique index on (business_id, metric_name) — only the
+  // first sync with data actually writes anything, subsequent syncs silently
+  // skip. Fire-and-forget.
+  import('../roi/baselines.js')
+    .then(({ captureBaselinesForConnector }) => {
+      const r = captureBaselinesForConnector(businessId, connectorType);
+      if (r.recorded > 0) {
+        console.log(`[post-sync] ${connectorType}: recorded ${r.recorded} baseline(s) for ${businessId}`);
+      }
+    })
+    .catch((err) => console.warn('[post-sync] baseline capture failed:', err.message));
+
+  // 3. Dispatch the sync event — the event-triggers module handles the
+  // canonical wake logic (per-connector agent map + conductor + cooldown +
+  // work-check). This replaces the old queueAgentsForConnector + its per-
+  // agent MIN_HOURS_BETWEEN_RUNS throttle, which is now redundant: the
+  // work-checker skips runs that have nothing new to do regardless of timing.
+  dispatchAgentEvent('connector.sync.complete', { connector_type: connectorType }, businessId)
+    .catch((err) => console.warn('[post-sync] dispatch failed:', err.message));
 
   // 3. Hiring analysis (fire-and-forget, involves LLM call)
   runHiringAnalysis(businessId).catch((err) =>

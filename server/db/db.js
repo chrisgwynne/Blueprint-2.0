@@ -478,10 +478,179 @@ const STARTUP_MIGRATIONS = [
   `ALTER TABLE tasks ADD COLUMN wishlist_connector_type TEXT`,
 
   // Blueprint system GitHub settings (separate from business GitHub connectors).
-  // Seeded here so existing installs get the rows; ON CONFLICT does nothing if already present.
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_owner', '"chrisgwynne"', CURRENT_TIMESTAMP)`,
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_repo',  '"Blueprint"',   CURRENT_TIMESTAMP)`,
-  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token', '""',            CURRENT_TIMESTAMP)`,
+  // Owner/repo are hardcoded in code to chrisgwynne/Blueprint — only the token
+  // and the enabled toggle are persisted here. Old owner/repo rows are left
+  // in place for backwards compat but are no longer read.
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_token',   '""',   CURRENT_TIMESTAMP)`,
+  `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('blueprint_github_enabled', 'true', CURRENT_TIMESTAMP)`,
+
+  // ─── Self-heal log ───────────────────────────────────────────────────────
+  // One row per unique error fingerprint. Counter increments on repeat
+  // occurrences so we don't spam GitHub or notifications with duplicates.
+  // See server/agents/self-healer.js for the fingerprinting rules.
+  `CREATE TABLE IF NOT EXISTS self_heal_log (
+    fingerprint TEXT PRIMARY KEY,
+    component TEXT NOT NULL,
+    error_type TEXT,
+    error_message TEXT,
+    diagnosis TEXT,
+    severity TEXT,
+    confidence REAL,
+    occurrence_count INTEGER NOT NULL DEFAULT 1,
+    first_seen_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_notified_at DATETIME,
+    github_issue_number INTEGER,
+    github_issue_url TEXT,
+    github_pr_number INTEGER,
+    github_pr_url TEXT,
+    env_context TEXT,
+    last_business_id TEXT,
+    last_run_id TEXT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_self_heal_log_last_seen ON self_heal_log(last_seen_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_self_heal_log_component ON self_heal_log(component, last_seen_at DESC)`,
+
+  // ─── Intelligence mesh ───────────────────────────────────────────────────
+  // Cross-component event log: every time one part of the system produces
+  // output that another part consumes (KB → signal, signal → task, agent →
+  // agent brief, chat → connector gap, etc.) a row is written here.
+  // Powers the Timeline UI and lets Conductor see what's flowing.
+  `CREATE TABLE IF NOT EXISTS intelligence_events (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    source_type TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    event_type TEXT NOT NULL,
+    description TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_business ON intelligence_events(business_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_source ON intelligence_events(source_type, source_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_intel_target ON intelligence_events(target_type, target_id)`,
+
+  // Unified connector-gap tracker. KB analyser, signals, agents, chat, task
+  // outcomes all call surfaceConnectorGap() when they notice a missing data
+  // source. Dedup is enforced by the unique (business_id, connector_name)
+  // index — repeat surfacings bump times_surfaced instead of spawning new
+  // tasks. See server/lib/connector-gap-handler.js.
+  `CREATE TABLE IF NOT EXISTS connector_gaps (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_name TEXT NOT NULL,
+    is_built INTEGER DEFAULT 0,
+    times_surfaced INTEGER DEFAULT 1,
+    first_surfaced_by TEXT,
+    last_surfaced_by TEXT,
+    last_surfaced_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    task_id TEXT,
+    status TEXT DEFAULT 'task_created',
+    description TEXT,
+    last_reason TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_connector_gaps_unique ON connector_gaps(business_id, connector_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_connector_gaps_last_surfaced ON connector_gaps(business_id, last_surfaced_at DESC)`,
+
+  // ─── Work-check columns on agent_runs ────────────────────────────────────
+  // trigger_type: categorical bucket derived from the freeform `trigger`
+  //   string — 'event' | 'poll' | 'schedule' | 'manual' | 'unknown'.
+  //   Lets the UI show "X event-triggered, Y poll-triggered, Z skipped".
+  // work_reasons: JSON array of strings from hasWorkToDo(). Populated on
+  //   non-skipped runs to explain WHY the agent was allowed to spend tokens
+  //   (populated on skipped runs too, as an empty array, for clarity).
+  `ALTER TABLE agent_runs ADD COLUMN trigger_type TEXT`,
+  `ALTER TABLE agent_runs ADD COLUMN work_reasons TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger_type ON agent_runs(trigger_type, started_at DESC)`,
+
+  // ─── ROI measurement system ──────────────────────────────────────────────
+  //
+  // Blueprint tracks its own value honestly — including the parts that
+  // didn't work. Four tables support this:
+  //
+  //   baselines: immutable "before" snapshot. Populated on first connector
+  //     sync per (business_id, metric_name). Ever-after comparisons happen
+  //     against this value. If a baseline looks wrong, add a note — never
+  //     overwrite the original.
+  //
+  //   roi_snapshots: a full ROI calculation captured weekly. Lets us show
+  //     how Blueprint's estimated contribution has evolved over time and
+  //     how our confidence in the estimate has grown.
+  //
+  //   counterfactual_estimates: at task proposal time, record the estimated
+  //     cost of NOT doing the task. Later, compare to actual outcome —
+  //     proof that the counterfactual model is (or isn't) calibrated.
+  //
+  //   attribution_records: links a measured task outcome to a share of the
+  //     overall metric improvement. The core table behind "£X of this
+  //     month's gain is attributable to Blueprint".
+
+  `CREATE TABLE IF NOT EXISTS baselines (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    baseline_value REAL NOT NULL,
+    baseline_date DATETIME NOT NULL,
+    source_connector TEXT,
+    context TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_baselines_unique ON baselines(business_id, metric_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_baselines_business ON baselines(business_id, baseline_date DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS roi_snapshots (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    snapshot_date DATETIME NOT NULL,
+    period_start DATETIME,
+    period_end DATETIME,
+    total_cost_usd REAL,
+    attributed_value_usd REAL,
+    unattributed_value_usd REAL,
+    attributed_decline_usd REAL,
+    confidence_level TEXT,
+    metrics_count INTEGER,
+    outcomes_count INTEGER,
+    narrative TEXT,
+    full_report TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_roi_snapshots_business_date ON roi_snapshots(business_id, snapshot_date DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS counterfactual_estimates (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    target_metric TEXT,
+    baseline_value REAL,
+    estimated_monthly_cost_of_inaction_usd REAL,
+    confidence TEXT,
+    assumptions TEXT,
+    reasoning TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_counterfactual_task ON counterfactual_estimates(task_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_counterfactual_business ON counterfactual_estimates(business_id, created_at DESC)`,
+
+  `CREATE TABLE IF NOT EXISTS attribution_records (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    task_id TEXT,
+    metric_name TEXT NOT NULL,
+    change_pct REAL,
+    change_absolute REAL,
+    estimated_value_usd REAL,
+    confidence TEXT,
+    evidence TEXT,
+    measurement_window_days INTEGER,
+    verified_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_attribution_business ON attribution_records(business_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_attribution_task ON attribution_records(task_id)`,
 
   // ─── Prompt-injection defence ────────────────────────────────────────────
   // Every outbound HTTP call from an agent-driven code path is logged here.

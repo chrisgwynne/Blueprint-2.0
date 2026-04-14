@@ -15,6 +15,7 @@ import {
   getSignalClusters, updateSignalCluster, runClusteringNow,
 } from '../lib/api.js'
 import { Link as LinkIcon } from 'lucide-react'
+import ProducedByEvent from '../components/ProducedByEvent.jsx'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -878,6 +879,18 @@ function SignalCard({ signal, onUpdate }) {
             <pre style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', whiteSpace: 'pre-wrap', margin: 0, lineHeight: 1.5 }}>
               {JSON.stringify(data, null, 2) || '—'}
             </pre>
+          </div>
+        )}
+
+        {/* Mesh: what this signal produced downstream (KB write, agent
+            trigger, goal impact, connector gap, etc.) */}
+        {signal.id && signal.business_id && (
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--bp-border)' }}>
+            <ProducedByEvent
+              businessId={signal.business_id}
+              sourceType="signal"
+              sourceId={signal.id}
+            />
           </div>
         )}
 

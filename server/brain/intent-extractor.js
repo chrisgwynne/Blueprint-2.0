@@ -18,6 +18,15 @@ Detect any of:
 - TASK_IMPLICIT — something that clearly needs doing
 - SCENARIO_QUESTION — a "what if" / "should we" strategic question
 - INVESTIGATION_QUESTION — a "why is X happening" / "why did Y drop" question
+- SIGNAL_IMPLIED — the message describes an anomaly, risk or opportunity
+    that Blueprint should track as a signal (e.g. "we're seeing a lot of
+    refund requests this week", "traffic just doubled overnight")
+- AGENT_BRIEF_NEEDED — the user's message contains information a specific
+    specialist agent should act on (e.g. "tell the content agent to focus
+    on holiday keywords", "make sure the SEO agent knows we renamed the site")
+- CONNECTOR_MENTION — the user mentions a data source that would help
+    Blueprint but isn't currently connected (e.g. "our shipping data lives
+    in ShipStation", "we use Klaviyo for email")
 - NONE — normal conversation, no extractable intent
 
 Be conservative — only extract with confidence >= 0.7.
@@ -27,7 +36,7 @@ Shape:
 {
   "extractions": [
     {
-      "type": "goal|decision|concern|context|task_implicit|scenario_question|investigation_question|none",
+      "type": "goal|decision|concern|context|task_implicit|scenario_question|investigation_question|signal_implied|agent_brief_needed|connector_mention|none",
       "confidence": 0.0-1.0,
       "raw_text": "exact phrase that triggered this",
       "structured": { ... type-specific fields ... }
@@ -42,7 +51,10 @@ Type-specific structured fields:
   context:                { event, date_hint?, implications? }
   task_implicit:          { task_title, action_type?, urgency? }
   scenario_question:      { question }
-  investigation_question: { question, metric_hint? }`;
+  investigation_question: { question, metric_hint? }
+  signal_implied:         { title, type (anomaly|opportunity|risk), severity (info|warning|alert|critical), description }
+  agent_brief_needed:     { to_agent (e.g. seo-sentinel|quill|trend-spotter|merchant|ledger|outreach), brief, priority (immediate|next_run|fyi) }
+  connector_mention:      { connector_name, use_case, is_mentioned_as_existing? }`;
 
 function extractJSON(content) {
   if (!content) return null;
@@ -73,9 +85,7 @@ ${history.map((m) => `${m.sender_name}: ${m.content}`).join('\n') || '(none)'}
 
 Extract any intent with confidence >= 0.7. Empty array if nothing clear.`;
 
-  const { providerId, model } = resolveProfileLLM({
-    model: 'claude-haiku-4-5-20251001',
-  });
+  const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
 
   try {
     const result = await runLLM(providerId, model, {
@@ -123,6 +133,15 @@ export async function actOnExtractions(extractions, businessId, conversationId) 
           break;
         case 'investigation_question':
           actions.push(await handleInvestigation(e, businessId));
+          break;
+        case 'signal_implied':
+          actions.push(await handleSignalImplied(e, businessId, conversationId));
+          break;
+        case 'agent_brief_needed':
+          actions.push(await handleAgentBriefNeeded(e, businessId));
+          break;
+        case 'connector_mention':
+          actions.push(await handleConnectorMention(e, businessId));
           break;
       }
     } catch (err) {
@@ -311,4 +330,103 @@ async function handleTask(e, businessId) {
       message: `Added "${s.task_title}" to the task queue.`,
     };
   } catch { return null; }
+}
+
+// ─── Mesh extensions (Tranche 4) ─────────────────────────────────────────────
+
+async function handleSignalImplied(e, businessId, conversationId) {
+  const s = e.structured ?? {};
+  if (!s.title) return null;
+  try {
+    const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
+
+    // Build a stable rule id from the slugified title so repeat mentions
+    // of the same concern in chat merge rather than spawn fresh signals.
+    const slug = String(s.title).toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'chat_signal';
+    const rule_id = `chat:${slug}`;
+
+    const res = createSignalIfNotDuplicate({
+      business_id: businessId,
+      rule_id,
+      type: ['anomaly', 'opportunity', 'risk', 'correlation'].includes(s.type) ? s.type : 'anomaly',
+      severity: ['info', 'warning', 'alert', 'critical'].includes(s.severity) ? s.severity : 'info',
+      title: s.title,
+      description: s.description ?? `From conversation: "${e.raw_text}"`,
+      confidence: e.confidence ?? 0.75,
+      data: { source: 'chat', conversation_id: conversationId ?? null },
+      source_label: 'chat',
+    });
+    if (!res) return null;
+    return {
+      type: 'signal_raised',
+      id: res.id,
+      message: res.created
+        ? `Raised a signal from what you said so agents can investigate.`
+        : `Updated an existing signal with the new context from your message.`,
+    };
+  } catch (err) {
+    console.warn('[brain] handleSignalImplied failed:', err.message);
+    return null;
+  }
+}
+
+async function handleAgentBriefNeeded(e, businessId) {
+  const s = e.structured ?? {};
+  if (!s.to_agent || !s.brief) return null;
+
+  // Only deliver to installed, active agents
+  const agent = db.prepare("SELECT id FROM agents WHERE id = ? AND status = 'active'").get(s.to_agent);
+  if (!agent) return null;
+
+  try {
+    const { deliverAgentBrief } = await import('../agents/agent-inbox.js');
+    const priority = ['immediate', 'next_run', 'fyi'].includes(s.priority) ? s.priority : 'next_run';
+    const { delivered, triggered } = await deliverAgentBrief({
+      from: 'chat',
+      to: s.to_agent,
+      businessId,
+      brief: s.brief,
+      priority,
+      metadata: { conversation_source: e.raw_text?.slice(0, 200) },
+    });
+    if (!delivered) return null;
+    return {
+      type: 'agent_briefed',
+      id: s.to_agent,
+      message: triggered
+        ? `Briefed ${s.to_agent} and triggered an immediate run.`
+        : `Briefed ${s.to_agent} — they'll see this on their next run.`,
+    };
+  } catch (err) {
+    console.warn('[brain] handleAgentBriefNeeded failed:', err.message);
+    return null;
+  }
+}
+
+async function handleConnectorMention(e, businessId) {
+  const s = e.structured ?? {};
+  if (!s.connector_name) return null;
+  try {
+    const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
+    const res = await surfaceConnectorGap({
+      business_id: businessId,
+      connector_name: s.connector_name,
+      source: 'chat',
+      reason: s.use_case ?? `Mentioned in conversation: "${e.raw_text}"`,
+      use_case: s.use_case ?? null,
+      implied_by: 'conversation',
+      priority: 'p3',
+    });
+    if (!res) return null;
+    return {
+      type: res.first_time ? 'connector_gap_surfaced' : 'connector_gap_noted',
+      message: res.first_time
+        ? `Noted: ${s.connector_name} would help. Added a task so it can be connected or researched.`
+        : `Noted: already tracking ${s.connector_name} as a connector gap — bumped its priority context.`,
+    };
+  } catch (err) {
+    console.warn('[brain] handleConnectorMention failed:', err.message);
+    return null;
+  }
 }

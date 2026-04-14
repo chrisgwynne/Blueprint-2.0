@@ -181,6 +181,8 @@ const mountRoutes = async () => {
   const { default: projectsRoutes } = await import('./routes/projects.js');
   const { default: timelineRoutes } = await import('./routes/timeline.js');
   const { default: agentStatusRoutes } = await import('./routes/agent-status.js');
+  const { default: agentSettingsRoutes } = await import('./routes/agent-settings.js');
+  const { default: roiRoutes } = await import('./routes/roi.js');
   const { default: brainRoutes } = await import('./routes/brain.js');
   const { default: scenariosRoutes } = await import('./routes/scenarios.js');
   const { default: conflictsRoutes } = await import('./routes/conflicts.js');
@@ -215,6 +217,8 @@ const mountRoutes = async () => {
   app.use('/api/projects', projectsRoutes);
   app.use('/api/timeline', timelineRoutes);
   app.use('/api/agents-status', agentStatusRoutes);
+  app.use('/api/agent-settings', agentSettingsRoutes);
+  app.use('/api/roi', roiRoutes);
   app.use('/api/brain', brainRoutes);
   app.use('/api/scenarios', scenariosRoutes);
   app.use('/api/conflicts', conflictsRoutes);
@@ -389,15 +393,17 @@ const mountRoutes = async () => {
   });
 
   app.post('/api/settings/blueprint-github', _isAuth, (req, res) => {
-    const { token, owner, repo } = req.body ?? {};
+    // Owner and repo are hardcoded to chrisgwynne/Blueprint — only the access
+    // token and the enabled toggle can be changed by the user. Any owner/repo
+    // values in the request body are ignored.
+    const { token, enabled } = req.body ?? {};
     const upsert = db.prepare(
       `INSERT INTO settings (key, value, updated_at)
        VALUES (?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
     );
-    if (token  !== undefined) upsert.run('blueprint_github_token', JSON.stringify(token));
-    if (owner  !== undefined) upsert.run('blueprint_github_owner', JSON.stringify(owner));
-    if (repo   !== undefined) upsert.run('blueprint_github_repo',  JSON.stringify(repo));
+    if (token   !== undefined) upsert.run('blueprint_github_token',   JSON.stringify(token));
+    if (enabled !== undefined) upsert.run('blueprint_github_enabled', JSON.stringify(Boolean(enabled)));
     res.json({ ok: true });
   });
 

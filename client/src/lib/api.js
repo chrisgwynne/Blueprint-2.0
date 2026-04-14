@@ -394,6 +394,37 @@ export const overrideDeferredTask = (businessId, taskId) => post(`/brain/${busin
 export const getGoogleOAuthConfig = () => get('/oauth/google/config')
 export const saveGoogleOAuthConfig = (body) => request('PUT', '/oauth/google/config', body)
 
+// ─── Intelligence mesh (Timeline "produced by" drilldown) ─────────────────────
+// Each timeline event with a `produces` hint can fetch downstream events
+// (signals, tasks, KB entries, agent briefs, connector gaps) that were
+// caused by it. See server/routes/timeline.js.
+export const getTimelineIntelligence = (businessId, params) =>
+  get(`/timeline/${businessId}/intelligence`, params)
+export const getProducedByEvent = (businessId, sourceType, sourceId, params) =>
+  get(`/timeline/${businessId}/produced/${sourceType}/${encodeURIComponent(sourceId)}`, params)
+
+// ─── ROI (Tranche 7) ─────────────────────────────────────────────────────
+export const getROIReport = (businessId) => get(`/roi/${businessId}`)
+export const getROIAgents = (businessId, params) => get(`/roi/${businessId}/agents`, params)
+export const getROIBaselines = (businessId) => get(`/roi/${businessId}/baselines`)
+export const getROITrajectory = (businessId, params) => get(`/roi/${businessId}/trajectory`, params)
+export const getROIAssessment = (businessId) => get(`/roi/${businessId}/assessment`)
+
+// ─── LLM tiers (default / triage / fallback) ───────────────────────────────
+export const getLLMTiers = () => get('/llm/tiers')
+export const setLLMTier = (tier, body) => request('PUT', `/llm/tiers/${tier}`, body)
+export const clearLLMTier = (tier) => del(`/llm/tiers/${tier}`)
+
+// ─── Agent settings (per-agent poll intervals, Tranche 6D) ──────────────────
+export const getAgentPollIntervals = () => get('/agent-settings/poll-intervals')
+export const setAgentPollInterval = (agentId, minutes) =>
+  request('PUT', `/agent-settings/poll-intervals/${agentId}`, { minutes })
+export const resetAgentPollInterval = (agentId) =>
+  del(`/agent-settings/poll-intervals/${agentId}`)
+
+// ─── Token-efficiency stats (System Health) ──────────────────────────────────
+export const getAgentEfficiency = (params) => get('/system/agent-efficiency', params)
+
 // ─── Blueprint system GitHub (self-healing + connector discovery) ─────────────
 // Separate from business GitHub connectors — targets chrisgwynne/Blueprint only.
 export const getBlueprintGitHubStatus   = ()     => get('/settings/blueprint-github/status')

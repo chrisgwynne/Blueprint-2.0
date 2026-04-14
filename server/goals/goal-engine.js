@@ -121,9 +121,7 @@ Days remaining: ${daysLeft ?? 'no deadline'}
 
 Write ONE specific sentence about status and most important next action.`;
 
-    const { providerId, model } = resolveProfileLLM({
-      model: 'claude-haiku-4-5-20251001',
-    });
+    const { providerId, model } = resolveProfileLLM({}, { tier: 'triage' });
     const result = await runLLM(providerId, model, {
       system: 'Write one specific sentence. No JSON, no markdown, no filler.',
       messages: [{ role: 'user', content: prompt }],
