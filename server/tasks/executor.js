@@ -996,21 +996,30 @@ export async function executeTask(taskId) {
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }
   } catch (err) {
-    // Mark failed + record outcome
+    // A missing connector means the task is blocked waiting for setup —
+    // not broken. Mark it blocked so the user knows what to do, and so it
+    // can be retried once the connector is added rather than being treated
+    // as a permanent failure.
+    const isConnectorMissing = /No connected [\w-]+ connector found/.test(err.message);
+    const newStatus = isConnectorMissing ? 'blocked' : 'failed';
+
     try {
-      updateTaskStatus(task.id, 'failed', 'system:executor', {
-        outcome: `Execution failed: ${err.message}`,
+      updateTaskStatus(task.id, newStatus, 'system:executor', {
+        outcome: isConnectorMissing
+          ? `Blocked: ${err.message}`
+          : `Execution failed: ${err.message}`,
         outcome_data: { error: err.message, stack: err.stack?.split('\n').slice(0, 5).join('\n') ?? null },
       });
       createTaskEvent(
         task.id,
-        'failed',
+        newStatus,
         'system:executor',
-        `Execution failed: ${err.message}`,
+        isConnectorMissing ? `Blocked: ${err.message}` : `Execution failed: ${err.message}`,
         { error: err.message }
       );
     } catch {}
-    console.error(`[executor] Task ${taskId} failed:`, err);
+    if (!isConnectorMissing) console.error(`[executor] Task ${taskId} failed:`, err);
+    else console.warn(`[executor] Task ${taskId} blocked (missing connector):`, err.message);
     return { ok: false, error: err.message };
   }
 
