@@ -727,20 +727,19 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
     // 10b. Output validation — defence in depth against speculation.
     //
     // The readiness gate (step 1b) prevents runs when required connectors are
-    // absent or stale. But a run can still be degraded when: (a) a preferred
-    // connector is missing, or (b) required data is present but aging toward
-    // the staleness threshold. In those cases we keep the output but cap its
-    // authority: confidence ≤ 0.3 and trust_tier='red' so every task lands in
-    // front of a human reviewer instead of auto-approving.
+    // absent. A run is degraded only when required data is present but going
+    // stale (> 24h since last sync). In that case we cap confidence and force
+    // red tier so tasks land in front of a human reviewer.
     //
-    // We also drop tasks that cite nothing verifiable — if the agent produced
-    // zero signals AND its reasoning doesn't reference any active connector,
-    // anything it proposed is pure speculation and we refuse to file it.
+    // Missing PREFERRED connectors do NOT trigger degraded mode. Conductor's
+    // hiring decision already accounted for which connectors are connected —
+    // if Conductor approved hiring Merchant with only Shopify, running Merchant
+    // without Klaviyo/Stripe is expected and valid, not degraded.
     const missingPreferred = Array.isArray(readiness?.missing_preferred)
       ? readiness.missing_preferred : [];
     const anyStale = Object.values(readiness?.last_sync_ages ?? {})
       .some((h) => typeof h === 'number' && h > 24);
-    const degradedRun = missingPreferred.length > 0 || anyStale;
+    const degradedRun = anyStale;
 
     if (degradedRun) {
       tasksToCreate = tasksToCreate.map((t) => ({
@@ -751,7 +750,7 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         _degraded_data: true,
       }));
       console.warn(
-        `[agent-runner] '${agentId}' ran with degraded data (missing preferred: ${missingPreferred.join(',') || 'none'}, stale: ${anyStale}). ` +
+        `[agent-runner] '${agentId}' ran with stale required data (stale: ${anyStale}, missing preferred: ${missingPreferred.join(',') || 'none'}). ` +
         `Tasks capped at confidence 0.3 / trust_tier=red.`
       );
     }
