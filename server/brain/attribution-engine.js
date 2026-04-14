@@ -132,7 +132,7 @@ export async function analyseAndStore(signal) {
     const prompt = buildPrompt(signal, evidence);
 
     const { providerId, model } = resolveProfileLLM({
-      provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5-20251001',
     });
 
     const result = await runLLM(providerId, model, {

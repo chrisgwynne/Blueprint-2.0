@@ -579,7 +579,6 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
 
   // 3. Resolve LLM settings (new format: profile.llm, old format: profile.model)
   const llmConfig = profile.llm ?? {
-    provider: 'anthropic',
     model: profile.model?.primary ?? 'claude-sonnet-4-20250514',
     temperature: 0.7,
     max_tokens: profile.model?.max_tokens ?? 4096,

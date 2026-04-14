@@ -74,7 +74,7 @@ ${history.map((m) => `${m.sender_name}: ${m.content}`).join('\n') || '(none)'}
 Extract any intent with confidence >= 0.7. Empty array if nothing clear.`;
 
   const { providerId, model } = resolveProfileLLM({
-    provider: 'anthropic', model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5-20251001',
   });
 
   try {
