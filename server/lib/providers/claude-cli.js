@@ -12,8 +12,8 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 export const KNOWN_MODELS = [
-  'claude-opus-4-20250514',
-  'claude-sonnet-4-20250514',
+  'claude-opus-4-5',
+  'claude-sonnet-4-5',
   'claude-haiku-4-5-20251001',
   'claude-3-5-sonnet-20241022',
   'claude-3-5-haiku-20241022',
@@ -103,23 +103,56 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
         return;
       }
 
-      // Parse JSON output (--output-format json)
-      // Claude CLI format: { type: "result", result: "<text>", total_cost_usd: <num>, usage: { input_tokens, output_tokens } }
-      try {
-        const parsed = JSON.parse(stdout.trim());
-        if (parsed.is_error) {
-          reject(new Error(`Claude CLI error: ${parsed.result ?? 'Unknown error'}`));
-          return;
-        }
-        const text = parsed.result ?? '';
-        const inputTokens = parsed.usage?.input_tokens ?? 0;
-        const outputTokens = parsed.usage?.output_tokens ?? 0;
-        const costUsd = parsed.total_cost_usd ?? 0;
-        resolve({ text, inputTokens, outputTokens, costUsd });
-      } catch {
-        // Fall back to raw text output
-        resolve({ text: stdout.trim(), inputTokens: 0, outputTokens: 0, costUsd: 0 });
+      const raw = stdout.trim();
+
+      if (!raw) {
+        // Nothing on stdout — surface stderr so the user knows what happened
+        const errDetail = stderr.trim().slice(0, 400);
+        reject(new Error(
+          `Claude CLI produced no output.${errDetail ? ' Stderr: ' + errDetail : ' Ensure Claude Code is authenticated — run `claude --version` and `claude /login` if needed.'}`
+        ));
+        return;
       }
+
+      // Claude CLI --output-format json may output a single JSON object OR
+      // newline-delimited JSON (NDJSON) with one object per line.
+      // Scan lines in reverse to find the first { type:"result" } object.
+      const tryExtract = (line) => {
+        const obj = JSON.parse(line.trim());
+        if (obj.is_error) throw Object.assign(new Error(`Claude CLI error: ${obj.result ?? obj.error ?? 'Unknown error'}`), { isCLIError: true });
+        if (obj.type === 'result') {
+          return {
+            text: typeof obj.result === 'string' ? obj.result : '',
+            inputTokens: obj.usage?.input_tokens ?? 0,
+            outputTokens: obj.usage?.output_tokens ?? 0,
+            costUsd: obj.total_cost_usd ?? 0,
+          };
+        }
+        return null;
+      };
+
+      // Try single-object parse first (most common case)
+      try {
+        const found = tryExtract(raw);
+        if (found) { resolve(found); return; }
+      } catch (e) {
+        if (e.isCLIError) { reject(e); return; }
+        // Not a single JSON object — fall through to NDJSON handling
+      }
+
+      // NDJSON: scan lines in reverse for a type:"result" object
+      const lines = raw.split('\n').filter(l => l.trim().startsWith('{'));
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try {
+          const found = tryExtract(lines[i]);
+          if (found) { resolve(found); return; }
+        } catch (e) {
+          if (e.isCLIError) { reject(e); return; }
+        }
+      }
+
+      // No structured result found — treat the whole output as plain text
+      resolve({ text: raw, inputTokens: 0, outputTokens: 0, costUsd: 0 });
     });
   });
 }
@@ -142,7 +175,7 @@ export async function complete({ model, messages, system, max_tokens = 4096 }) {
   }
 
   const { text, inputTokens, outputTokens, costUsd } = await runClaudeCLI({
-    model: model || 'claude-sonnet-4-20250514',
+    model: model || 'claude-sonnet-4-5',
     prompt,
     systemPrompt: system,
   });
