@@ -187,6 +187,7 @@ const mountRoutes = async () => {
   const { default: retrospectivesRoutes } = await import('./routes/retrospectives.js');
   const { default: investigationsRoutes } = await import('./routes/investigations.js');
   const { default: goalSuggestionsRoutes } = await import('./routes/goal-suggestions.js');
+  const { default: securityRoutes } = await import('./routes/security.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -220,6 +221,7 @@ const mountRoutes = async () => {
   app.use('/api/retrospectives', retrospectivesRoutes);
   app.use('/api/investigations', investigationsRoutes);
   app.use('/api/goal-suggestions', goalSuggestionsRoutes);
+  app.use('/api/security', securityRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!req.session?.userId) return res.status(401).json({ error: 'Unauthorized' });

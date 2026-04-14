@@ -9,6 +9,7 @@
 
 import crypto from 'node:crypto';
 import { decrypt } from '../../crypto.js';
+import { sanitiseExternalContent, recordInjectionDetection } from '../../lib/content-sanitiser.js';
 
 /**
  * Execute a web search using the best available search connector.
@@ -47,6 +48,39 @@ export async function agentSearch(query, options = {}, businessId, db, meta = {}
 
   const { default: connector } = await import(`../../connectors/${row.type}/index.js`);
   const result = await connector.search(query, options, credentials);
+
+  // Sanitise external content before it flows into any agent prompt.
+  // Search results are the highest-risk ingestion point in Blueprint — a
+  // malicious page can embed prompt-injection payloads that, if not filtered,
+  // could steer the downstream LLM run.
+  if (result && Array.isArray(result.results)) {
+    for (const r of result.results) {
+      if (r.content) {
+        const sanitised = sanitiseExternalContent(r.content, r.url ?? 'search_result');
+        r.content = sanitised.content;
+        if (sanitised.injection_detected) {
+          r._injection_detected = true;
+          recordInjectionDetection(db, {
+            businessId,
+            source: r.url ?? `search:${row.type}`,
+            patternsFound: sanitised.patterns_found,
+            patternNames: sanitised.pattern_names,
+            connectorId: row.id,
+            agentId: meta.agentId ?? null,
+          });
+        }
+      }
+      if (r.description) {
+        const sDesc = sanitiseExternalContent(r.description, r.url ?? 'search_result_description');
+        r.description = sDesc.content;
+        if (sDesc.injection_detected) r._injection_detected = true;
+      }
+    }
+  }
+  if (result && typeof result.answer === 'string' && result.answer.length > 0) {
+    const sAnswer = sanitiseExternalContent(result.answer, `search:${row.type}:answer`);
+    result.answer = sAnswer.content;
+  }
 
   // Log usage
   try {

@@ -9,6 +9,8 @@
  * Free tier: 2,000 queries/month
  */
 
+import { safeFetch } from '../../lib/safe-fetch.js';
+
 const BASE = 'https://api.search.brave.com/res/v1';
 
 function headers(apiKey) {
@@ -55,9 +57,10 @@ const connector = {
   async healthCheck(credentials) {
     if (!credentials?.apiKey) return { ok: false, error: 'API key missing.' };
     try {
-      const res = await fetch(
+      const res = await safeFetch(
         `${BASE}/web/search?q=test&count=1`,
-        { headers: headers(credentials.apiKey) }
+        { headers: headers(credentials.apiKey) },
+        'connector:brave-search:healthCheck'
       );
       if (!res.ok) {
         const body = await res.text();
@@ -95,9 +98,9 @@ const connector = {
     });
     if (freshness) params.set('freshness', freshness);
 
-    const res = await fetch(`${BASE}/web/search?${params}`, {
+    const res = await safeFetch(`${BASE}/web/search?${params}`, {
       headers: headers(credentials.apiKey),
-    });
+    }, 'connector:brave-search:search');
     if (!res.ok) {
       const body = await res.text();
       throw new Error(`Brave search failed (${res.status}): ${body.slice(0, 200)}`);
