@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
 
 const GA4_BASE = 'https://analyticsdata.googleapis.com/v1beta/properties';
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
@@ -18,11 +19,12 @@ async function ensureFreshToken(credentials) {
     throw new Error('GA4 token expired and no refresh token available. Re-authorise the connector.');
   }
 
+  const { clientId, clientSecret } = readGoogleOAuthConfig();
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: credentials.refreshToken,
-    client_id: process.env.GOOGLE_CLIENT_ID || credentials.clientId || '',
-    client_secret: process.env.GOOGLE_CLIENT_SECRET || credentials.clientSecret || '',
+    client_id: clientId || credentials.clientId || '',
+    client_secret: clientSecret || credentials.clientSecret || '',
   });
 
   const res = await fetch(TOKEN_URL, {

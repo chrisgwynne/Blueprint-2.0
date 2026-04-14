@@ -18,7 +18,7 @@
 import fetch from 'node-fetch';
 import db from '../db/db.js';
 import { encrypt, decrypt } from '../crypto.js';
-import { readGoogleOAuthConfig } from '../routes/oauth.js';
+import { readGoogleOAuthConfig } from '../lib/google-oauth-config.js';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 

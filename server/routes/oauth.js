@@ -3,6 +3,7 @@ import fetch from 'node-fetch';
 import db, { generateId } from '../db/db.js';
 import { encrypt, decrypt } from '../crypto.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { readGoogleOAuthConfig } from '../lib/google-oauth-config.js';
 
 const router = Router();
 
@@ -18,16 +19,6 @@ const SCOPES = [
   'email',
   'profile',
 ].join(' ');
-
-// ─── OAuth config resolution ──────────────────────────────────────────────────
-// Config is loaded from the DB (settings.google_oauth_config) first, then
-// falls back to environment variables. The DB form lets non-technical users
-// paste credentials into the Settings UI without editing .env.
-const PLACEHOLDER_PATTERNS = [/^your-/i, /GOCSPX-your-client-secret/i, /your-client/i];
-function isPlaceholder(v) {
-  if (!v || typeof v !== 'string') return true;
-  return PLACEHOLDER_PATTERNS.some((r) => r.test(v));
-}
 
 // Self-heal: an old typo in .env.example shipped /api/auth/google/callback
 // instead of /api/oauth/google/callback. Anyone who installed before the fix
@@ -65,45 +56,6 @@ function healWrongRedirectUri(uri) {
     console.warn('[oauth] auto-heal failed:', err.message);
   }
 })();
-
-function defaultRedirectUri() {
-  // Blueprint lives at PORT (default 4000) on the local machine. Anyone
-  // running this on a remote host sets GOOGLE_REDIRECT_URI in .env.
-  const port = process.env.PORT || 4000;
-  return `http://localhost:${port}/api/oauth/google/callback`;
-}
-
-export function readGoogleOAuthConfig() {
-  let fromDb = {};
-  try {
-    const row = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get();
-    if (row?.value) {
-      const parsed = JSON.parse(row.value);
-      // The secret is encrypted at rest
-      fromDb = {
-        client_id: parsed.client_id ?? null,
-        client_secret: parsed.client_secret_enc
-          ? (() => { try { return decrypt(parsed.client_secret_enc); } catch { return null; } })()
-          : null,
-        redirect_uri: parsed.redirect_uri ?? null,
-      };
-    }
-  } catch (err) {
-    console.warn('[oauth] reading google_oauth_config failed:', err.message);
-  }
-
-  const clientId = !isPlaceholder(fromDb.client_id) ? fromDb.client_id
-    : !isPlaceholder(process.env.GOOGLE_CLIENT_ID) ? process.env.GOOGLE_CLIENT_ID
-    : null;
-  const clientSecret = !isPlaceholder(fromDb.client_secret) ? fromDb.client_secret
-    : !isPlaceholder(process.env.GOOGLE_CLIENT_SECRET) ? process.env.GOOGLE_CLIENT_SECRET
-    : null;
-  const redirectUri = !isPlaceholder(fromDb.redirect_uri) ? fromDb.redirect_uri
-    : !isPlaceholder(process.env.GOOGLE_REDIRECT_URI) ? process.env.GOOGLE_REDIRECT_URI
-    : defaultRedirectUri();
-
-  return { clientId, clientSecret, redirectUri };
-}
 
 function isGoogleOAuthConfigured() {
   const { clientId, clientSecret, redirectUri } = readGoogleOAuthConfig();
