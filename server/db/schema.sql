@@ -543,3 +543,16 @@ CREATE TABLE IF NOT EXISTS investigations (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_investigations_biz_metric ON investigations(business_id, metric_name, created_at);
+
+CREATE TABLE IF NOT EXISTS search_log (
+  id TEXT PRIMARY KEY,
+  business_id TEXT NOT NULL,
+  connector_id TEXT NOT NULL,
+  query TEXT NOT NULL,
+  results_count INTEGER DEFAULT 0,
+  search_depth TEXT DEFAULT 'basic',
+  agent_id TEXT,
+  run_id TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_search_log_business ON search_log(business_id, created_at);

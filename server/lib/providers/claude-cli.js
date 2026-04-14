@@ -44,7 +44,7 @@ function runClaudeCLI({ model, prompt, systemPrompt }) {
     try { rmdirSync(tmpDir); } catch {}
   };
 
-  const TIMEOUT_MS = 180_000; // 3 minutes — LLM calls on large prompts can be slow
+  const TIMEOUT_MS = 300_000; // 5 minutes — investigation prompts can be large on CLI
 
   return new Promise((resolve, reject) => {
     const args = [

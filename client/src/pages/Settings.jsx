@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield } from 'lucide-react'
+import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, ExternalLink, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 
 import { parseTimestamp } from '../lib/time.js'
@@ -1035,8 +1035,25 @@ function SystemTab() {
   const [reiniting, setReiniting] = useState(false)
   const [health, setHealth] = useState(null)
 
+  // Blueprint GitHub state
+  const [ghToken, setGhToken]       = useState('')
+  const [ghOwner, setGhOwner]       = useState('chrisgwynne')
+  const [ghRepo, setGhRepo]         = useState('Blueprint')
+  const [ghShowToken, setGhShowToken] = useState(false)
+  const [ghStatus, setGhStatus]     = useState(null)   // { configured, repo, error }
+  const [ghTesting, setGhTesting]   = useState(false)
+  const [ghSaving, setGhSaving]     = useState(false)
+
   useEffect(() => {
     fetch('/api/health').then(r => r.json()).then(setHealth).catch(() => {})
+    // Load Blueprint GitHub status on mount
+    getBlueprintGitHubStatus()
+      .then((s) => {
+        setGhStatus(s)
+        if (s.owner) setGhOwner(s.owner)
+        if (s.repo)  setGhRepo(s.repo.split('/').pop() || 'Blueprint')
+      })
+      .catch(() => {})
   }, [])
 
   async function handleReinit() {
@@ -1054,6 +1071,38 @@ function SystemTab() {
       addNotification({ type: 'error', message: err.message })
     } finally {
       setReiniting(false)
+    }
+  }
+
+  async function handleGhSave() {
+    setGhSaving(true)
+    try {
+      await saveBlueprintGitHubSettings({ token: ghToken || undefined, owner: ghOwner, repo: ghRepo })
+      addNotification({ type: 'success', message: 'Blueprint GitHub settings saved' })
+      // Re-check status
+      const s = await getBlueprintGitHubStatus()
+      setGhStatus(s)
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setGhSaving(false)
+    }
+  }
+
+  async function handleGhTest() {
+    setGhTesting(true)
+    try {
+      const s = await testBlueprintGitHubConnection()
+      setGhStatus(s)
+      if (s.configured) {
+        addNotification({ type: 'success', message: `Connected — ${s.repo} (${s.rate_limit_remaining ?? '?'} req remaining)` })
+      } else {
+        addNotification({ type: 'error', message: s.error || 'Connection failed' })
+      }
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setGhTesting(false)
     }
   }
 
@@ -1075,6 +1124,97 @@ function SystemTab() {
             </div>
           ))}
         </div>
+      </Section>
+
+      {/* Blueprint GitHub Integration */}
+      <Section
+        title="Blueprint GitHub Integration"
+        description="Used for self-healing bug reports, connector discovery issues, and draft fix PRs. Separate from business GitHub connectors."
+      >
+        <div className="p-3 rounded bg-blueprint-blue/5 border border-blueprint-blue/20 space-y-1 mb-3">
+          <div className="flex items-center gap-2">
+            <GitBranch size={12} className="text-blueprint-blue flex-shrink-0" />
+            <p className="text-xs font-medium text-blueprint-blue">This is Blueprint's own repository</p>
+          </div>
+          <p className="text-xs text-blueprint-muted">
+            Self-healing creates issues and draft PRs here — never on your clients' repos.
+            PRs always target <span className="mono">develop</span>, always draft, never auto-merged.
+          </p>
+        </div>
+
+        {ghStatus && (
+          <div className={`flex items-center gap-2 px-3 py-2 rounded border mb-3 text-xs ${
+            ghStatus.configured
+              ? 'bg-green-500/10 border-green-500/30 text-green-400'
+              : 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+          }`}>
+            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ghStatus.configured ? 'bg-green-400' : 'bg-amber-400'}`} />
+            {ghStatus.configured
+              ? `Connected — ${ghStatus.repo}${ghStatus.rate_limit_remaining != null ? ` (${ghStatus.rate_limit_remaining} req remaining)` : ''}`
+              : `Not connected — ${ghStatus.error ?? 'token not configured'}`}
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Owner / Org">
+              <input
+                className="bp-input text-xs w-full"
+                value={ghOwner}
+                onChange={(e) => setGhOwner(e.target.value)}
+                placeholder="chrisgwynne"
+              />
+            </Field>
+            <Field label="Repository">
+              <input
+                className="bp-input text-xs w-full"
+                value={ghRepo}
+                onChange={(e) => setGhRepo(e.target.value)}
+                placeholder="Blueprint"
+              />
+            </Field>
+          </div>
+
+          <Field label="Personal Access Token" hint="Fine-grained token: Issues + Pull requests + Contents (read/write). Repo: chrisgwynne/Blueprint only.">
+            <div className="relative">
+              <input
+                className="bp-input text-xs w-full pr-8"
+                type={ghShowToken ? 'text' : 'password'}
+                value={ghToken}
+                onChange={(e) => setGhToken(e.target.value)}
+                placeholder={ghStatus?.configured ? '••••••••••••••••••••••••••••••••' : 'ghp_...'}
+              />
+              <button
+                type="button"
+                onClick={() => setGhShowToken(!ghShowToken)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-blueprint-muted hover:text-slate-300"
+              >
+                {ghShowToken ? <EyeOff size={12} /> : <Eye size={12} />}
+              </button>
+            </div>
+          </Field>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleGhTest}
+              disabled={ghTesting}
+              className="bp-btn bp-btn-ghost text-xs"
+            >
+              {ghTesting ? 'Testing…' : 'Test connection'}
+            </button>
+            <button
+              onClick={handleGhSave}
+              disabled={ghSaving}
+              className="bp-btn bp-btn-secondary text-xs"
+            >
+              <Save size={11} /> {ghSaving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+
+        <p className="text-xs text-blueprint-muted mt-2">
+          Leave token blank to keep the existing saved token. Set via <span className="mono">BLUEPRINT_GITHUB_TOKEN</span> env var alternatively.
+        </p>
       </Section>
 
       <Section title="Paths" description="Where Blueprint stores its data">

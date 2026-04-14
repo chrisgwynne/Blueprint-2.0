@@ -160,6 +160,11 @@ async function syncConnector(connector) {
     `).run(err.message.substring(0, 500), connector.id);
     console.error(`[scheduler] Sync failed for connector '${connector.name}':`, err.message);
 
+    // Self-healing: diagnose connector sync failures
+    import('../agents/self-healer.js')
+      .then(m => m.healConnectorError(err, connector.type, connector.business_id))
+      .catch(healErr => console.warn('[self-heal] Connector healing failed (non-fatal):', healErr.message));
+
     // BAP webhook: connector.error
     try {
       const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
