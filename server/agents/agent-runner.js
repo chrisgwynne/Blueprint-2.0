@@ -158,6 +158,31 @@ Structure:
       "search_for_api": true
     }
   ],
+  "kb_entries": [
+    {
+      "path": "research/or/entities/or/decisions/filename.md",
+      "title": "Entry title",
+      "content": "Full markdown body — what's worth keeping long-term",
+      "tags": ["tag1", "tag2"],
+      "why": "Why this is worth filing to the KB"
+    }
+  ],
+  "agent_briefs": [
+    {
+      "to_agent": "agent id that should know this (e.g. 'seo-sentinel', 'quill')",
+      "brief": "What you want the target agent to know or investigate",
+      "priority": "immediate | next_run | fyi"
+    }
+  ],
+  "signals_to_create": [
+    {
+      "title": "Short title",
+      "type": "anomaly | opportunity | risk | correlation",
+      "severity": "info | warning | alert | critical",
+      "description": "What you observed and why it matters",
+      "confidence": 0.85
+    }
+  ],
   "learnings": ["Any pattern or insight worth remembering for future runs"],
   "summary": "One-sentence summary of this run's findings"
 }
@@ -171,7 +196,10 @@ Rules:
 - learnings array: 0-3 concise strings, patterns useful for future runs
 - search_queries: only include if you genuinely need external data not in your context. Maximum 3.
 - data_gaps: only include data you actually needed and was genuinely missing. Do not pad.
-- connector_wishlist: only for data sources Blueprint has no connector for. Omit if empty.`;
+- connector_wishlist: only for data sources Blueprint has no connector for. Omit if empty.
+- kb_entries: only file things worth keeping long-term — insights, decisions, named entities, research you produced. Max 3. Omit if empty.
+- agent_briefs: only when another agent genuinely needs to know something from your run. Use 'immediate' sparingly — it triggers an immediate run. Omit if empty.
+- signals_to_create: only for anomalies/opportunities not already signalled. Confidence >= 0.7 to be acted on. Omit if empty.`;
 }
 
 function buildLegacySystemPrompt(profile) {
@@ -234,33 +262,28 @@ function appendRunLog(agentId, entry) {
 }
 
 // ─── Conductor briefing ───────────────────────────────────────────────────────
+//
+// Every agent run posts a summary brief to Conductor's inbox so Conductor has
+// a running picture of specialist activity. Uses the generalised agent-inbox
+// helper so the same mechanism works for cross-agent briefs (see
+// server/agents/agent-inbox.js).
 
-function briefConductor(agentId, parsed, businessId) {
+async function briefConductor(agentId, parsed, businessId) {
   if (agentId === 'conductor') return; // conductor doesn't brief itself
   try {
-    const conductorDir = agentLiveDir('conductor');
-    mkdirSync(conductorDir, { recursive: true });
-    const inboxPath = join(conductorDir, 'inbox.jsonl');
-
-    const entry = {
-      from: agentId,
-      business_id: businessId,
-      timestamp: new Date().toISOString(),
-      summary: parsed.summary ?? null,
-      signals_detected: parsed.signals_detected ?? 0,
-      tasks_proposed: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
-      reasoning_excerpt: parsed.reasoning ? parsed.reasoning.slice(0, 500) : null,
-    };
-
-    appendFileSync(inboxPath, JSON.stringify(entry) + '\n', 'utf8');
-
-    // Keep last 50 entries
-    try {
-      const lines = readFileSync(inboxPath, 'utf8').trim().split('\n').filter(Boolean);
-      if (lines.length > 50) {
-        writeFileSync(inboxPath, lines.slice(-50).join('\n') + '\n', 'utf8');
-      }
-    } catch {}
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
+    await deliverAgentBrief({
+      from: `agent:${agentId}`,
+      to: 'conductor',
+      businessId,
+      priority: 'fyi',
+      brief: parsed.summary ?? parsed.reasoning?.slice(0, 300) ?? '(no summary)',
+      metadata: {
+        signals_detected: parsed.signals_detected ?? 0,
+        tasks_proposed: Array.isArray(parsed.tasks) ? parsed.tasks.length : 0,
+        reasoning_excerpt: parsed.reasoning ? parsed.reasoning.slice(0, 500) : null,
+      },
+    });
   } catch (err) {
     console.warn('[agent-runner] briefConductor failed (non-fatal):', err.message);
   }
@@ -277,23 +300,55 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   lines.push(`Timestamp: ${new Date().toISOString()}`);
   lines.push('');
 
-  // Conductor inbox (only for conductor)
-  if (agentId === 'conductor') {
-    const inboxPath = join(agentLiveDir('conductor'), 'inbox.jsonl');
-    if (existsSync(inboxPath)) {
-      try {
-        const lines2 = readFileSync(inboxPath, 'utf8').trim().split('\n').filter(Boolean);
-        const recent = lines2.slice(-20).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-        if (recent.length > 0) {
-          lines.push('## Recent Agent Briefings (last 20)');
-          for (const b of recent) {
-            lines.push(`- [${b.timestamp}] ${b.from}: ${b.summary ?? 'no summary'} (${b.tasks_proposed} tasks proposed)`);
-          }
-          lines.push('');
-        }
-      } catch {}
+  // Inbox — every agent reads its own inbox so cross-agent briefs surface
+  // in the system prompt. Unread briefs are shown; entries are marked read
+  // after this run so they don't appear again on the next one. Conductor
+  // continues to get richer treatment because its inbox contains structured
+  // specialist summaries.
+  try {
+    const { readInbox, markAllInboxAsRead } = await import('./agent-inbox.js');
+    const unread = readInbox(agentId, { limit: 20, unreadOnly: true });
+    // For conductor, also include fyi entries even after they've been "read"
+    // so it always has recent context — conductor's role is to orchestrate.
+    const allRecent = agentId === 'conductor'
+      ? readInbox(agentId, { limit: 20, unreadOnly: false })
+      : unread;
+    const entriesToShow = allRecent.filter((e) =>
+      agentId === 'conductor' ? true : (businessId ? e.business_id === businessId : true)
+    );
+
+    if (entriesToShow.length > 0) {
+      const immediate = entriesToShow.filter((e) => e.priority === 'immediate');
+      const nextRun = entriesToShow.filter((e) => e.priority === 'next_run');
+      const fyi = entriesToShow.filter((e) => e.priority === 'fyi' || !e.priority);
+
+      lines.push(`## Inbox (${entriesToShow.length} brief${entriesToShow.length === 1 ? '' : 's'})`);
+      const renderEntry = (b) => {
+        const from = b.from ?? 'unknown';
+        const when = b.timestamp ? ` [${b.timestamp}]` : '';
+        const meta = b.metadata?.tasks_proposed != null
+          ? ` (${b.metadata.tasks_proposed} tasks proposed)` : '';
+        return `- ${from}${when}: ${b.brief ?? b.summary ?? '(no summary)'}${meta}`;
+      };
+      if (immediate.length) {
+        lines.push('', '### ⚡ Immediate — address these in your analysis');
+        immediate.forEach((b) => lines.push(renderEntry(b)));
+      }
+      if (nextRun.length) {
+        lines.push('', '### Next run — consider in this run');
+        nextRun.forEach((b) => lines.push(renderEntry(b)));
+      }
+      if (fyi.length) {
+        lines.push('', '### FYI — background context');
+        fyi.forEach((b) => lines.push(renderEntry(b)));
+      }
+      lines.push('');
     }
-  }
+
+    // Mark all unread as read so the same brief doesn't surface every run.
+    // Conductor's "fyi" entries stay visible via the allRecent branch above.
+    if (unread.length > 0) markAllInboxAsRead(agentId);
+  } catch {}
 
   lines.push(`## Business Context`);
   lines.push(`Name: ${business.name}`);
@@ -600,6 +655,112 @@ async function processDataGaps(gaps, agentId, businessId) {
     }).catch((err) =>
       console.warn(`[agent-runner] surfaceConnectorGap failed for ${gap.connector_type}:`, err.message)
     );
+  }
+}
+
+/**
+ * Handle kb_entries from an agent response.
+ * Files each entry to the business KB tagged with the agent as author so the
+ * KB analyser can see it in future passes without re-entrant loops.
+ */
+async function processAgentKBEntries(entries, agentId, businessId) {
+  if (!Array.isArray(entries) || entries.length === 0) return;
+  try {
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const kbResult = await getKBForBusiness(businessId);
+    if (!kbResult?.engine) return;
+
+    for (const entry of entries.slice(0, 3)) {
+      if (!entry?.path || !entry?.content) continue;
+      // Reject writes to raw/ or special root files — agents must not overwrite those
+      if (entry.path.startsWith('raw/')) continue;
+      if (['WIKI.md', 'index.md', 'log.md', 'hot.md'].includes(entry.path)) continue;
+
+      try {
+        await kbResult.engine.writeFile(
+          entry.path,
+          String(entry.content),
+          {
+            title: (entry.title ?? entry.path.split('/').pop()?.replace(/\.md$/, '') ?? 'untitled').slice(0, 140),
+            tags: Array.isArray(entry.tags) ? [...entry.tags, agentId].slice(0, 8) : [agentId],
+            written_by: `agent:${agentId}`,
+            review_status: 'pending_review',
+            why: entry.why ? String(entry.why).slice(0, 400) : undefined,
+          },
+          `${agentId}: ${String(entry.title ?? entry.path).slice(0, 60)}`
+        );
+      } catch (err) {
+        console.warn(`[agent-runner] kb_entries write for ${entry.path} failed:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentKBEntries failed:', err.message);
+  }
+}
+
+/**
+ * Handle agent_briefs from an agent response — deliver each to the target
+ * agent's inbox via the shared helper. Target validated against installed agents.
+ */
+async function processAgentBriefs(briefs, fromAgentId, businessId) {
+  if (!Array.isArray(briefs) || briefs.length === 0) return;
+  try {
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
+
+    for (const b of briefs.slice(0, 5)) {
+      if (!b?.to_agent || !b?.brief) continue;
+      if (b.to_agent === fromAgentId) continue; // never self-brief
+
+      // Only deliver to installed, active agents
+      const target = db.prepare("SELECT id FROM agents WHERE id = ? AND status = 'active'").get(b.to_agent);
+      if (!target) continue;
+
+      await deliverAgentBrief({
+        from: `agent:${fromAgentId}`,
+        to: b.to_agent,
+        businessId,
+        brief: b.brief,
+        priority: ['immediate', 'next_run', 'fyi'].includes(b.priority) ? b.priority : 'next_run',
+      }).catch((err) =>
+        console.warn(`[agent-runner] agent_brief to ${b.to_agent} failed:`, err.message)
+      );
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentBriefs failed:', err.message);
+  }
+}
+
+/**
+ * Handle signals_to_create from an agent response — route through the
+ * createSignalIfNotDuplicate helper so each signal dedups, files to KB,
+ * checks goal impact, and surfaces connector implications like any other.
+ */
+async function processAgentSignals(signals, agentId, businessId) {
+  if (!Array.isArray(signals) || signals.length === 0) return;
+  try {
+    const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
+    for (const s of signals.slice(0, 5)) {
+      if (!s?.title) continue;
+      if ((s.confidence ?? 0) < 0.65) continue;
+
+      const slug = String(s.title)
+        .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
+      const ruleId = `agent:${agentId}:${slug || 'signal'}`;
+
+      createSignalIfNotDuplicate({
+        business_id: businessId,
+        rule_id: ruleId,
+        type: s.type || 'anomaly',
+        severity: s.severity || 'info',
+        title: s.title,
+        description: s.description ?? null,
+        confidence: Number(s.confidence) || 0.7,
+        data: { source_agent: agentId, raw: s },
+        source_label: `agent:${agentId}`,
+      });
+    }
+  } catch (err) {
+    console.warn('[agent-runner] processAgentSignals failed:', err.message);
   }
 }
 
@@ -1163,11 +1324,17 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
-    // 14. Process data gaps and connector wishlist (non-blocking)
+    // 14. Process mesh outputs from the agent run (all fire-and-forget)
     processDataGaps(parsed.data_gaps, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processDataGaps failed (non-fatal):', e.message));
     processConnectorWishlist(parsed.connector_wishlist, agentId, businessId)
       .catch(e => console.warn('[agent-runner] processConnectorWishlist failed (non-fatal):', e.message));
+    processAgentKBEntries(parsed.kb_entries, agentId, businessId)
+      .catch(e => console.warn('[agent-runner] processAgentKBEntries failed (non-fatal):', e.message));
+    processAgentBriefs(parsed.agent_briefs, agentId, businessId)
+      .catch(e => console.warn('[agent-runner] processAgentBriefs failed (non-fatal):', e.message));
+    processAgentSignals(parsed.signals_to_create, agentId, businessId)
+      .catch(e => console.warn('[agent-runner] processAgentSignals failed (non-fatal):', e.message));
 
     // 15. Update memory with learnings
     const learnings = Array.isArray(parsed.learnings) ? parsed.learnings : [];
@@ -1193,8 +1360,9 @@ export async function runAgent(agentId, businessId, trigger, triggerId = null, o
       summary: parsed.summary ?? null,
     });
 
-    // 16. Brief conductor (non-conductor runs only)
-    briefConductor(agentId, parsed, businessId);
+    // 16. Brief conductor (non-conductor runs only) — fire-and-forget
+    briefConductor(agentId, parsed, businessId)
+      .catch((err) => console.warn('[agent-runner] briefConductor failed (non-fatal):', err.message));
 
     // 16b. Dispatch BAP webhook for agent.run.complete
     try {
