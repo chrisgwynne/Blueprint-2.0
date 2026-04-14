@@ -232,8 +232,8 @@ function pickConfiguredProvider() {
 }
 
 const DEFAULT_MODEL_BY_PROVIDER = {
-  anthropic: 'claude-sonnet-4-20250514',
-  'claude-cli': 'claude-sonnet-4-20250514',
+  anthropic: 'claude-sonnet-4-5',
+  'claude-cli': 'claude-sonnet-4-5',
   openai: 'gpt-4o-mini',
   google: 'gemini-1.5-flash',
   ollama: 'llama3',
@@ -254,7 +254,7 @@ export function resolveProfileLLM(profileLLM) {
   let model = profileLLM?.model
     ?? savedModel
     ?? DEFAULT_MODEL_BY_PROVIDER[providerId]
-    ?? 'claude-sonnet-4-20250514';
+    ?? 'claude-sonnet-4-5';
   const temperature = profileLLM?.temperature ?? 0.7;
   const max_tokens = profileLLM?.max_tokens ?? 4096;
 
