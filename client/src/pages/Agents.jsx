@@ -4,11 +4,12 @@ import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import {
   Play, Pause, RefreshCw, Download, ChevronRight, Cpu, AlertCircle,
-  Clock, Zap, TrendingUp, Package,
+  Clock, Zap, TrendingUp, Package, UserPlus, Sparkles,
 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
   getAgents, runAgent, updateAgent, getAgentTemplates, installAgent,
+  hireAgent, getHireRecommendations,
 } from '../lib/api.js'
 
 // ─── Provider badge ───────────────────────────────────────────────────────────
@@ -272,6 +273,83 @@ function TemplateCard({ template, onInstall, installing }) {
   )
 }
 
+// ─── Recommendation card ──────────────────────────────────────────────────────
+
+function RecommendationCard({ rec, onHire, hiring }) {
+  const isHiring = hiring === rec.agent_id
+  const confidencePct = Math.round((rec.confidence ?? 0) * 100)
+  const confidenceColor = confidencePct >= 80 ? 'var(--bp-green)' : confidencePct >= 60 ? 'var(--bp-amber)' : 'var(--bp-text-3)'
+
+  return (
+    <div className="bp-card" style={{
+      display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden',
+      borderColor: 'var(--bp-blue)33',
+    }}>
+      <div style={{ height: 2, background: 'linear-gradient(90deg, var(--bp-blue)88, var(--bp-purple)44)' }} />
+      <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--bp-border)' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          <div style={{ fontSize: 24, lineHeight: 1, flexShrink: 0, marginTop: 2 }}>
+            {rec.avatar ?? '🤖'}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+              <span style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 14, color: 'var(--bp-text)' }}>
+                {rec.name}
+              </span>
+              <span style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: confidenceColor,
+                border: `1px solid ${confidenceColor}55`, borderRadius: 3, padding: '1px 5px',
+                marginLeft: 'auto',
+              }}>
+                {confidencePct}% match
+              </span>
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
+              {rec.title ?? ''}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '10px 16px', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5, margin: 0 }}>
+          {rec.reason}
+        </p>
+        {rec.expected_value && (
+          <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', lineHeight: 1.5, margin: 0, fontStyle: 'italic' }}>
+            {rec.expected_value}
+          </p>
+        )}
+        {rec.required_connectors?.length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginTop: 2 }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>Needs:</span>
+            {rec.required_connectors.map(c => (
+              <span key={c} style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-blue)',
+                border: '1px solid var(--bp-blue)44', borderRadius: 3, padding: '1px 5px',
+              }}>{c}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ padding: '10px 16px', borderTop: '1px solid var(--bp-border)' }}>
+        <button
+          onClick={() => onHire(rec.agent_id)}
+          disabled={isHiring}
+          className="bp-btn bp-btn-primary"
+          style={{ width: '100%', justifyContent: 'center', fontSize: 11 }}
+        >
+          {isHiring
+            ? <RefreshCw size={11} style={{ animation: 'bp-spin-slow 1s linear infinite' }} />
+            : <UserPlus size={11} />}
+          {isHiring ? 'Hiring…' : 'Hire Agent'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function Agents() {
@@ -282,6 +360,9 @@ export default function Agents() {
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [installing, setInstalling] = useState(null)
+  const [recommendations, setRecommendations] = useState([])
+  const [recsLoading, setRecsLoading] = useState(false)
+  const [hiring, setHiring] = useState(null)
 
   const loadData = useCallback(() => {
     Promise.all([
@@ -293,7 +374,17 @@ export default function Agents() {
     }).finally(() => setLoading(false))
   }, [])
 
+  const loadRecommendations = useCallback(() => {
+    if (!currentBusiness?.id) return
+    setRecsLoading(true)
+    getHireRecommendations(currentBusiness.id)
+      .then(res => setRecommendations(Array.isArray(res?.recommendations) ? res.recommendations : []))
+      .catch(() => setRecommendations([]))
+      .finally(() => setRecsLoading(false))
+  }, [currentBusiness?.id])
+
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => { loadRecommendations() }, [loadRecommendations])
 
   async function handleRun(agent) {
     try {
@@ -328,10 +419,30 @@ export default function Agents() {
     }
   }
 
+  async function handleHire(agentId) {
+    if (!currentBusiness?.id) {
+      addNotification({ type: 'error', message: 'No business selected' })
+      return
+    }
+    setHiring(agentId)
+    try {
+      const result = await hireAgent(agentId, currentBusiness.id)
+      addNotification({ type: 'success', message: result.message ?? `${agentId} hired` })
+      loadData()
+      loadRecommendations()
+    } catch (err) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setHiring(null)
+    }
+  }
+
   // Separate installed agents from those that have template entries but aren't in agents list
   const installedIds = new Set(agents.map(a => a.id))
   const installedTemplates = templates.filter(t => installedIds.has(t.id))
-  const uninstalledTemplates = templates.filter(t => !installedIds.has(t.id))
+  const recommendedIds = new Set(recommendations.map(r => r.agent_id))
+  // Exclude from "Available" those that are recommended (shown in their own section)
+  const uninstalledTemplates = templates.filter(t => !installedIds.has(t.id) && !recommendedIds.has(t.id))
 
   // Sort: conductor first
   const sortedAgents = [...agents].sort((a, b) => {
@@ -368,6 +479,15 @@ export default function Agents() {
                 <span className="pulse-dot pulse-dot-green" />
                 <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>
                   {activeCount} active
+                </span>
+              </>
+            )}
+            {recommendations.length > 0 && (
+              <>
+                <span style={{ color: 'var(--bp-border)' }}>·</span>
+                <Sparkles size={11} style={{ color: 'var(--bp-blue)' }} />
+                <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-blue)' }}>
+                  {recommendations.length} recommended
                 </span>
               </>
             )}
@@ -483,6 +603,55 @@ export default function Agents() {
               />
             ))}
           </div>
+        </>
+      )}
+
+      {/* Recommended by Conductor */}
+      {!loading && (recsLoading || recommendations.length > 0) && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Sparkles size={12} style={{ color: 'var(--bp-blue)' }} />
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-blue)', letterSpacing: '0.1em', textTransform: 'uppercase' }}>
+                Recommended by Conductor
+              </div>
+            </div>
+            {recsLoading && <RefreshCw size={10} style={{ color: 'var(--bp-text-3)', animation: 'bp-spin-slow 1s linear infinite' }} />}
+            <div style={{ flex: 1, height: 1, background: 'var(--bp-blue)22' }} />
+          </div>
+          {recsLoading && recommendations.length === 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14, marginBottom: 36 }}>
+              {[1, 2].map(i => (
+                <div key={i} className="bp-card" style={{ padding: 0, overflow: 'hidden', height: 180 }}>
+                  <div style={{ height: 2, background: 'var(--bp-border)' }} />
+                  <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--bp-border)' }}>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <div className="bp-skeleton" style={{ width: 28, height: 28, borderRadius: '50%' }} />
+                      <div style={{ flex: 1 }}>
+                        <div className="bp-skeleton" style={{ height: 12, width: '50%', marginBottom: 6, borderRadius: 3 }} />
+                        <div className="bp-skeleton" style={{ height: 9, width: '35%', borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ padding: '12px 16px' }}>
+                    <div className="bp-skeleton" style={{ height: 9, width: '90%', marginBottom: 5, borderRadius: 3 }} />
+                    <div className="bp-skeleton" style={{ height: 9, width: '70%', borderRadius: 3 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 14, marginBottom: 36 }}>
+              {recommendations.map(rec => (
+                <RecommendationCard
+                  key={rec.agent_id}
+                  rec={rec}
+                  onHire={handleHire}
+                  hiring={hiring}
+                />
+              ))}
+            </div>
+          )}
         </>
       )}
 
