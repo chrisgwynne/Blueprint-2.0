@@ -465,9 +465,11 @@ export function startScheduler() {
     }
   });
 
-  // Weekly KB lint — every Monday at 8am
-  cron.schedule('0 8 * * 1', async () => {
-    console.log('[scheduler] Running weekly KB lint pass...');
+  // Nightly KB lint + auto-fix — runs at 2am every night.
+  // Fixes what it can automatically (dead links, missing frontmatter, orphans),
+  // escalates what it can't (stale pages, contradictions) as tasks.
+  cron.schedule('0 2 * * *', async () => {
+    console.log('[scheduler] Running nightly KB lint + auto-fix...');
     try {
       const { getKBForBusiness } = await import('../kb/kb-config.js');
       const { KBAgent } = await import('../kb/kb-agent.js');
@@ -478,29 +480,47 @@ export function startScheduler() {
         try {
           const result = await getKBForBusiness(business.id);
           if (!result) continue;
+
           const agent = new KBAgent(result.engine);
+
+          // 1. Lint — get current issues
           const lintResult = await agent.runLint();
 
-          // If serious issues found, create a Blueprint task
-          const seriousIssues =
-            lintResult.issues.dead_links.length + lintResult.issues.orphans.length;
-          if (seriousIssues > 5) {
-            createTask({
-              business_id: business.id,
-              title: 'KB Maintenance Required',
-              description: `Weekly lint found ${lintResult.issues.dead_links.length} dead links, ${lintResult.issues.orphans.length} orphan pages, ${lintResult.issues.contradictions.length} open contradictions.`,
-              proposed_by: 'system:kb-lint',
-              action_type: 'investigation',
-              priority: 'p3',
-              trust_tier: 'green',
-            });
+          // 2. Auto-fix — apply all safe mechanical fixes, escalate the rest
+          const fixResult = await agent.autoFix(
+            lintResult.issues,
+            createTask,
+            business.id
+          );
+
+          const totalIssues =
+            lintResult.issues.dead_links.length +
+            lintResult.issues.orphans.length +
+            lintResult.issues.missing_frontmatter.length;
+
+          console.log(
+            `[scheduler] KB auto-fix ${business.slug}: ` +
+            `${totalIssues} issues found, ` +
+            `${fixResult.applied.length} fixed, ` +
+            `${fixResult.escalated.length} escalated, ` +
+            `${fixResult.errors.length} errors`
+          );
+
+          if (fixResult.errors.length > 0) {
+            console.warn(
+              `[scheduler] KB auto-fix errors for ${business.slug}:`,
+              fixResult.errors.join('; ')
+            );
           }
         } catch (bizErr) {
-          console.warn(`[scheduler] KB lint failed for ${business.slug}:`, bizErr.message);
+          console.warn(
+            `[scheduler] KB auto-fix failed for ${business.slug}:`,
+            bizErr.message
+          );
         }
       }
     } catch (err) {
-      console.error('[scheduler] Weekly KB lint failed:', err);
+      console.error('[scheduler] Nightly KB auto-fix failed:', err);
     }
   });
 
