@@ -140,6 +140,20 @@ ${detail}
     } catch {}
   })();
 
+  // Task intelligence — raises a warning signal on worsened, spawns a
+  // follow-up investigation on no_change, logs a Timeline event on
+  // improved. Fire-and-forget.
+  (async () => {
+    try {
+      const { processTaskCompletion } = await import('./task-intelligence.js');
+      await processTaskCompletion(taskId, {
+        verdict, changePct, detail, weeksAfter,
+      });
+    } catch (err) {
+      console.warn('[task-intel] processTaskCompletion failed:', err.message);
+    }
+  })();
+
   return { verdict, changePct, detail };
 }
 

@@ -47,6 +47,10 @@ export function createSignalIfNotDuplicate({
   data = {},
   source_label = null,
   dedup_hours = DEFAULT_DEDUP_HOURS,
+  // When a brand new signal is created, push it through signal-intelligence
+  // (file to KB, goal impact, agent trigger for alert/critical, connector
+  // implications). Callers that do their own downstream routing can disable.
+  process_through_mesh = true,
 }) {
   if (!business_id || !rule_id || !title) return null;
 
@@ -129,6 +133,14 @@ export function createSignalIfNotDuplicate({
       description: `${severity}: ${String(title).slice(0, 180)}`,
       metadata: { rule_id, confidence, connector_id },
     });
+  }
+
+  // Downstream mesh routing: file to KB, goal impact, trigger agents for
+  // alert/critical severity, check connector implications. Fire-and-forget.
+  if (process_through_mesh) {
+    import('./signal-intelligence.js')
+      .then(({ processNewSignal }) => processNewSignal(id, business_id))
+      .catch((err) => console.warn('[signal-helpers] mesh routing failed:', err.message));
   }
 
   return { id, created: true };
