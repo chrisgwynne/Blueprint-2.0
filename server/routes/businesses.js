@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { runConductor } from '../agents/conductor.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -99,6 +100,13 @@ router.post('/', async (req, res) => {
     } catch (kbErr) {
       console.warn(`[businesses] KB auto-init failed for ${slug} (non-fatal):`, kbErr.message);
     }
+
+    // Run Conductor immediately for the new business (fire-and-forget).
+    // This ensures agents are visible and hiring analysis runs without waiting
+    // for the next hourly cron tick.
+    runConductor(id).catch(err =>
+      console.warn(`[businesses] Initial conductor run failed for ${slug} (non-fatal):`, err.message)
+    );
 
     return res.status(201).json(created);
   } catch (err) {

@@ -4,12 +4,16 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { mkdirSync, readFileSync } from 'fs';
 
-// Resolve relative to cwd (project root when run via `bun server/...` or from server/)
-const _root = process.env.DATABASE_PATH
-  ? dirname(resolve(process.env.DATABASE_PATH))
-  : resolve(process.cwd(), '../data');
+// Resolve DB path relative to THIS FILE (server/db/db.js → ../../data/blueprint.db)
+// so it is stable regardless of cwd. Never derive from process.cwd().
+const __dbdir = dirname(fileURLToPath(import.meta.url));
+const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
 
-const DB_PATH = process.env.DATABASE_PATH || resolve(process.cwd(), '../data/blueprint.db');
+const DB_PATH = process.env.DATABASE_PATH
+  ? resolve(process.env.DATABASE_PATH)
+  : _defaultPath;
+
+const _root = dirname(DB_PATH);
 
 // Ensure data directory exists
 try {
@@ -27,7 +31,6 @@ const needsSchema = !db.prepare(
   "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'"
 ).get();
 if (needsSchema) {
-  const __dbdir = dirname(fileURLToPath(import.meta.url));
   const schema = readFileSync(resolve(__dbdir, 'schema.sql'), 'utf8');
   db.exec(schema);
   console.log('[db] Fresh database — base schema applied automatically.');

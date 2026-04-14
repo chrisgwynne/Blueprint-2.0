@@ -453,6 +453,35 @@ async function start() {
     // Mount all routes
     await mountRoutes();
 
+    // Ensure Conductor agent is seeded and installed (idempotent — safe on every boot)
+    try {
+      const { existsSync: fsExists, mkdirSync: fsMkdir, cpSync, readFileSync: fsRead, writeFileSync: fsWrite } = await import('fs');
+      const { resolve: fsResolve, join: fsJoin } = await import('path');
+      const yaml = (await import('js-yaml')).default;
+      const AGENTS_DIR = fsResolve(__dirname, 'agents');
+      const TEMPLATES_DIR = fsJoin(AGENTS_DIR, 'templates');
+      const liveDir = fsJoin(AGENTS_DIR, 'conductor');
+      const templateDir = fsJoin(TEMPLATES_DIR, 'conductor');
+      const liveProfile = fsJoin(liveDir, 'profile.yaml');
+
+      // Copy template files to live dir if not already there
+      if (!fsExists(liveProfile) && fsExists(templateDir)) {
+        fsMkdir(liveDir, { recursive: true });
+        cpSync(templateDir, liveDir, { recursive: true });
+      }
+
+      // Seed the DB row (ON CONFLICT DO NOTHING — safe to re-run)
+      db.prepare(`
+        INSERT INTO agents (id, profile_path, name, status, created_at)
+        VALUES ('conductor', 'server/agents/conductor/profile.yaml', 'Conductor', 'active', CURRENT_TIMESTAMP)
+        ON CONFLICT(id) DO NOTHING
+      `).run();
+
+      console.log('[startup] Conductor ready.');
+    } catch (err) {
+      console.warn('[startup] Conductor seed skipped:', err.message);
+    }
+
     // Seed built-in workflows for businesses with none (idempotent)
     try {
       const { seedAllBusinesses } = await import('./workflows/built-in-templates.js');

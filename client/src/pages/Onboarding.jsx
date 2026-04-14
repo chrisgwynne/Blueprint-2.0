@@ -187,13 +187,12 @@ export default function Onboarding({ onComplete }) {
     setHireError(null)
     ;(async () => {
       try {
-        // Trigger a best-effort sync for any connectors that can run without
-        // user interaction — so Conductor reasons about real data, not just
-        // "connector exists, empty".
+        // Trigger a best-effort sync for all connected connectors so Conductor
+        // reasons about real data, not just "connector exists, empty".
         try {
           const conns = await getConnectors(createdBiz.id)
           const syncable = (Array.isArray(conns) ? conns : [])
-            .filter((c) => ['pagespeed', 'shopify'].includes(c.type))
+            .filter((c) => c.status === 'connected' || c.status === 'disconnected')
           await Promise.allSettled(syncable.map((c) => syncConnector(c.id)))
         } catch {}
 
@@ -443,6 +442,13 @@ export default function Onboarding({ onComplete }) {
                 <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginTop: 6, lineHeight: 1.5 }}>
                   Get a token from Shopify Admin → Apps → Develop apps → Create a custom app → API access scopes: read_products, read_orders, read_inventory.
                 </div>
+              </div>
+            </div>
+
+            {/* More connectors note */}
+            <div className="bp-card" style={{ padding: 12, marginTop: 10, background: 'rgba(77,166,255,0.06)', border: '1px solid rgba(77,166,255,0.15)' }}>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.6 }}>
+                <strong style={{ color: 'var(--bp-blue)' }}>More connectors available in the dashboard</strong> — Stripe, Brevo, Google Ads, Meta Ads, Klaviyo, Semrush, UptimeRobot, GitHub, and more can all be added from <strong>Settings → Connectors</strong> after setup.
               </div>
             </div>
 
