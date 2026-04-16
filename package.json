@@ -5,14 +5,19 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20.0.0" },
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "workspaces": ["server", "client"],
   "scripts": {
     "setup": "bun scripts/setup.js",
     "dev": "bun scripts/dev.js",
     "build": "bun run --cwd client build",
     "start": "bun run --cwd server start",
-    "db:init": "bun run --cwd server db:init"
+    "db:init": "bun run --cwd server db:init",
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "typescript": "^6.0.2"
+  }
 }
