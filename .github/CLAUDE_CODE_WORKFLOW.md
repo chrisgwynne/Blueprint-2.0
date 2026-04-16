@@ -69,11 +69,15 @@ Use `feature/`, `fix/`, or `docs/` prefix to match the kind of work.
 Every PR must satisfy at minimum:
 
 ```bash
+# TypeScript checks pass
+bun run --cwd server typecheck    # expect zero errors
+bun run --cwd client typecheck    # expect zero errors
+
 # Client build passes
 cd client && bun run build    # expect zero errors
 
 # Server starts and /api/health responds
-cd server && timeout 8 bun index.js &
+cd server && timeout 8 bun index.ts &
 sleep 5 && curl -sf localhost:4000/api/v1/health && echo "ok"
 ```
 

@@ -14,7 +14,7 @@
 
   <p>
     <img src="https://img.shields.io/badge/license-MIT-blue" alt="License">
-    <img src="https://img.shields.io/badge/node-20%2B-green" alt="Node">
+    <img src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" alt="TypeScript">
     <img src="https://img.shields.io/badge/bun-1.1%2B-black" alt="Bun">
     <img src="https://img.shields.io/badge/platform-win%20%7C%20macOS%20%7C%20linux-lightgrey" alt="Platform">
     <img src="https://img.shields.io/badge/connectors-14-orange" alt="Connectors">
@@ -376,8 +376,8 @@ See [SKILL.md](SKILL.md) for the complete tool reference.
 
 | Layer | Tech |
 |---|---|
-| Backend | Bun + Express + SQLite (bun:sqlite, WAL mode) |
-| Frontend | React 18 + Vite 5 |
+| Backend | TypeScript + Bun + Express + SQLite (bun:sqlite, WAL mode) |
+| Frontend | TypeScript + React 18 + Vite 5 |
 | LLM | Any provider — Ollama (free/local), Anthropic, OpenAI, Gemini, LM Studio |
 | KB | File-based markdown, isomorphic-git, Obsidian-compatible |
 | Deploy | Docker Compose, single container |
