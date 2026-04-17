@@ -27,14 +27,14 @@ import {
   getROIReport, getROIAgents, getROITrajectory, getROIAssessment,
 } from '../lib/api'
 
-const CONFIDENCE_LABELS: Record<string, { label: string; color: string }> = {
+const CONFIDENCE_LABELS: Record<string, { label: string; color: string }> & { insufficient: { label: string; color: string } } = {
   insufficient: { label: 'INSUFFICIENT DATA', color: 'var(--bp-text-3)' },
   early:        { label: 'EARLY SIGNAL',      color: 'var(--bp-amber)' },
   developing:   { label: 'DEVELOPING',        color: 'var(--bp-cyan)' },
   established:  { label: 'ESTABLISHED',       color: 'var(--bp-green)' },
 }
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string }> = {
+const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string }> & { unknown: { label: string; color: string; icon: string } } = {
   strong:          { label: 'Strong',     color: 'var(--bp-green)',  icon: '✅' },
   marginal:        { label: 'Marginal',   color: 'var(--bp-amber)',  icon: '⚠️' },
   review_needed:   { label: 'Review',     color: 'var(--bp-red)',    icon: '❌' },

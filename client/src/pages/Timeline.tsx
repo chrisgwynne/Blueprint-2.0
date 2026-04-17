@@ -10,7 +10,7 @@ import { getTimeline } from '../lib/api'
 import ProducedByEvent from '../components/ProducedByEvent'
 import type { ElementType } from 'react'
 
-const TYPE_CONFIG: Record<string, { icon: ElementType; color: string; label: string }> = {
+const TYPE_CONFIG: Record<string, { icon: ElementType; color: string; label: string }> & { agent_run: { icon: ElementType; color: string; label: string } } = {
   agent_run:      { icon: Bot,         color: 'var(--bp-blue)',   label: 'AGENTS' },
   task:           { icon: CheckSquare, color: 'var(--bp-amber)',  label: 'TASKS' },
   signal:         { icon: Radio,       color: 'var(--bp-red)',    label: 'SIGNALS' },

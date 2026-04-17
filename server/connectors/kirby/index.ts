@@ -131,7 +131,7 @@ async function fetchViaFilesystem(contentPath: string | undefined): Promise<{ pa
   function extractField(content: string, field: string): string | null {
     const re = new RegExp(`^${field}:\\s*(.+)$`, 'mi');
     const m = content.match(re);
-    return m ? m[1].trim() : null;
+    return m ? (m[1] ?? '').trim() : null;
   }
 
   await walk(contentPath);

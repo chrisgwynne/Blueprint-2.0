@@ -19,7 +19,7 @@ async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?
   try {
     const { default: connectorImpl } = await import(`../connectors/${connector.type}/index.js`) as any;
 
-    let credentials: Record<string, any> = {};
+    let credentials: Record<string, unknown> = {};
     if (connector.credentials) {
       const { decrypt } = await import('../crypto.js');
       try {

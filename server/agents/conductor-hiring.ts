@@ -123,7 +123,7 @@ function extractJSONFromLLM(text: string): LLMRecommendationsResponse | null {
   const trimmed = String(text).trim();
   try { return JSON.parse(trimmed) as LLMRecommendationsResponse; } catch {}
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fenced) { try { return JSON.parse(fenced[1].trim()) as LLMRecommendationsResponse; } catch {} }
+  if (fenced) { try { return JSON.parse((fenced[1] ?? '').trim()) as LLMRecommendationsResponse; } catch {} }
   const first = trimmed.indexOf('{');
   const last = trimmed.lastIndexOf('}');
   if (first >= 0 && last > first) {

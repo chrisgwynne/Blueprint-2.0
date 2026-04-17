@@ -111,7 +111,7 @@ function loadConductorLLM(): Record<string, unknown> | null {
 function extractJSON(content: string): { clusters: ClusterResult[] } | null {
   if (!content) return null;
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const jsonStr = fenced ? fenced[1] : (content.match(/\{[\s\S]*\}/)?.[0] ?? content);
+  const jsonStr = fenced?.[1] ?? content.match(/\{[\s\S]*\}/)?.[0] ?? content;
   try { return JSON.parse(jsonStr.trim()); } catch { return null; }
 }
 

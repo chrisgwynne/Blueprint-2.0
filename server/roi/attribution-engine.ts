@@ -322,13 +322,13 @@ function estimateNaturalTrajectory(businessId: string, periodStart: string, peri
 
 function linearSlope(samples: Array<{ v: number; at: string }>): { slopePerDay: number | null } {
   // Simple linear regression against days-since-first-sample.
-  const t0 = new Date(samples[0].at).getTime();
+  const t0 = new Date(samples[0]!.at).getTime();
   const xs = samples.map(s => (new Date(s.at).getTime() - t0) / 86400000);
   const ys = samples.map(s => s.v);
   const n = xs.length;
   const sumX = xs.reduce((a, b) => a + b, 0);
   const sumY = ys.reduce((a, b) => a + b, 0);
-  const sumXY = xs.reduce((a, x, i) => a + x * ys[i], 0);
+  const sumXY = xs.reduce((a, x, i) => a + x * (ys[i] ?? 0), 0);
   const sumXX = xs.reduce((a, x) => a + x * x, 0);
   const denom = n * sumXX - sumX * sumX;
   if (denom === 0) return { slopePerDay: null };

@@ -13,7 +13,7 @@ interface StatusConfig {
   borderColor: string
 }
 
-const STATUS_CONFIG: Record<string, StatusConfig> = {
+const STATUS_CONFIG: Record<string, StatusConfig> & { disconnected: StatusConfig } = {
   connected:    { label: 'LIVE',         dotClass: 'pulse-dot-green',  pill: 'bp-pill-green', borderColor: 'var(--bp-green)' },
   syncing:      { label: 'SYNCING',      dotClass: 'pulse-dot-blue',   pill: 'bp-pill-blue',  borderColor: 'var(--bp-blue)' },
   error:        { label: 'ERROR',        dotClass: 'pulse-dot-red',    pill: 'bp-pill-red',   borderColor: 'var(--bp-red)' },

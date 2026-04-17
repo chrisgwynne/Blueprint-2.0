@@ -235,7 +235,7 @@ router.get('/google/callback', async (req: Request, res: Response) => {
 
       // Preserve any non-OAuth fields the existing connector held (e.g.
       // PageSpeed's apiKey, GSC's userEmail) when merging in the new tokens.
-      let merged: Record<string, any> = { ...credentials, userEmail };
+      let merged: Record<string, unknown> = { ...credentials, userEmail };
       if (existing?.credentials) {
         try {
           const prev = JSON.parse(decrypt(existing.credentials));
@@ -810,7 +810,7 @@ router.get('/google/config', isAuthenticated, (req: Request, res: Response) => {
     // Expose whether the *live* config resolves (via DB or env), and the
     // storage source so the user can tell if they're overriding env.
     const storedRow = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get() as { value: string } | null;
-    let stored: Record<string, any> | null = null;
+    let stored: Record<string, unknown> | null = null;
     try { stored = storedRow?.value ? JSON.parse(storedRow.value) : null; } catch {}
     const envPresent = {
       client_id: !isPlaceholder(process.env.GOOGLE_CLIENT_ID),
@@ -846,13 +846,13 @@ router.put('/google/config', isAuthenticated, (req: Request, res: Response) => {
     const { client_id, client_secret, redirect_uri } = req.body ?? {};
 
     // Read existing so we can preserve the secret when not re-submitted.
-    let existing: Record<string, any> = {};
+    let existing: Record<string, unknown> = {};
     try {
       const row = db.prepare("SELECT value FROM settings WHERE key = 'google_oauth_config'").get() as { value: string } | null;
       existing = row?.value ? JSON.parse(row.value) : {};
     } catch {}
 
-    const next: Record<string, any> = {
+    const next: Record<string, unknown> = {
       client_id: typeof client_id === 'string' ? client_id.trim() : (existing.client_id ?? null),
       redirect_uri: typeof redirect_uri === 'string' ? redirect_uri.trim() : (existing.redirect_uri ?? null),
       client_secret_enc: existing.client_secret_enc ?? null,

@@ -9,7 +9,7 @@ import { Target, TrendingUp, TrendingDown, ArrowRight, Circle } from 'lucide-rea
 import useStore from '../lib/store'
 import { getOutcomes, getAgentOutcomePerformance, getOutcomeTimeline } from '../lib/api'
 
-const VERDICT_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
+const VERDICT_CONFIG: Record<string, { label: string; icon: string; color: string }> & { pending: { label: string; icon: string; color: string } } = {
   improved:     { label: 'IMPROVED',    icon: '✅', color: 'var(--bp-green)' },
   worsened:     { label: 'WORSENED',    icon: '❌', color: 'var(--bp-red)'   },
   no_change:    { label: 'NO CHANGE',   icon: '→',  color: 'var(--bp-text-3)' },

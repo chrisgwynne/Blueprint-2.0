@@ -246,11 +246,11 @@ const connector = {
     };
 
     // Star rating breakdown
-    const stars: Record<string, number> = { ONE: 0, TWO: 0, THREE: 0, FOUR: 0, FIVE: 0 };
+    const stars: Record<'ONE' | 'TWO' | 'THREE' | 'FOUR' | 'FIVE', number> = { ONE: 0, TWO: 0, THREE: 0, FOUR: 0, FIVE: 0 };
     let unansweredReviews = 0;
     for (const r of reviewList) {
       const rating = r.starRating as string | undefined;
-      if (rating && stars[rating] !== undefined) stars[rating]++;
+      if (rating && rating in stars) { const s = stars as Record<string, number>; s[rating] = (s[rating] ?? 0) + 1; }
       if (!r.reviewReply) unansweredReviews++;
     }
 
@@ -261,7 +261,7 @@ const connector = {
       new Date(b.createTime as string).getTime() - new Date(a.createTime as string).getTime()
     );
     const daysSincePost = sortedLive.length > 0
-      ? Math.floor((Date.now() - new Date(sortedLive[0].createTime as string).getTime()) / 86400000)
+      ? Math.floor((Date.now() - new Date(sortedLive[0]!.createTime as string).getTime()) / 86400000)
       : 999;
 
     // Unanswered Q&A

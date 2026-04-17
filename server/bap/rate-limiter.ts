@@ -13,12 +13,13 @@ interface RateLimit {
   windowMs: number;
 }
 
+const DEFAULT_LIMIT: RateLimit = { calls: 60, windowMs: 60_000 };
 const LIMITS: Record<string, RateLimit> = {
-  default:           { calls: 60,  windowMs: 60_000 },
+  default:           DEFAULT_LIMIT,
   'kb:write':        { calls: 20,  windowMs: 60_000 },
   'kb:query':        { calls: 10,  windowMs: 60_000 },
   'agents:trigger':  { calls: 5,   windowMs: 60_000 },
-  register:          { calls: 5,   windowMs: 300_000 }, // 5 registrations per 5 min
+  register:          { calls: 5,   windowMs: 300_000 },
 };
 
 /**
@@ -31,7 +32,7 @@ export function bapRateLimit(limitKey = 'default') {
     const bapReq = req as Request & { bapAgent?: { id?: string } };
     const agentId = bapReq.bapAgent?.id ?? req.ip;
     const key = `${agentId}:${limitKey}`;
-    const limit = LIMITS[limitKey] ?? LIMITS.default;
+    const limit = LIMITS[limitKey] ?? DEFAULT_LIMIT;
     const now = Date.now();
 
     if (!windows.has(key)) windows.set(key, []);

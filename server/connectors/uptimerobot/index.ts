@@ -167,7 +167,7 @@ const connector = {
         const r = m.custom_uptime_ratio ?? '';
         const parts = String(r).split('-');
         // Order: 1-7-30 → take the last (30-day) value
-        const v = parseFloat(parts[parts.length - 1]);
+        const v = parseFloat(parts[parts.length - 1] ?? '');
         return isNaN(v) ? null : v;
       })
       .filter((v): v is number => v !== null);

@@ -27,7 +27,7 @@ function daysAgo(n: number): Date {
 }
 
 function formatDate(d: Date): string {
-  return d.toISOString().split('T')[0];
+  return d.toISOString().slice(0, 10);
 }
 
 interface FetchLike {

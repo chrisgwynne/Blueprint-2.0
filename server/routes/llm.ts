@@ -94,7 +94,7 @@ function readTier(tier: string): { provider: string | null; model: string | null
  */
 router.get('/tiers', (req: Request, res: Response) => {
   try {
-    const out: { tiers: Record<string, any>; valid_tiers: string[] } = { tiers: {}, valid_tiers: VALID_TIERS };
+    const out: { tiers: Record<string, unknown>; valid_tiers: string[] } = { tiers: {}, valid_tiers: VALID_TIERS };
     for (const tier of VALID_TIERS) out.tiers[tier] = readTier(tier);
     res.json(out);
   } catch (err: any) {

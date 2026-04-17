@@ -34,11 +34,11 @@ export interface ConnectorInterface {
    * Must match ids defined in server/signals/rules.js
    */
   signalTypes: string[];
-  healthCheck(credentials: Record<string, any>): Promise<{ ok: boolean; error?: string; details?: any }>;
-  fetch(dataType: string, credentials: Record<string, any>, params: Record<string, any>): Promise<any>;
+  healthCheck(credentials: Record<string, unknown>): Promise<{ ok: boolean; error?: string; details?: unknown }>;
+  fetch(dataType: string, credentials: Record<string, unknown>, params: Record<string, unknown>): Promise<unknown>;
   getAuthUrl(state: string): Promise<string>;
   exchangeCode(code: string): Promise<{ accessToken: string; refreshToken: string; expiresAt: number; scope?: string }>;
-  refreshToken(credentials: Record<string, any>): Promise<{ accessToken: string; expiresAt: number }>;
+  refreshToken(credentials: Record<string, unknown>): Promise<{ accessToken: string; expiresAt: number }>;
 }
 
 const connector: ConnectorInterface = {

@@ -265,7 +265,7 @@ function parseDiffToFileChanges(diff: string): Array<{ path: string; patch: stri
   for (const block of fileBlocks) {
     const pathMatch = block.match(/a\/(.+?) b\//);
     if (!pathMatch) continue;
-    files.push({ path: pathMatch[1], patch: block });
+    files.push({ path: pathMatch[1] ?? '', patch: block });
   }
 
   return files;
@@ -283,7 +283,7 @@ function applyDiff(original: string, patch: string): string | null {
     // Only apply if there is exactly one hunk (safety constraint)
     if (hunks.length !== 1) return null;
 
-    const changeLines = hunks[0][5].split('\n');
+    const changeLines = (hunks[0]![5] ?? '').split('\n');
     const removals = changeLines.filter(l => l.startsWith('-')).map(l => l.slice(1));
     const additions = changeLines.filter(l => l.startsWith('+')).map(l => l.slice(1));
 

@@ -8,8 +8,15 @@ import crypto from 'crypto';
 import db from '../db/db.js';
 
 interface CalibrationRow {
+  agent_id: string;
+  business_id: string | null;
+  tasks_with_outcomes: number;
+  avg_stated_confidence: number | null;
+  avg_actual_outcome_rate: number | null;
   calibration_error: number | null;
   calibration_offset: number | null;
+  calibration_score: number | null;
+  trend: string | null;
 }
 
 interface CalibrationResult {

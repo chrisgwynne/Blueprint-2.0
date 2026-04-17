@@ -14,7 +14,7 @@ import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import type { KBEngine, KBLintResult } from './kb-engine.js';
 
 function todayISO(): string {
-  return new Date().toISOString().split('T')[0];
+  return new Date().toISOString().slice(0, 10);
 }
 
 function slugify(text: string | undefined | null): string {
@@ -37,7 +37,7 @@ function extractJSON(text: unknown): unknown {
 
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) {
-    try { return JSON.parse(fenced[1].trim()); } catch {}
+    try { return JSON.parse((fenced[1] ?? '').trim()); } catch {}
   }
 
   const first = s.indexOf('{');
@@ -796,7 +796,7 @@ Return ONLY valid JSON in this exact shape, using the page paths as keys:
           // Strip brackets — leave just the display text
           content = content.replace(pattern, (match) => {
             const displayMatch = match.match(/\|([^\]]+)\]\]$/);
-            return displayMatch ? displayMatch[1] : link;
+            return displayMatch ? (displayMatch[1] ?? link) : link;
           });
           applied.push(`dead-link: ${filePath}: [[${link}]] stripped to plain text`);
         }
@@ -843,7 +843,7 @@ Return ONLY valid JSON in this exact shape, using the page paths as keys:
       const name = f.split('/').pop()!.replace(/\.md$/, '').toLowerCase();
       return name.includes(slug) || slug.includes(name);
     });
-    if (partials.length === 1) return partials[0];
+    if (partials.length === 1) return partials[0] ?? null;
 
     return null;
   }

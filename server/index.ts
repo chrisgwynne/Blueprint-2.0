@@ -40,8 +40,8 @@ class SqliteSessionStore extends session.Store {
         this.destroy(sid, () => {});
         return callback(null, null);
       }
-      let sess: any;
-      try { sess = JSON.parse(row.sess); } catch { return callback(null, null); }
+      let sess: session.SessionData;
+      try { sess = JSON.parse(row.sess) as session.SessionData; } catch { return callback(null, null); }
       callback(null, sess);
     } catch (err) {
       callback(err);

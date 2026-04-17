@@ -58,7 +58,7 @@ class SshConnection {
   async connect(): Promise<void> {
     if (this.client) return;
     this.client = new SshClient();
-    const connectOpts: Record<string, any> = {
+    const connectOpts: Record<string, unknown> = {
       host: this.credentials.host,
       port: Number(this.credentials.port || 22),
       username: this.credentials.username,
@@ -118,10 +118,13 @@ class SshConnection {
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [path, size, mtime] = line.split('\t');
+        const parts = line.split('\t');
+        const path = parts[0] ?? '';
+        const size = parts[1] ?? '0';
+        const mtime = parts[2] ?? '0';
         return {
           path,
-          name: path.split('/').pop(),
+          name: path.split('/').pop() ?? '',
           size: Number(size) || 0,
           modified: new Date(Number(mtime) * 1000).toISOString(),
           type: 'file',

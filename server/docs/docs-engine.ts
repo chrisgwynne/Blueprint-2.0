@@ -23,14 +23,14 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; b
   if (!match) return { frontmatter: {}, body: raw };
 
   const frontmatter: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
+  for (const line of (match[1] ?? '').split('\n')) {
     const colon = line.indexOf(':');
     if (colon === -1) continue;
     const key = line.slice(0, colon).trim();
     const val = line.slice(colon + 1).trim().replace(/^["']|["']$/g, '');
     if (key) frontmatter[key] = val;
   }
-  return { frontmatter, body: match[2] };
+  return { frontmatter, body: match[2] ?? '' };
 }
 
 // ─── Callout blocks ─────────────────────────────────────────────────────────
@@ -113,8 +113,8 @@ function getPrevNext(activeSection: string, activePage: string): { prev: FlatPag
     }
   }
   const idx = flat.findIndex(p => p.section === activeSection && p.page === activePage);
-  const prev = idx > 0 ? flat[idx - 1] : null;
-  const next = idx >= 0 && idx < flat.length - 1 ? flat[idx + 1] : null;
+  const prev = idx > 0 ? (flat[idx - 1] ?? null) : null;
+  const next = idx >= 0 && idx < flat.length - 1 ? (flat[idx + 1] ?? null) : null;
   return { prev, next };
 }
 
@@ -180,9 +180,10 @@ function escHtml(str: string): string {
 
 export async function serveDocIndex(req: Request, res: Response): Promise<void> {
   const config = loadSidebar();
-  if (config.sections.length > 0 && config.sections[0].pages.length > 0) {
-    const s = config.sections[0];
-    res.redirect(`/docs/${s.id}/${s.pages[0].id}`);
+  const firstSection = config.sections[0];
+  if (firstSection && firstSection.pages.length > 0) {
+    const s = firstSection;
+    res.redirect(`/docs/${s.id}/${s.pages[0]!.id}`);
     return;
   }
   res.redirect('/docs/getting-started/installation');
@@ -204,7 +205,7 @@ export async function serveDoc(req: Request, res: Response): Promise<void> {
     const config = loadSidebar();
     const sec = config.sections.find(s => s.id === section);
     if (sec && sec.pages.length > 0) {
-      res.redirect(`/docs/${section}/${sec.pages[0].id}`);
+      res.redirect(`/docs/${section}/${sec.pages[0]!.id}`);
       return;
     }
     res.redirect('/docs');
@@ -268,7 +269,9 @@ export function searchDocs(req: Request, res: Response): void {
       const score = titleMatch ? 100 : headingMatch ? 50 : 10;
 
       const rel  = full.replace(DOCS_ROOT + '/', '').replace(/\.md$/, '');
-      const [section, page] = rel.split('/');
+      const relParts = rel.split('/');
+      const section = relParts[0] ?? '';
+      const page = relParts[1] ?? '';
       const url = `/docs/${section}/${page}`;
 
       const matchIdx = text.indexOf(q);
@@ -276,8 +279,8 @@ export function searchDocs(req: Request, res: Response): void {
       const excerpt  = body.slice(start, start + 150).replace(/[#*`]/g, '').trim();
 
       results.push({
-        title:   frontmatter.title || page,
-        section: frontmatter.section || section,
+        title:   frontmatter['title'] ?? page,
+        section: frontmatter['section'] ?? section,
         url,
         excerpt: excerpt + (excerpt.length >= 150 ? '…' : ''),
         score,

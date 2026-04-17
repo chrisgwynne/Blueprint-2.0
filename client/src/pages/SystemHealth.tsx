@@ -9,13 +9,13 @@ import {
 import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks, getAgentEfficiency } from '../lib/api.js'
 import useStore from '../lib/store.js'
 
-const STATUS_COLORS: Record<string, { label: string; color: string; bg: string }> = {
+const STATUS_COLORS: Record<string, { label: string; color: string; bg: string }> & { healthy: { label: string; color: string; bg: string } } = {
   healthy:  { label: 'ALL SYSTEMS OPERATIONAL', color: 'var(--bp-green)', bg: 'rgba(0,201,167,0.10)' },
   degraded: { label: 'DEGRADED',                color: 'var(--bp-amber)', bg: 'rgba(245,158,11,0.10)' },
   critical: { label: 'CRITICAL',                color: 'var(--bp-red)',   bg: 'rgba(255,82,82,0.10)'  },
 }
 
-const CONN_STATUS: Record<string, { dot: string; label: string; color: string }> = {
+const CONN_STATUS: Record<string, { dot: string; label: string; color: string }> & { disconnected: { dot: string; label: string; color: string } } = {
   live:         { dot: '🟢', label: 'Live',         color: 'var(--bp-green)' },
   stale:        { dot: '🟡', label: 'Stale',        color: 'var(--bp-amber)' },
   error:        { dot: '🔴', label: 'Error',        color: 'var(--bp-red)'   },
@@ -23,7 +23,7 @@ const CONN_STATUS: Record<string, { dot: string; label: string; color: string }>
   syncing:      { dot: '🔵', label: 'Syncing',      color: 'var(--bp-blue)'  },
 }
 
-const AGENT_STATUS: Record<string, { color: string; label: string }> = {
+const AGENT_STATUS: Record<string, { color: string; label: string }> & { idle: { color: string; label: string } } = {
   ok:       { color: 'var(--bp-green)', label: 'Ok' },
   failing:  { color: 'var(--bp-red)',   label: 'Failing' },
   disabled: { color: 'var(--bp-text-3)', label: 'Disabled' },

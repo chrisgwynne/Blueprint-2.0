@@ -25,8 +25,7 @@ export interface SignalRule {
   severity: string;
   name: string;
   primaryMetric?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  evaluate(current: any, previous?: any): RuleResult;
+  evaluate(current: unknown, previous?: unknown): RuleResult;
 }
 
 export const rules: SignalRule[] = [

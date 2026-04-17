@@ -239,7 +239,7 @@ async function handleCommandInternal(message: any, botToken: string, chatId: str
 
 // ─── Message senders ─────────────────────────────────────────────────────────
 
-async function sendRawMessage(botToken: string, chatId: string | number, text: string, extra: Record<string, any> = {}): Promise<SendResult> {
+async function sendRawMessage(botToken: string, chatId: string | number, text: string, extra: Record<string, unknown> = {}): Promise<SendResult> {
   try {
     const res = await fetch(`${TELEGRAM_API}${botToken}/sendMessage`, {
       method: 'POST',
@@ -263,7 +263,7 @@ export async function sendMessage(chatId: string | null, text: string, inlineKey
   const targetChatId = chatId || defaultChatId;
   if (!targetChatId) throw new Error('TELEGRAM_CHAT_ID is not configured.');
 
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     chat_id: targetChatId,
     text,
     parse_mode: 'HTML',

@@ -87,7 +87,7 @@ function extractJSON(rawContent: string): ParsedLLMResponse | null {
   // Strategy 2: fenced code block
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) {
-    try { return JSON.parse(fenced[1].trim()) as ParsedLLMResponse; } catch {}
+    try { return JSON.parse((fenced[1] ?? '').trim()) as ParsedLLMResponse; } catch {}
   }
 
   // Strategy 3: first { to last }

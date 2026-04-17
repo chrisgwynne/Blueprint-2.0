@@ -36,7 +36,7 @@ import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
 
-const CONNECTOR_ICONS: Record<string, LucideIcon> = {
+const CONNECTOR_ICONS: Record<string, LucideIcon> & { default: LucideIcon } = {
   gsc:           Search,
   ga4:           BarChart2,
   pagespeed:     Zap,

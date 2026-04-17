@@ -32,7 +32,7 @@ type ServerConn = {
 
 // Known site structures we try to inventory after healthCheck. Each entry
 // is an array of directory paths (relative to rootPath) worth scanning.
-const SITE_STRUCTURES: Record<string, string[]> = {
+const SITE_STRUCTURES: Record<string, string[]> & { custom: string[] } = {
   kirby:     ['content', 'site/templates', 'site/snippets', 'site/plugins', 'site/config'],
   wordpress: ['wp-content/themes', 'wp-content/plugins'],
   static:    ['', 'assets/css', 'assets/js'],

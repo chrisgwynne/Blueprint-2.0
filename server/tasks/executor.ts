@@ -20,6 +20,7 @@ const createBlueprintIssue = _createBlueprintIssueRaw as unknown as (
   db: unknown
 ) => Promise<{ url: string } | null>;
 import { createTaskEvent } from './task-events.js';
+import { parseJson } from '../types/shared.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -138,13 +139,13 @@ function loadConnector(businessId: string, type: string): { connector: Connector
   }
   let credentials: Record<string, string> = {};
   try {
-    if (row.credentials) credentials = JSON.parse(decrypt(row.credentials)) as Record<string, string>;
+    if (row.credentials) credentials = parseJson<Record<string, string>>(decrypt(row.credentials), {});
   } catch (err) {
     throw new Error(`Failed to decrypt ${type} credentials: ${(err as Error).message}`);
   }
   let config: Record<string, unknown> = {};
   try {
-    if (row.config) config = JSON.parse(row.config) as Record<string, unknown>;
+    if (row.config) config = parseJson<Record<string, unknown>>(row.config, {});
   } catch {}
   return { connector: row, credentials, config };
 }
@@ -270,7 +271,7 @@ Return only valid JSON. No prose outside the JSON object.`;
 function extractInvestigationJSON(content: string): Record<string, unknown> | null {
   if (!content) return null;
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const str = fenced ? fenced[1] : (content.match(/\{[\s\S]*\}/)?.[0] ?? content);
+  const str = fenced?.[1] ?? content.match(/\{[\s\S]*\}/)?.[0] ?? content;
   try { return JSON.parse(str.trim()) as Record<string, unknown>; } catch { return null; }
 }
 
@@ -280,7 +281,7 @@ async function fileInvestigationToKB(task: Task, findings: Record<string, unknow
     const result = await getKBForBusiness(task.business_id);
     if (!result?.engine) return;
 
-    const date = new Date().toISOString().split('T')[0];
+    const date = new Date().toISOString().slice(0, 10);
     const path = `research/investigation-${task.id.slice(0, 8)}-${date}.md`;
 
     const actionTaskLines = ((findings.action_tasks as Array<Record<string, unknown>> | undefined) ?? []).map((t, i) =>
@@ -463,7 +464,7 @@ async function executeContentDraft(task: Task): Promise<ExecuteResult> {
     const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as { getKBForBusiness(id: string): Promise<{ engine: { writeFile(path: string, content: string, meta: Record<string, unknown>, msg: string): Promise<void> } } | null> };
     const result = await getKBForBusiness(task.business_id);
     if (result?.engine) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = new Date().toISOString().slice(0, 10);
       const slug = (task.title ?? 'draft')
         .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
       kbPath = `wiki/drafts/${date}-${slug}.md`;
@@ -557,7 +558,7 @@ async function executeMetaUpdate(task: Task): Promise<ExecuteResult> {
     `SELECT * FROM connectors WHERE business_id = ? AND type = 'wix' AND status = 'connected' LIMIT 1`
   ).get(task.business_id) as ConnectorRow | null;
   if (wixConnector && payload.page_id) {
-    const credentials = JSON.parse(decrypt(wixConnector.credentials ?? '{}')) as Record<string, string>;
+    const credentials = parseJson<Record<string, string>>(decrypt(wixConnector.credentials ?? '{}'), {});
     const { default: wix } = await import('../connectors/wix/index.js') as unknown as {
       default: {
         updatePageSeo(creds: Record<string, string>, params: { pageId: string; title?: string | null; description?: string | null }): Promise<unknown>;
@@ -616,7 +617,7 @@ async function fileInstructionDraft(task: Task, payload: Record<string, unknown>
     const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as { getKBForBusiness(id: string): Promise<{ engine: { writeFile(path: string, content: string, meta: Record<string, unknown>, msg: string): Promise<void> } } | null> };
     const result = await getKBForBusiness(task.business_id);
     if (result?.engine) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = new Date().toISOString().slice(0, 10);
       const slug = (task.title ?? actionType)
         .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
       kbPath = `wiki/drafts/${date}-${actionType}-${slug}.md`;
@@ -931,13 +932,13 @@ export async function rollbackTask(taskId: string): Promise<{ outcome: string }>
   if (!taskRow) throw new Error(`Task ${taskId} not found.`);
   if (!taskRow.rollback_data) throw new Error('No rollback data available for this task.');
 
-  const rollback = JSON.parse(taskRow.rollback_data as string) as Record<string, unknown>;
+  const rollback = parseJson<Record<string, unknown>>(taskRow.rollback_data, {});
   if (!rollback.action) throw new Error('Invalid rollback data.');
 
   // Reconstruct a Task from taskRow for helpers
   const task: Task = {
     ...taskRow,
-    action_payload: taskRow.action_payload ? JSON.parse(taskRow.action_payload) as Record<string, unknown> : {},
+    action_payload: parseJson<Record<string, unknown>>(taskRow.action_payload, {}),
   };
 
   if (rollback.action === 'delete_product' && rollback.product_id) {
@@ -1036,7 +1037,7 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
   // Re-parse JSON fields once
   const task: Task = {
     ...taskRow,
-    action_payload: taskRow.action_payload ? JSON.parse(taskRow.action_payload) as Record<string, unknown> : {},
+    action_payload: parseJson<Record<string, unknown>>(taskRow.action_payload, {}),
   };
 
   if (!isExecutable(task.action_type ?? '')) {
@@ -1150,7 +1151,7 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
 
 async function executeWixSeoUpdate(task: Task): Promise<ExecuteResult> {
   const payload = typeof task.action_payload === 'string'
-    ? JSON.parse(task.action_payload) as Record<string, unknown> : task.action_payload ?? {};
+    ? parseJson<Record<string, unknown>>(task.action_payload, {}) : task.action_payload ?? {};
   const { target, target_id, title, description, slug, connector_id } = payload as {
     target?: string;
     target_id?: string;
@@ -1164,7 +1165,7 @@ async function executeWixSeoUpdate(task: Task): Promise<ExecuteResult> {
 
   const connectorRow = db.prepare('SELECT * FROM connectors WHERE id = ? AND type = ?').get(connector_id, 'wix') as ConnectorRow | null;
   if (!connectorRow) throw new Error(`Wix connector ${connector_id} not found`);
-  const credentials = JSON.parse(decrypt(connectorRow.credentials ?? '{}')) as Record<string, string>;
+  const credentials = parseJson<Record<string, string>>(decrypt(connectorRow.credentials ?? '{}'), {});
   const { default: wix } = await import('../connectors/wix/index.js') as unknown as {
     default: {
       updatePageSeo(creds: Record<string, string>, params: { pageId: string; title?: string; description?: string }): Promise<unknown>;
@@ -1201,13 +1202,13 @@ async function executeWixSeoUpdate(task: Task): Promise<ExecuteResult> {
 async function loadServerAccessConnector(connectorId: string): Promise<{ row: ConnectorRow; credentials: Record<string, string> }> {
   const row = db.prepare("SELECT * FROM connectors WHERE id = ? AND type = 'server-access'").get(connectorId) as ConnectorRow | null;
   if (!row) throw new Error(`server-access connector ${connectorId} not found`);
-  const credentials = JSON.parse(decrypt(row.credentials ?? '{}')) as Record<string, string>;
+  const credentials = parseJson<Record<string, string>>(decrypt(row.credentials ?? '{}'), {});
   return { row, credentials };
 }
 
 async function executeServerFileWrite(task: Task): Promise<ExecuteResult> {
   const payload = typeof task.action_payload === 'string'
-    ? JSON.parse(task.action_payload) as Record<string, unknown> : task.action_payload ?? {};
+    ? parseJson<Record<string, unknown>>(task.action_payload, {}) : task.action_payload ?? {};
   const { connector_id, target_file, new_content } = payload as { connector_id?: string; target_file?: string; new_content?: string };
   if (!connector_id) throw new Error('server_file_write: connector_id required');
   if (!target_file) throw new Error('server_file_write: target_file required');
@@ -1294,7 +1295,7 @@ async function executeServerFileWrite(task: Task): Promise<ExecuteResult> {
 
 async function executeServerFileRollback(task: Task): Promise<ExecuteResult> {
   const payload = typeof task.action_payload === 'string'
-    ? JSON.parse(task.action_payload) as Record<string, unknown> : task.action_payload ?? {};
+    ? parseJson<Record<string, unknown>>(task.action_payload, {}) : task.action_payload ?? {};
   const { backup_id } = payload as { backup_id?: string };
   if (!backup_id) throw new Error('server_file_rollback: backup_id required');
 
@@ -1428,7 +1429,7 @@ Produce a connector proposal as JSON:
   try {
     const raw = llmResult.content ?? '';
     const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
-    spec = JSON.parse((m ? m[1] : raw).trim()) as Record<string, unknown>;
+    spec = JSON.parse((m?.[1] ?? raw).trim()) as Record<string, unknown>;
   } catch {
     throw new Error('LLM could not produce a valid connector spec JSON');
   }
@@ -1439,7 +1440,7 @@ Produce a connector proposal as JSON:
     const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as { getKBForBusiness(id: string): Promise<{ engine: { writeFile(path: string, content: string, meta: Record<string, unknown>, msg: string): Promise<void> } } | null> };
     const kb = await getKBForBusiness(task.business_id);
     if (kb?.engine) {
-      const date = new Date().toISOString().split('T')[0];
+      const date = new Date().toISOString().slice(0, 10);
       const slug = (String(spec['connector_id'] ?? '') || String(description ?? '').toLowerCase().replace(/\s+/g, '-')).slice(0, 40);
       kbPath = `research/connector-spec-${slug}-${date}.md`;
       const doc = buildConnectorSpecDoc(spec, task, date);
