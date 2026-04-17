@@ -193,7 +193,9 @@ async function handleCallbackInternal(callbackQuery: TelegramCallbackQuery, botT
 
   if (!data) return;
 
-  const [action, taskId] = data.split(':');
+  const parts = data.split(':');
+  const action = parts[0];
+  const taskId = parts[1] ?? '';
   const actor = `telegram:${from?.username ?? from?.id ?? 'unknown'}`;
 
   try {

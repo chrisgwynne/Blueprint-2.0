@@ -348,7 +348,7 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
   const context = await assembleInvestigationContext(task, task.business_id);
 
   // 2. Build detailed prompt
-  const prompt = buildInvestigationPrompt(task, context);
+  const prompt = buildInvestigationPrompt(task, context as Parameters<typeof buildInvestigationPrompt>[1]);
 
   // 3. Run LLM
   const { providerId, model } = resolveProfileLLM({});
@@ -1217,7 +1217,7 @@ async function executeServerFileWrite(task: Task): Promise<ExecuteResult> {
       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(
       backupId, task.business_id, connector_id, task.id,
-      target_file, before.content, before.hash,
+      target_file, before.content ?? '', before.hash ?? '',
     );
 
     // 2. Write.
