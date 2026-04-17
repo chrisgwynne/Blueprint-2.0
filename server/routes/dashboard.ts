@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import type { Metric, Signal, Task, Agent } from '../types/db.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -18,18 +19,18 @@ function parseJsonField(val: unknown): unknown {
  * Limit defaults to 2 (current + prev) for trend cards; pass higher for
  * sparkline series.
  */
-function recentMetric(businessId: string, metricName: string, limit = 2): any[] {
+function recentMetric(businessId: string, metricName: string, limit = 2): Metric[] {
   return db.prepare(`
     SELECT metric_value, metric_data, recorded_at
     FROM metrics
     WHERE business_id = ? AND metric_name = ?
     ORDER BY recorded_at DESC
     LIMIT ?
-  `).all(businessId, metricName, limit);
+  `).all(businessId, metricName, limit) as Metric[];
 }
 
 /** Convert a recentMetric() result to { value, prev, trend }. */
-function summary(rows: any[]): { value: number | null; prev: number | null; trend: number | null } {
+function summary(rows: Metric[]): { value: number | null; prev: number | null; trend: number | null } {
   const current = rows[0]?.metric_value ?? null;
   const prev    = rows[1]?.metric_value ?? null;
   const trend = (current != null && prev != null && prev !== 0)
@@ -40,15 +41,15 @@ function summary(rows: any[]): { value: number | null; prev: number | null; tren
 
 /** Sparkline data: oldest → newest list of values. */
 function sparkline(businessId: string, metricName: string, days = 14): number[] {
-  return db.prepare(`
+  return (db.prepare(`
     SELECT metric_value, recorded_at
     FROM metrics
     WHERE business_id = ?
       AND metric_name = ?
       AND recorded_at >= datetime('now', ?)
     ORDER BY recorded_at ASC
-  `).all(businessId, metricName, `-${days} days`)
-    .map((r: any) => Number(r.metric_value ?? 0));
+  `).all(businessId, metricName, `-${days} days`) as Metric[])
+    .map((r) => Number(r.metric_value ?? 0));
 }
 
 /** Latest data blob for a metric (used for top_keywords / top_pages arrays). */
@@ -108,7 +109,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
 
     // ─── Top keywords (from GSC) ─────────────────────────────────────────────
     // gsc.keywords stores { name, value=count, data=[top 100 keyword objects] }
-    const top_keywords = (latestData(businessId, 'gsc.keywords') ?? []).slice(0, 10).map((k: any) => ({
+    const top_keywords = (latestData(businessId, 'gsc.keywords') ?? []).slice(0, 10).map((k: { query?: string; keys?: string[]; clicks?: number; impressions?: number; ctr?: number; position?: number }) => ({
       query: k.query ?? k.keys?.[0] ?? '—',
       clicks: k.clicks ?? 0,
       impressions: k.impressions ?? 0,
@@ -117,7 +118,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
     }));
 
     // ─── Top pages (from GA4 if present, otherwise derive from GSC) ──────────
-    let top_pages = (latestData(businessId, 'ga4.top_pages') ?? []).slice(0, 10).map((p: any) => ({
+    let top_pages = (latestData(businessId, 'ga4.top_pages') ?? []).slice(0, 10).map((p: { pagePath?: string; path?: string; url?: string; sessions?: number; pageviews?: number; bounceRate?: number; bounce_rate?: number; conversions?: number }) => ({
       path: p.pagePath ?? p.path ?? p.url ?? '/',
       sessions: p.sessions ?? p.pageviews ?? 0,
       pageviews: p.pageviews ?? p.sessions ?? 0,
@@ -128,8 +129,9 @@ router.get('/:businessId', (req: Request, res: Response) => {
     if (top_pages.length === 0) {
       // Derive pages from GSC keyword data if GA4 isn't connected
       const gscKw = latestData(businessId, 'gsc.keywords') ?? [];
-      const byPage = new Map<string, any>();
-      for (const k of gscKw) {
+      type PageAcc = { path: string; sessions: number; bounceRate: number; conversions: number };
+      const byPage = new Map<string, PageAcc>();
+      for (const k of gscKw as Array<{ page?: string; url?: string; clicks?: number }>) {
         const url = k.page || k.url;
         if (!url) continue;
         const acc = byPage.get(url) || { path: url, sessions: 0, bounceRate: 0, conversions: 0 };
@@ -137,7 +139,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
         byPage.set(url, acc);
       }
       top_pages = [...byPage.values()]
-        .sort((a: any, b: any) => b.sessions - a.sessions)
+        .sort((a, b) => b.sessions - a.sessions)
         .slice(0, 10);
     }
 
@@ -162,13 +164,13 @@ router.get('/:businessId', (req: Request, res: Response) => {
       LEFT JOIN connectors c ON c.id = s.connector_id
       WHERE s.business_id = ? AND s.status = 'open'
       ORDER BY s.created_at DESC LIMIT 20
-    `).all(businessId) as any[]).map(s => ({ ...s, data: parseJsonField(s.data) }));
+    `).all(businessId) as Signal[]).map(s => ({ ...s, data: parseJsonField(s.data) }));
 
     const recent_tasks = (db.prepare(`
       SELECT * FROM tasks
       WHERE business_id = ?
       ORDER BY updated_at DESC LIMIT 10
-    `).all(businessId) as any[]).map(t => ({
+    `).all(businessId) as Task[]).map(t => ({
       ...t,
       action_payload: parseJsonField(t.action_payload),
       outcome_data: parseJsonField(t.outcome_data),
@@ -176,7 +178,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
 
     const agents = (db.prepare(`
       SELECT * FROM agents WHERE status != 'retired' ORDER BY id ASC
-    `).all() as any[]).map(a => ({
+    `).all() as Agent[]).map(a => ({
       ...a,
       settings_override: parseJsonField(a.settings_override),
     }));
@@ -188,7 +190,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
     return res.json({
       business: {
         ...(business as object),
-        settings: parseJsonField((business as any).settings),
+        settings: parseJsonField((business as Record<string, unknown>).settings),
       },
       metrics: {
         // Headline cards — { value, prev, trend } shape, MetricCard unwraps

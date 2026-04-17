@@ -3,13 +3,15 @@ import db from '../db/db.js';
 import { processTimedApproval } from '../tasks/approval.js';
 import { runConductorAllBusinesses } from '../agents/conductor.js';
 import crypto from 'crypto';
+import type { Connector } from '../types/db.js';
+import type { ConnectorInterface } from '../connectors/connector.interface.js';
 
 let schedulerStarted = false;
 
 /**
  * Sync a single connector by loading its implementation and running fetch.
  */
-async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?: any[]; error?: string }> {
+async function syncConnector(connector: Connector): Promise<{ ok: boolean; newSignals?: unknown[]; error?: string }> {
   const syncId = crypto.randomUUID();
   const syncStart = Date.now();
   try {
@@ -17,25 +19,25 @@ async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?
   } catch {}
 
   try {
-    const { default: connectorImpl } = await import(`../connectors/${connector.type}/index.js`) as any;
+    const { default: connectorImpl } = await import(`../connectors/${connector.type}/index.js`) as { default: ConnectorInterface & { extractMetrics?: (data: unknown, now: string) => Array<{ name: string; value: number | string | null; data?: unknown }> } };
 
     let credentials: Record<string, unknown> = {};
     if (connector.credentials) {
       const { decrypt } = await import('../crypto.js');
       try {
-        credentials = JSON.parse(decrypt(connector.credentials));
+        credentials = JSON.parse(decrypt(connector.credentials as unknown as string));
       } catch {
         credentials = {};
       }
     }
 
-    const config = connector.config ? JSON.parse(connector.config) : {};
+    const config: Record<string, unknown> = connector.config ? JSON.parse(connector.config as unknown as string) : {};
 
     // Determine what to fetch based on connector type
     let businessUrl: string | null = null;
     if (connector.type === 'pagespeed' && !config.url) {
       try {
-        const biz = db.prepare('SELECT settings FROM businesses WHERE id = ?').get(connector.business_id) as any;
+        const biz = db.prepare('SELECT settings FROM businesses WHERE id = ?').get(connector.business_id) as { settings: string } | undefined;
         if (biz?.settings) {
           const settings = JSON.parse(biz.settings);
           businessUrl = settings?.website || settings?.url || null;
@@ -51,7 +53,7 @@ async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?
       ...(config.url ? { url: config.url } : businessUrl ? { url: businessUrl } : {}),
     };
 
-    const dataType = config.defaultDataType || getDefaultDataType(connector.type);
+    const dataType = (config.defaultDataType as string | undefined) || getDefaultDataType(connector.type);
     const data = await connectorImpl.fetch(dataType, credentials, fetchParams);
     const now = new Date().toISOString();
 
@@ -97,16 +99,17 @@ async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?
       SELECT metric_data FROM metrics
       WHERE business_id = ? AND connector_id = ? AND metric_name = ?
       ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
-    `).get(connector.business_id, connector.id, `${connector.type}_sync`) as any;
+    `).get(connector.business_id, connector.id, `${connector.type}_sync`) as { metric_data: string | null } | undefined;
 
-    let previousData: any = null;
+    let previousData: unknown = null;
     if (prevMetric?.metric_data) {
       try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
     }
 
     // For pagespeed, pass mobile data directly to match signal rule field paths
-    const signalData = (connector.type === 'pagespeed' && data.mobile) ? data.mobile : data;
-    const prevSignalData = (connector.type === 'pagespeed' && previousData?.mobile) ? previousData.mobile : previousData;
+    const signalData = (connector.type === 'pagespeed' && (data as Record<string, unknown>).mobile) ? (data as Record<string, unknown>).mobile : data;
+    const prevData = previousData as Record<string, unknown> | null;
+    const prevSignalData = (connector.type === 'pagespeed' && prevData?.mobile) ? prevData.mobile : prevData;
 
     const newSignals = await runSignalEngine(
       connector.business_id,
@@ -161,8 +164,8 @@ async function syncConnector(connector: any): Promise<{ ok: boolean; newSignals?
 
     // Self-healing: diagnose connector sync failures
     import('../agents/self-healer.js')
-      .then((m: any) => m.healConnectorError(err, connector.type, connector.business_id))
-      .catch((healErr: any) => console.warn('[self-heal] Connector healing failed (non-fatal):', healErr.message));
+      .then((m) => m.healConnectorError(err as Error, connector.type, connector.business_id))
+      .catch((healErr: Error) => console.warn('[self-heal] Connector healing failed (non-fatal):', healErr.message));
 
     // BAP webhook: connector.error
     try {
@@ -194,7 +197,7 @@ function getDefaultDataType(connectorType: string): string {
   return defaults[connectorType] ?? 'default';
 }
 
-function isDue(connector: any, intervalMinutes: number): boolean {
+function isDue(connector: Connector, intervalMinutes: number): boolean {
   if (!connector.last_sync) return true;
   const lastSync = new Date(connector.last_sync).getTime();
   const intervalMs = intervalMinutes * 60 * 1000;
@@ -217,7 +220,7 @@ export function startScheduler(): void {
   cron.schedule('*/15 * * * *', async () => {
     console.log('[scheduler] Running connector poll check...');
     try {
-      const connectors = db.prepare(`SELECT * FROM connectors WHERE status != 'disconnected'`).all();
+      const connectors = db.prepare(`SELECT * FROM connectors WHERE status != 'disconnected'`).all() as Connector[];
 
       for (const connector of connectors) {
         const pollingDefaults: Record<string, number> = {
@@ -235,16 +238,14 @@ export function startScheduler(): void {
         };
         let configuredInterval: number | null = null;
         try {
-          if ((connector as any).config) {
-            const cfg = JSON.parse((connector as any).config);
-            if (cfg.pollingIntervalMinutes) configuredInterval = Number(cfg.pollingIntervalMinutes);
-          }
+          const cfg = typeof connector.config === 'string' ? JSON.parse(connector.config) : (connector.config ?? {});
+          if (cfg.pollingIntervalMinutes) configuredInterval = Number(cfg.pollingIntervalMinutes);
         } catch {}
-        const interval = configuredInterval || pollingDefaults[(connector as any).type] || 360;
+        const interval = configuredInterval || pollingDefaults[connector.type] || 360;
 
         if (isDue(connector, interval)) {
-          syncConnector(connector).catch((err: any) => {
-            console.error(`[scheduler] Connector sync error for ${(connector as any).name}:`, err.message);
+          syncConnector(connector).catch((err: Error) => {
+            console.error(`[scheduler] Connector sync error for ${connector.name}:`, err.message);
           });
         }
       }
@@ -261,9 +262,9 @@ export function startScheduler(): void {
         SELECT c.id, c.type, c.status, c.last_sync, c.business_id, b.name as business_name
         FROM connectors c JOIN businesses b ON c.business_id = b.id
         WHERE c.status = 'connected' AND c.last_sync IS NOT NULL
-      `).all() as any[];
+      `).all() as Array<Connector & { business_name: string }>;
       for (const c of connectors) {
-        const hours = (Date.now() - new Date(c.last_sync).getTime()) / 3600000;
+        const hours = (Date.now() - new Date(c.last_sync!).getTime()) / 3600000;
         const threshold = thresholds[c.type] ?? 24;
         if (hours > threshold) {
           db.prepare("UPDATE connectors SET status = 'stale' WHERE id = ? AND status = 'connected'").run(c.id);
@@ -366,10 +367,10 @@ export function startScheduler(): void {
   cron.schedule('0 6 * * *', async () => {
     console.log('[scheduler] Running daily full connector sync...');
     try {
-      const connectors = db.prepare(`SELECT * FROM connectors`).all();
+      const connectors = db.prepare(`SELECT * FROM connectors`).all() as Connector[];
       for (const connector of connectors) {
-        await syncConnector(connector).catch((err: any) => {
-          console.error(`[scheduler] Daily sync error for ${(connector as any).name}:`, err.message);
+        await syncConnector(connector).catch((err: Error) => {
+          console.error(`[scheduler] Daily sync error for ${connector.name}:`, err.message);
         });
       }
       console.log('[scheduler] Daily sync complete. Running post-sync conductor pass...');

@@ -241,7 +241,7 @@ const mountRoutes = async () => {
 
   // ─── Instance settings (no auth — used by frontend on load) ────────────
   app.get('/api/settings/instance', (_req, res) => {
-    const get = (k: string, d: any) => {
+    const get = (k: string, d: unknown) => {
       const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(k) as { value: string } | undefined;
       return row ? JSON.parse(row.value) : d;
     };
@@ -270,7 +270,7 @@ const mountRoutes = async () => {
       const connectors = (db.prepare(`
         SELECT c.id, c.type, c.status, c.last_sync, c.last_error, b.name as business
         FROM connectors c JOIN businesses b ON c.business_id = b.id
-      `).all() as any[]).map(c => {
+      `).all() as { id: string; type: string; status: string; last_sync: string | null; last_error: string | null; business: string }[]).map(c => {
         const hoursSince = c.last_sync ? (Date.now() - new Date(c.last_sync).getTime()) / 3600000 : null;
         const thresholds: Record<string, number> = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
         const threshold = thresholds[c.type] ?? 24;
@@ -292,8 +292,8 @@ const mountRoutes = async () => {
       ).get() as any)?.n ?? 0;
       const consecutiveFails = db.prepare(
         "SELECT status FROM agent_runs WHERE agent_id = 'conductor' ORDER BY started_at DESC LIMIT 5"
-      ).all() as any[];
-      const conductorConsecFails = consecutiveFails.findIndex((r: any) => r.status !== 'failed');
+      ).all() as { status: string }[];
+      const conductorConsecFails = consecutiveFails.findIndex((r: { status: string }) => r.status !== 'failed');
 
       // Costs
       const todayCost = (db.prepare("SELECT COALESCE(SUM(cost_usd),0) as t FROM cost_daily WHERE date = date('now')").get() as any)?.t ?? 0;
@@ -307,8 +307,8 @@ const mountRoutes = async () => {
       const paused = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get() as any)?.value ?? 'false');
 
       // Overall status
-      const hasError = connectors.some((c: any) => c.status === 'error');
-      const hasStale = connectors.some((c: any) => c.status === 'stale');
+      const hasError = connectors.some((c: { status: string }) => c.status === 'error');
+      const hasStale = connectors.some((c: { status: string }) => c.status === 'stale');
       const conductorFailing = conductorConsecFails >= 3 || (conductorConsecFails === -1 && consecutiveFails.length >= 3);
       const budgetCritical = budget > 0 && (monthCost / budget) >= 0.9;
 

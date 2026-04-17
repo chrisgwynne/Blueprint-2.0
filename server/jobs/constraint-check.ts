@@ -3,6 +3,8 @@
  */
 import crypto from 'crypto';
 import db from '../db/db.js';
+import type { SchedulerLog } from '../types/db.js';
+import type { TaskRow as Task } from '../tasks/task-queue.js';
 
 interface AgentMetricMap {
   [agentId: string]: string[];
@@ -122,7 +124,7 @@ export function checkAgentConstraints(agentId: string, businessId: string): Cons
 /**
  * Run an agent with constraint checks applied.
  */
-export async function runAgentWithConstraints(agentId: string, businessId: string, trigger: string, triggerId: any, opts?: any): Promise<any> {
+export async function runAgentWithConstraints(agentId: string, businessId: string, trigger: string, triggerId: string | null, opts?: { skipCooldown?: boolean }): Promise<unknown> {
   const check = checkAgentConstraints(agentId, businessId);
   if (!check.allowed) {
     logDecision({
@@ -151,7 +153,7 @@ export async function runAgentWithConstraints(agentId: string, businessId: strin
  * Smart spacing — when a task completes, update any pending/deferred tasks
  * affecting the same URL/entity to defer until the measurement window closes.
  */
-export function applySmartSpacing(completedTask: any): number {
+export function applySmartSpacing(completedTask: Task): number {
   if (!completedTask?.action_type) return 0;
   let payload: Record<string, unknown> = {};
   try { payload = typeof completedTask.action_payload === 'string' ? JSON.parse(completedTask.action_payload) : (completedTask.action_payload || {}); } catch {}
@@ -179,15 +181,15 @@ export function applySmartSpacing(completedTask: any): number {
     completedTask.id,
     `%"url":"${url}"%`
   );
-  return (affected as any).changes || 0;
+  return affected.changes || 0;
 }
 
 /**
  * Return recent scheduler decisions for System Health display.
  */
-export function listRecentSchedulerLog(limit: number = 50): any[] {
+export function listRecentSchedulerLog(limit: number = 50): SchedulerLog[] {
   return db.prepare(`
     SELECT * FROM scheduler_log
     ORDER BY created_at DESC LIMIT ?
-  `).all(limit);
+  `).all(limit) as SchedulerLog[];
 }

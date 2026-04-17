@@ -9,6 +9,7 @@ import {
   saveProviderCredentials,
   PROVIDERS_CATALOG,
 } from '../lib/llm-providers.js';
+import type { ProviderCredentials } from '../lib/providers/types.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -39,7 +40,7 @@ router.put('/default', (req: Request, res: Response) => {
   try {
     const { provider } = req.body ?? {};
     if (!provider) return res.status(400).json({ error: 'provider required' });
-    if (!PROVIDERS_CATALOG.find((p: any) => p.id === provider)) {
+    if (!PROVIDERS_CATALOG.find((p) => p.id === provider)) {
       return res.status(404).json({ error: `Unknown provider '${provider}'` });
     }
     db.prepare(`
@@ -116,7 +117,7 @@ router.put('/tiers/:tier', (req: Request, res: Response) => {
       return res.status(400).json({ error: `Invalid tier '${tier}'. Must be one of: ${VALID_TIERS.join(', ')}` });
     }
     const { provider, model } = req.body ?? {};
-    if (provider != null && !PROVIDERS_CATALOG.find((p: any) => p.id === provider)) {
+    if (provider != null && !PROVIDERS_CATALOG.find((p) => p.id === provider)) {
       return res.status(404).json({ error: `Unknown provider '${provider}'` });
     }
 
@@ -176,7 +177,7 @@ router.get('/providers', (req: Request, res: Response) => {
 router.get('/providers/:id', (req: Request, res: Response) => {
   try {
     const providers = listProviders();
-    const provider = providers.find((p: any) => p.id === req.params.id as string);
+    const provider = providers.find((p) => p.id === req.params.id as string);
     if (!provider) return res.status(404).json({ error: 'Provider not found.' });
     res.json(provider);
   } catch (err: any) {
@@ -190,7 +191,7 @@ router.get('/providers/:id', (req: Request, res: Response) => {
  */
 router.get('/providers/:id/models', async (req: Request, res: Response) => {
   try {
-    const catalog = PROVIDERS_CATALOG.find((p: any) => p.id === req.params.id as string);
+    const catalog = PROVIDERS_CATALOG.find((p) => p.id === req.params.id as string);
     if (!catalog) return res.status(404).json({ error: 'Provider not found.' });
 
     const models = await listModels(req.params.id as string);
@@ -208,19 +209,19 @@ router.get('/providers/:id/models', async (req: Request, res: Response) => {
  */
 router.put('/providers/:id/credentials', (req: Request, res: Response) => {
   try {
-    const catalog = PROVIDERS_CATALOG.find((p: any) => p.id === req.params.id as string);
+    const catalog = PROVIDERS_CATALOG.find((p) => p.id === req.params.id as string);
     if (!catalog) return res.status(404).json({ error: 'Provider not found.' });
 
     const { apiKey, baseUrl, model } = req.body;
     const existing = getProviderCredentials(req.params.id as string);
-    const updated: any = { ...existing };
+    const updated: ProviderCredentials = { ...existing };
 
     if (apiKey !== undefined) updated.apiKey = apiKey;
     if (baseUrl !== undefined) updated.baseUrl = baseUrl;
     if (model !== undefined) updated.model = model;
 
     saveProviderCredentials(req.params.id as string, updated);
-    res.json({ ok: true, message: `Credentials saved for ${(catalog as any).name}.` });
+    res.json({ ok: true, message: `Credentials saved for ${catalog.name}.` });
   } catch (err: any) {
     console.error('[llm] save credentials error:', err);
     res.status(500).json({ error: 'Failed to save credentials.' });
@@ -234,13 +235,13 @@ router.put('/providers/:id/credentials', (req: Request, res: Response) => {
  */
 router.post('/providers/:id/test', async (req: Request, res: Response) => {
   try {
-    const catalog = PROVIDERS_CATALOG.find((p: any) => p.id === req.params.id as string) as any;
+    const catalog = PROVIDERS_CATALOG.find((p) => p.id === req.params.id as string);
     if (!catalog) return res.status(404).json({ error: 'Provider not found.' });
 
     const { apiKey, baseUrl } = req.body;
 
     // Use provided credentials for test (don't need to save first)
-    const testCreds: any = {};
+    const testCreds: ProviderCredentials = {};
     if (apiKey) testCreds.apiKey = apiKey;
     if (baseUrl) testCreds.baseUrl = baseUrl;
 
