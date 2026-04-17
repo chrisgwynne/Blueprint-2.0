@@ -46,7 +46,7 @@ async function runConnectorSync(rowId: string): Promise<void> {
   //   config.defaultDataType || row.type === 'pagespeed' ? 'performance' : ...
   // collapsed to "performance" whenever defaultDataType was set. Wrap the
   // fallback ternary in parens so the user's stored value wins.
-  const dataType: string = config.defaultDataType || (
+  const dataType: string = (config.defaultDataType as string | undefined) || (
     row.type === 'pagespeed' ? 'performance' :
     row.type === 'gsc' ? 'search_analytics' :
     row.type === 'ga4' ? 'report' :
@@ -173,7 +173,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
   try {
     const rows = db.prepare(`
       SELECT * FROM connectors WHERE business_id = ? ORDER BY name ASC
-    `).all(req.params['businessId'] as string);
+    `).all(req.params['businessId'] as string) as Connector[];
     return res.json(rows.map(safeRow));
   } catch (err) {
     console.error('[connectors] List error:', err);
@@ -207,7 +207,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, 'disconnected', ?, CURRENT_TIMESTAMP)
     `).run(id, business_id, type, name, encryptedCreds, JSON.stringify(config));
 
-    const created = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id));
+    const created = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | null);
     audit(business_id, 'connector', id, 'create', (req.session as any).userId, null, created);
 
     // Auto-sync — fire-and-forget so the user doesn't have to click sync
@@ -241,7 +241,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     };
 
     const updates: string[] = [];
-    const values: unknown[] = [];
+    const values: (string | number | boolean | null)[] = [];
 
     if (name !== undefined) { updates.push('name = ?'); values.push(name); }
     if (status !== undefined) { updates.push('status = ?'); values.push(status); }
@@ -259,7 +259,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     values.push(id);
     db.prepare(`UPDATE connectors SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-    const after = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id));
+    const after = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | null);
     audit(existing.business_id, 'connector', id, 'update', (req.session as any).userId, before, after);
 
     // If credentials or config changed, re-sync immediately so the user
@@ -389,7 +389,7 @@ router.get('/:id/health', async (req: Request, res: Response) => {
       return res.status(422).json({ error: `Connector type '${row.type}' not supported.` });
     }
 
-    const parsed = parseRow(row);
+    const parsed = parseRow(row)!;
     const result: { ok: boolean; error?: string } = await connector.healthCheck(parsed.credentials);
 
     const status = result.ok ? 'connected' : 'error';

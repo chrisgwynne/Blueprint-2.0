@@ -55,6 +55,7 @@ interface Task {
   estimated_impact?: string | null;
   rollback_data?: string | null;
   project_id?: string | null;
+  [key: string]: unknown;
 }
 
 interface ConnectorRow {
@@ -208,7 +209,7 @@ async function executeGithubIssue(task: Task): Promise<ExecuteResult> {
       `blueprint/agent-${task.proposed_by}`,
       `blueprint/${task.priority}`,
     ],
-  });
+  }) as { number: number; html_url: string; state: string } | null;
 
   if (!issue?.number) {
     throw new Error(`GitHub did not return a valid issue: ${JSON.stringify(issue).slice(0, 200)}`);
@@ -241,7 +242,7 @@ async function executeGithubPR(task: Task): Promise<ExecuteResult> {
     head:  payload.head as string,
     base:  (payload.base as string | undefined) ?? 'main',
     draft: (payload.draft as boolean | undefined) ?? true, // always draft — human reviews
-  });
+  }) as { number: number; html_url: string; state: string; draft: boolean; head?: { ref: string }; base?: { ref: string } } | null;
 
   if (!pr?.number) {
     throw new Error(`GitHub did not return a valid PR: ${JSON.stringify(pr).slice(0, 200)}`);
@@ -352,7 +353,7 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
   // 3. Run LLM
   const { providerId, model } = resolveProfileLLM({});
   const startedAt = new Date().toISOString();
-  let llmResult: { content?: string; usage?: unknown; cost_usd?: number };
+  let llmResult: Awaited<ReturnType<typeof runLLM>>;
   try {
     llmResult = await runLLM(providerId, model, {
       system: INVESTIGATION_SYSTEM_PROMPT,
@@ -1104,7 +1105,7 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
       console.error(`[executor] Task ${taskId} failed:`, err);
       // Self-healing: diagnose executor failures (not missing-connector blocks)
       import('../agents/self-healer.js')
-        .then((m) => (m as typeof SelfHealer).healExecutorError(err as Error, task as Record<string, unknown>))
+        .then((m) => (m as typeof SelfHealer).healExecutorError(err as Error, task))
         .catch((healErr: Error) => console.warn('[self-heal] Executor healing failed (non-fatal):', healErr.message));
     } else {
       console.warn(`[executor] Task ${taskId} blocked (missing connector):`, (err as Error).message);
@@ -1200,7 +1201,8 @@ async function executeServerFileWrite(task: Task): Promise<ExecuteResult> {
 
   // Lazy-import to keep ssh2/basic-ftp dependencies out of the startup path.
   const { createServerConnection } = await import('../connectors/server-access/connection.js') as typeof ServerConnection;
-  const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath });
+  type ServerCreds = Parameters<typeof createServerConnection>[0];
+  const conn = await createServerConnection(credentials as unknown as ServerCreds, { rootPath: credentials.rootPath });
 
   try {
     // 1. Fresh read + backup of current content (mandatory — never skip).
@@ -1280,7 +1282,8 @@ async function executeServerFileRollback(task: Task): Promise<ExecuteResult> {
 
   const { credentials } = await loadServerAccessConnector(backup.connector_id);
   const { createServerConnection } = await import('../connectors/server-access/connection.js') as typeof ServerConnection;
-  const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath });
+  type ServerCreds2 = Parameters<typeof createServerConnection>[0];
+  const conn = await createServerConnection(credentials as unknown as ServerCreds2, { rootPath: credentials.rootPath });
 
   try {
     const result = await conn.writeFile(backup.remote_path, backup.content);

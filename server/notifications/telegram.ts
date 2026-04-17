@@ -1,7 +1,17 @@
 import db, { generateId } from '../db/db.js';
 import { approveTask, rejectTask } from '../tasks/task-queue.js';
 import type { Request, Response } from 'express';
-import type { Task, Notification } from '../types/db.js';
+import type { Task } from '../types/db.js';
+
+/** Minimal notification shape required by the send() function. */
+interface NotificationLike {
+  business_id?: string | null;
+  severity: string;
+  title: string;
+  body?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+}
 
 interface TelegramFrom {
   id?: number;
@@ -300,7 +310,7 @@ export async function sendMessage(chatId: string | null, text: string, inlineKey
 /**
  * Send a notification message.
  */
-export async function send(notification: Notification, chatId: string | null = null, businessId: string | null = null): Promise<SendResult> {
+export async function send(notification: NotificationLike, chatId: string | null = null, businessId: string | null = null): Promise<SendResult> {
   const { botToken, chatId: defaultChatId } = getTelegramConfig(businessId ?? notification.business_id);
   if (!botToken || !defaultChatId) return { ok: false, error: 'Telegram not configured' };
 

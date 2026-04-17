@@ -53,6 +53,7 @@ function sparkline(businessId: string, metricName: string, days = 14): number[] 
 }
 
 /** Latest data blob for a metric (used for top_keywords / top_pages arrays). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function latestData(businessId: string, metricName: string): any | null {
   const row = db.prepare(`
     SELECT metric_data FROM metrics
