@@ -12,6 +12,7 @@ import { shouldAutoApprove, sendApprovalRequest } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM, getFallbackLLM } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
+import type { InboxEntry } from './agent-inbox.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 import { detectAnomalousOutput } from '../lib/security-monitor.js';
 import { SecurityError } from '../lib/outbound-allowlist.js';
@@ -204,9 +205,11 @@ interface WorkResult {
 
 interface RestraintResult {
   allowed: boolean;
-  measurement_window_ends?: string;
-  reason?: string;
-  confounding_warning?: string;
+  reason: string | null;
+  blocked_by: Record<string, unknown> | null;
+  measurement_window_ends: string | null;
+  recommendation: string | null;
+  confounding_warning: string | null;
 }
 
 interface SearchQueryResult {
@@ -496,9 +499,7 @@ function appendRunLog(agentId: string, entry: Record<string, unknown>): void {
 async function briefConductor(agentId: string, parsed: ParsedAgentOutput, businessId: string, runId: string): Promise<void> {
   if (agentId === 'conductor') return; // conductor doesn't brief itself
   try {
-    const { deliverAgentBrief } = await import('./agent-inbox.js') as unknown as {
-      deliverAgentBrief: (opts: Record<string, unknown>) => Promise<void>;
-    };
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
     await deliverAgentBrief({
       from: `agent:${agentId}`,
       source_label: runId ? `agent_run:${runId}` : `agent:${agentId}`,
@@ -559,10 +560,7 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   // in the system prompt. Unread briefs are shown; entries are marked read
   // after this run so they don't appear again on the next one.
   try {
-    const { readInbox, markAllInboxAsRead } = await import('./agent-inbox.js') as unknown as {
-      readInbox: (agentId: string, opts: Record<string, unknown>) => Array<Record<string, unknown>>;
-      markAllInboxAsRead: (agentId: string) => void;
-    };
+    const { readInbox, markAllInboxAsRead } = await import('./agent-inbox.js');
     const unread = readInbox(agentId, { limit: 20, unreadOnly: true });
     const allRecent = agentId === 'conductor'
       ? readInbox(agentId, { limit: 20, unreadOnly: false })
@@ -577,12 +575,12 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
       const fyi = entriesToShow.filter((e) => e.priority === 'fyi' || !e.priority);
 
       lines.push(`## Inbox (${entriesToShow.length} brief${entriesToShow.length === 1 ? '' : 's'})`);
-      const renderEntry = (b: Record<string, unknown>): string => {
+      const renderEntry = (b: InboxEntry): string => {
         const from = b.from ?? 'unknown';
         const when = b.timestamp ? ` [${b.timestamp}]` : '';
         const meta = (b.metadata as Record<string, unknown>)?.tasks_proposed != null
           ? ` (${(b.metadata as Record<string, unknown>).tasks_proposed} tasks proposed)` : '';
-        return `- ${from}${when}: ${b.brief ?? b.summary ?? '(no summary)'}${meta}`;
+        return `- ${from}${when}: ${b.brief ?? '(no summary)'}${meta}`;
       };
       if (immediate.length) {
         lines.push('', '### Immediate — address these in your analysis');
@@ -682,12 +680,7 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
 
   // Recent KB decisions — agents must not contradict these
   try {
-    const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as {
-      getKBForBusiness: (id: string) => Promise<{ engine?: {
-        listFiles: (path: string) => Promise<string[]>;
-        readFile: (path: string) => Promise<{ frontmatter?: { title?: string }; content?: string }>;
-      } } | null>;
-    };
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
     const kbResult = await getKBForBusiness(business.id);
     if (kbResult?.engine) {
       const files = await kbResult.engine.listFiles('decisions');
@@ -731,9 +724,7 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
 
     // Cross-business shared KB
     try {
-      const { readSharedKBForAgent } = await import('../kb/shared-kb.js') as unknown as {
-        readSharedKBForAgent: (agentId: string, opts: Record<string, unknown>) => Promise<Array<{ title: string; summary: string }>>;
-      };
+      const { readSharedKBForAgent } = await import('../kb/shared-kb.js');
       const sharedDocs = await readSharedKBForAgent(agentId, { limit: 6 });
       if (sharedDocs.length > 0) {
         lines.push('## Cross-Business Learnings (apply across all businesses)');
@@ -746,16 +737,9 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
 
     // Latest calibration data for this agent
     try {
-      const { getLatestCalibration } = await import('../brain/calibration.js') as unknown as {
-        getLatestCalibration: (agentId: string, businessId: string) => {
-          tasks_with_outcomes: number;
-          avg_stated_confidence?: number;
-          avg_actual_outcome_rate?: number;
-          calibration_error: number;
-        } | null;
-      };
+      const { getLatestCalibration } = await import('../brain/calibration.js');
       const cal = getLatestCalibration(agentId, business.id);
-      if (cal && cal.tasks_with_outcomes >= 3) {
+      if (cal && cal.tasks_with_outcomes >= 3 && cal.calibration_error != null) {
         lines.push('## Your Calibration Data (last period)');
         lines.push(`You stated an average of ${((cal.avg_stated_confidence ?? 0) * 100).toFixed(0)}% confidence. Actual outcome rate: ${((cal.avg_actual_outcome_rate ?? 0) * 100).toFixed(0)}%.`);
         const errPct = (cal.calibration_error * 100).toFixed(0);
@@ -890,11 +874,7 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   // ROI context — every agent sees its own performance data so it adapts.
   try {
     const { buildAgentROIContext, buildConductorROIContext, buildReporterROIContext } =
-      await import('../roi/agent-context.js') as unknown as {
-        buildAgentROIContext: (agentId: string, businessId: string | undefined) => string;
-        buildConductorROIContext: (businessId: string | undefined) => string;
-        buildReporterROIContext: (businessId: string | undefined) => string;
-      };
+      await import('../roi/agent-context.js');
     let roiBlock = '';
     if (agentId === 'conductor') {
       roiBlock = buildConductorROIContext(business?.id);
@@ -918,9 +898,7 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
 
 async function processDataGaps(gaps: ParsedAgentOutput['data_gaps'], agentId: string, businessId: string): Promise<void> {
   if (!Array.isArray(gaps) || gaps.length === 0) return;
-  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js') as unknown as {
-    surfaceConnectorGap: (opts: Record<string, unknown>) => Promise<void>;
-  };
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const gap of gaps) {
     if (!gap?.connector_type || gap.priority === 'low') continue;
@@ -942,12 +920,8 @@ async function processDataGaps(gaps: ParsedAgentOutput['data_gaps'], agentId: st
 async function processAgentKBEntries(entries: ParsedAgentOutput['kb_entries'], agentId: string, businessId: string, runId: string): Promise<void> {
   if (!Array.isArray(entries) || entries.length === 0) return;
   try {
-    const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as {
-      getKBForBusiness: (id: string) => Promise<{ engine?: { writeFile: (...args: unknown[]) => Promise<void> } } | null>;
-    };
-    const { logIntelligenceEvent } = await import('../lib/intelligence-events.js') as unknown as {
-      logIntelligenceEvent: (opts: Record<string, unknown>) => void;
-    };
+    const { getKBForBusiness } = await import('../kb/kb-config.js');
+    const { logIntelligenceEvent } = await import('../lib/intelligence-events.js');
     const kbResult = await getKBForBusiness(businessId);
     if (!kbResult?.engine) return;
 
@@ -995,9 +969,7 @@ async function processAgentKBEntries(entries: ParsedAgentOutput['kb_entries'], a
 async function processAgentBriefs(briefs: ParsedAgentOutput['agent_briefs'], fromAgentId: string, businessId: string, runId: string): Promise<void> {
   if (!Array.isArray(briefs) || briefs.length === 0) return;
   try {
-    const { deliverAgentBrief } = await import('./agent-inbox.js') as unknown as {
-      deliverAgentBrief: (opts: Record<string, unknown>) => Promise<void>;
-    };
+    const { deliverAgentBrief } = await import('./agent-inbox.js');
 
     for (const b of briefs.slice(0, 5)) {
       if (!b?.to_agent || !b?.brief) continue;
@@ -1013,7 +985,7 @@ async function processAgentBriefs(briefs: ParsedAgentOutput['agent_briefs'], fro
         to: b.to_agent,
         businessId,
         brief: b.brief,
-        priority: ['immediate', 'next_run', 'fyi'].includes(b.priority ?? '') ? b.priority : 'next_run',
+        priority: (['immediate', 'next_run', 'fyi'] as const).includes((b.priority ?? 'fyi') as 'immediate' | 'next_run' | 'fyi') ? b.priority as 'immediate' | 'next_run' | 'fyi' : 'next_run',
       }).catch((err: Error) =>
         console.warn(`[agent-runner] agent_brief to ${b.to_agent} failed:`, err.message)
       );
@@ -1026,9 +998,7 @@ async function processAgentBriefs(briefs: ParsedAgentOutput['agent_briefs'], fro
 async function processAgentSignals(signals: ParsedAgentOutput['signals_to_create'], agentId: string, businessId: string, runId: string): Promise<void> {
   if (!Array.isArray(signals) || signals.length === 0) return;
   try {
-    const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js') as unknown as {
-      createSignalIfNotDuplicate: (opts: Record<string, unknown>) => void;
-    };
+    const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
     for (const s of signals.slice(0, 5)) {
       if (!s?.title) continue;
       if ((s.confidence ?? 0) < 0.65) continue;
@@ -1056,9 +1026,7 @@ async function processAgentSignals(signals: ParsedAgentOutput['signals_to_create
 
 async function processConnectorWishlist(wishlist: ParsedAgentOutput['connector_wishlist'], agentId: string, businessId: string): Promise<void> {
   if (!Array.isArray(wishlist) || wishlist.length === 0) return;
-  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js') as unknown as {
-    surfaceConnectorGap: (opts: Record<string, unknown>) => Promise<void>;
-  };
+  const { surfaceConnectorGap } = await import('../lib/connector-gap-handler.js');
 
   for (const item of wishlist) {
     if (!item?.description || !item.search_for_api) continue;
@@ -1093,10 +1061,7 @@ export async function runAgent(
   const startedAt = new Date().toISOString();
 
   // Import lazy to avoid top-of-file import chain growth
-  const { categoriseTrigger, hasWorkToDo } = await import('./work-checker.js') as unknown as {
-    categoriseTrigger: (trigger: string) => string;
-    hasWorkToDo: (agentId: string, businessId: string) => WorkResult;
-  };
+  const { categoriseTrigger, hasWorkToDo } = await import('./work-checker.js');
   const triggerType = categoriseTrigger(trigger);
 
   // 0. Check global kill switch
@@ -1119,15 +1084,7 @@ export async function runAgent(
   }
 
   // 1b. Readiness gate
-  const { checkAgentReadiness } = await import('./readiness.js') as unknown as {
-    checkAgentReadiness: (agentId: string, businessId: string) => {
-      ready: boolean;
-      reason: string;
-      status: string;
-      missing_preferred?: string[];
-      last_sync_ages?: Record<string, number>;
-    };
-  };
+  const { checkAgentReadiness } = await import('./readiness.js');
   const readiness = checkAgentReadiness(agentId, businessId);
   if (!readiness.ready) {
     recordSkippedRun(runId, agentId, businessId, trigger, triggerId, startedAt, readiness.reason,
@@ -1236,9 +1193,7 @@ export async function runAgent(
   );
 
   try {
-    const { pushDashboardEvent } = await import('../lib/sse-bus.js') as unknown as {
-      pushDashboardEvent: (businessId: string, event: string, data: Record<string, unknown>) => void;
-    };
+    const { pushDashboardEvent } = await import('../lib/sse-bus.js');
     pushDashboardEvent(businessId, 'agent_run_started', { agentId, runId, trigger });
   } catch {}
 
@@ -1324,7 +1279,7 @@ export async function runAgent(
     try {
       const jsonMatch = rawContent.match(/```(?:json)?\s*([\s\S]*?)```/) ||
                         rawContent.match(/(\{[\s\S]*\})/);
-      const jsonStr = jsonMatch ? jsonMatch[1] : rawContent;
+      const jsonStr = jsonMatch?.[1] ?? rawContent;
       parsed = JSON.parse(jsonStr.trim()) as ParsedAgentOutput;
     } catch {
       console.error('[agent-runner] Failed to parse agent response:', rawContent.substring(0, 500));
@@ -1335,15 +1290,7 @@ export async function runAgent(
     const searchQueries = Array.isArray(parsed.search_queries) ? parsed.search_queries.slice(0, 3) : [];
     if (searchQueries.length > 0) {
       try {
-        const { agentSearch } = await import('./tools/search.js') as unknown as {
-          agentSearch: (
-            query: string,
-            opts: Record<string, unknown>,
-            businessId: string,
-            db: unknown,
-            meta?: Record<string, unknown>
-          ) => Promise<SearchQueryResult>;
-        };
+        const { agentSearch } = await import('./tools/search.js');
         const searchResults: Record<string, SearchQueryResult> = {};
         for (const sq of searchQueries) {
           const r = await agentSearch(
@@ -1377,7 +1324,7 @@ export async function runAgent(
           const rawSecond = secondPassContent?.content ?? '';
           try {
             const m2 = rawSecond.match(/```(?:json)?\s*([\s\S]*?)```/) || rawSecond.match(/(\{[\s\S]*\})/);
-            parsed = JSON.parse((m2 ? m2[1] : rawSecond).trim()) as ParsedAgentOutput;
+            parsed = JSON.parse((m2?.[1] ?? rawSecond).trim()) as ParsedAgentOutput;
           } catch {
             // Keep first-pass parsed if second-pass fails to parse
           }
@@ -1467,9 +1414,7 @@ export async function runAgent(
 
         // Immediate Telegram + dashboard notification.
         try {
-          const { dispatch } = await import('../notifications/dispatcher.js') as unknown as {
-            dispatch: (opts: Record<string, unknown>) => Promise<void>;
-          };
+          const { dispatch } = await import('../notifications/dispatcher.js');
           const body = `Agent '${agentId}' produced output with suspicious patterns:\n` +
             highSeverity.map(a => `• ${a.type}${a.value ? `: ${a.value}` : ''}`).join('\n') +
             `\n\nOutput was blocked. Check Signals page.`;
@@ -1513,11 +1458,9 @@ export async function runAgent(
       if (!taskDef.title) continue;
       try {
         // Brain — check restraint before creating
-        let restraint: RestraintResult = { allowed: true };
+        let restraint: RestraintResult = { allowed: true, reason: null, blocked_by: null, measurement_window_ends: null, recommendation: null, confounding_warning: null };
         try {
-          const { checkRestraint } = await import('../brain/restraint.js') as unknown as {
-            checkRestraint: (task: ProposedTask, businessId: string) => Promise<RestraintResult>;
-          };
+          const { checkRestraint } = await import('../brain/restraint.js');
           restraint = await checkRestraint(taskDef, businessId);
         } catch (err) {
           console.warn('[brain] restraint check failed (allowing):', (err as Error).message);
@@ -1699,9 +1642,7 @@ export async function runAgent(
 
     // 16b. Dispatch BAP webhook for agent.run.complete
     try {
-      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js') as unknown as {
-        dispatchWebhookEvent: (event: string, data: Record<string, unknown>) => void;
-      };
+      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js');
       dispatchWebhookEvent('agent.run.complete', {
         run_id: runId, agent_id: agentId, business_id: businessId,
         status: 'complete', tasks_proposed: createdTasks.length,
@@ -1712,11 +1653,7 @@ export async function runAgent(
     // 17. Write significant findings to the KB
     if (createdTasks.length > 0 || (parsed.reasoning && parsed.reasoning.length > 200)) {
       try {
-        const { getKBForBusiness } = await import('../kb/kb-config.js') as unknown as {
-          getKBForBusiness: (id: string) => Promise<{ engine?: {
-            writeFile: (...args: unknown[]) => Promise<void>;
-          } } | null>;
-        };
+        const { getKBForBusiness } = await import('../kb/kb-config.js');
         const result = await getKBForBusiness(businessId);
         if (result?.engine) {
           const slug = `agent-${agentId}-${runId.slice(0, 8)}`;
@@ -1767,9 +1704,7 @@ ${signalsDetected} signal(s) reviewed.
     // 18. Reporter agent → send email briefing
     if (agentId === 'reporter') {
       try {
-        const { sendReporterEmail } = await import('../notifications/reporter-email.js') as unknown as {
-          sendReporterEmail: (parsed: ParsedAgentOutput, business: BusinessContext, businessId: string, startedAt: string) => Promise<void>;
-        };
+        const { sendReporterEmail } = await import('../notifications/reporter-email.js');
         await sendReporterEmail(parsed, business, businessId, startedAt);
       } catch (err) {
         console.warn('[agent-runner] Reporter email send failed (non-fatal):', (err as Error).message);
@@ -1779,9 +1714,7 @@ ${signalsDetected} signal(s) reviewed.
     console.log(`[agent-runner] '${agentId}' complete. Tasks: ${createdTasks.length}, Cost: $${costUsd.toFixed(6)}`);
 
     try {
-      const { pushDashboardEvent } = await import('../lib/sse-bus.js') as unknown as {
-        pushDashboardEvent: (businessId: string, event: string, data: Record<string, unknown>) => void;
-      };
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
       pushDashboardEvent(businessId, 'agent_run_complete', {
         agentId, runId, tasksProposed: createdTasks.length, costUsd, signalsDetected,
       });
@@ -1802,9 +1735,7 @@ ${signalsDetected} signal(s) reviewed.
       .catch(healErr => console.warn('[self-heal] Agent healing failed (non-fatal):', (healErr as Error).message));
 
     try {
-      const { pushDashboardEvent } = await import('../lib/sse-bus.js') as unknown as {
-        pushDashboardEvent: (businessId: string, event: string, data: Record<string, unknown>) => void;
-      };
+      const { pushDashboardEvent } = await import('../lib/sse-bus.js');
       pushDashboardEvent(businessId, 'agent_run_failed', { agentId, runId, error: (err as Error).message });
     } catch {}
 

@@ -63,7 +63,7 @@ export const MAX_LIST_FILES = 500;
 
 function getExtension(path: string): string {
   const match = String(path).toLowerCase().match(/(\.[a-z0-9]+)$/);
-  return match ? match[1] : '';
+  return match ? (match[1] ?? '') : '';
 }
 
 /**

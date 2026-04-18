@@ -109,7 +109,7 @@ export async function dispatchToAll(
   );
 
   return results.map((result, i) => ({
-    channel: channels[i],
+    channel: channels[i]!,
     ok: result.status === 'fulfilled' ? result.value.ok : false,
     error: result.status === 'rejected' ? result.reason?.message : result.value?.error,
     notificationId: result.status === 'fulfilled' ? result.value.notificationId : null,

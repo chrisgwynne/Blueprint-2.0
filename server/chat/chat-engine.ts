@@ -55,7 +55,7 @@ export function extractMentions(content: string | undefined | null): string[] {
   if (!content) return [];
   const found: string[] = [];
   for (const match of String(content).matchAll(MENTION_RE)) {
-    const id = match[1].toLowerCase();
+    const id = (match[1] ?? '').toLowerCase();
     if (AVAILABLE_AGENTS.includes(id) && !found.includes(id)) found.push(id);
   }
   return found;

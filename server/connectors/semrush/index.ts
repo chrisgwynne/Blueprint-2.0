@@ -33,19 +33,19 @@ function parseCSV(text: string, columns?: string): { rows: Array<Record<string, 
   if (!text || text.startsWith('ERROR')) return { rows: [], error: text?.trim() || null };
   const lines = String(text).trim().split('\n');
   if (lines.length === 0) return { rows: [], error: null };
-  const header = lines[0].split(';');
+  const header = lines[0]!.split(';');
   const fieldNames = columns
     ? columns.split(',').map((c) => COLS[c] ?? c)
     : header.map((h) => COLS[h] ?? h);
   const rows: Array<Record<string, string | number>> = [];
   for (let i = 1; i < lines.length; i++) {
-    const cols = lines[i].split(';');
+    const cols = (lines[i] ?? '').split(';');
     if (cols.length === 1 && !cols[0]) continue;
     const row: Record<string, string | number> = {};
     fieldNames.forEach((name, idx) => {
-      const raw = cols[idx];
+      const raw = cols[idx] ?? '';
       const asNum = Number(raw);
-      row[name] = Number.isFinite(asNum) && raw !== '' && raw !== null ? asNum : raw;
+      row[name] = Number.isFinite(asNum) && raw !== '' ? asNum : raw;
     });
     rows.push(row);
   }

@@ -305,7 +305,7 @@ function extractJSON(text: unknown): LLMAnalysis | null {
   try { return JSON.parse(s); } catch {}
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced) {
-    try { return JSON.parse(fenced[1].trim()); } catch {}
+    try { return JSON.parse((fenced[1] ?? '').trim()); } catch {}
   }
   const first = s.indexOf('{');
   const last = s.lastIndexOf('}');

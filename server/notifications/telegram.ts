@@ -1,6 +1,36 @@
 import db, { generateId } from '../db/db.js';
 import { approveTask, rejectTask } from '../tasks/task-queue.js';
 import type { Request, Response } from 'express';
+import type { Task } from '../types/db.js';
+
+/** Minimal notification shape required by the send() function. */
+interface NotificationLike {
+  business_id?: string | null;
+  severity: string;
+  title: string;
+  body?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+}
+
+interface TelegramFrom {
+  id?: number;
+  username?: string;
+}
+
+interface TelegramMessage {
+  text?: string;
+  chat: { id: string | number };
+  message_id?: number;
+  from?: TelegramFrom;
+}
+
+interface TelegramCallbackQuery {
+  id: string;
+  data?: string;
+  from?: TelegramFrom;
+  message: TelegramMessage & { message_id: number };
+}
 
 const TELEGRAM_API = 'https://api.telegram.org/bot';
 
@@ -151,7 +181,7 @@ async function pollBot({ botToken, chatId, businessId, businessName }: { botToke
   }
 }
 
-async function handleCallbackInternal(callbackQuery: any, botToken: string): Promise<void> {
+async function handleCallbackInternal(callbackQuery: TelegramCallbackQuery, botToken: string): Promise<void> {
   const { id: callbackId, data, from, message } = callbackQuery;
 
   // Ack immediately
@@ -163,7 +193,9 @@ async function handleCallbackInternal(callbackQuery: any, botToken: string): Pro
 
   if (!data) return;
 
-  const [action, taskId] = data.split(':');
+  const parts = data.split(':');
+  const action = parts[0];
+  const taskId = parts[1] ?? '';
   const actor = `telegram:${from?.username ?? from?.id ?? 'unknown'}`;
 
   try {
@@ -186,7 +218,7 @@ async function handleCallbackInternal(callbackQuery: any, botToken: string): Pro
   }
 }
 
-async function handleCommandInternal(message: any, botToken: string, chatId: string | null, businessId: string | null): Promise<void> {
+async function handleCommandInternal(message: TelegramMessage, botToken: string, chatId: string | null, businessId: string | null): Promise<void> {
   const text = (message.text || '').trim();
   const [cmd, arg] = text.split(/\s+/);
 
@@ -239,7 +271,7 @@ async function handleCommandInternal(message: any, botToken: string, chatId: str
 
 // ─── Message senders ─────────────────────────────────────────────────────────
 
-async function sendRawMessage(botToken: string, chatId: string | number, text: string, extra: Record<string, any> = {}): Promise<SendResult> {
+async function sendRawMessage(botToken: string, chatId: string | number, text: string, extra: Record<string, unknown> = {}): Promise<SendResult> {
   try {
     const res = await fetch(`${TELEGRAM_API}${botToken}/sendMessage`, {
       method: 'POST',
@@ -263,7 +295,7 @@ export async function sendMessage(chatId: string | null, text: string, inlineKey
   const targetChatId = chatId || defaultChatId;
   if (!targetChatId) throw new Error('TELEGRAM_CHAT_ID is not configured.');
 
-  const body: Record<string, any> = {
+  const body: Record<string, unknown> = {
     chat_id: targetChatId,
     text,
     parse_mode: 'HTML',
@@ -280,7 +312,7 @@ export async function sendMessage(chatId: string | null, text: string, inlineKey
 /**
  * Send a notification message.
  */
-export async function send(notification: any, chatId: string | null = null, businessId: string | null = null): Promise<SendResult> {
+export async function send(notification: NotificationLike, chatId: string | null = null, businessId: string | null = null): Promise<SendResult> {
   const { botToken, chatId: defaultChatId } = getTelegramConfig(businessId ?? notification.business_id);
   if (!botToken || !defaultChatId) return { ok: false, error: 'Telegram not configured' };
 
@@ -304,7 +336,7 @@ export async function send(notification: any, chatId: string | null = null, busi
 /**
  * Send a task approval request with inline Approve/Reject buttons.
  */
-export async function sendApprovalRequest(task: any, business: any, chatId: string | null = null): Promise<SendResult> {
+export async function sendApprovalRequest(task: Task, business: { id?: string; name: string; [k: string]: unknown } | null, chatId: string | null = null): Promise<SendResult> {
   const businessId = business?.id ?? task?.business_id ?? null;
   const { botToken, chatId: defaultChatId } = getTelegramConfig(businessId);
   if (!botToken || !defaultChatId) return { ok: false, error: 'Telegram not configured' };
@@ -385,7 +417,7 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
   }
 }
 
-function escapeHtml(text: any): string {
+function escapeHtml(text: unknown): string {
   if (!text) return '';
   return String(text)
     .replace(/&/g, '&amp;')

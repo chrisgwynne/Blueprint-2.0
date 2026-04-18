@@ -26,7 +26,7 @@ import { scanForSensitiveData } from '../lib/content-sanitiser.js';
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function todayISO(): string {
-  return new Date().toISOString().split('T')[0];
+  return new Date().toISOString().slice(0, 10);
 }
 
 function slugify(text: string | undefined | null): string {
@@ -707,8 +707,9 @@ export class KBEngine {
       const matches: { line: number; text: string }[] = [];
       const lines = content.split('\n');
       for (let i = 0; i < lines.length && matches.length < 3; i++) {
-        if (lines[i].toLowerCase().includes(q)) {
-          matches.push({ line: i + 1, text: lines[i].trim().slice(0, 200) });
+        const ln = lines[i];
+        if (ln?.toLowerCase().includes(q)) {
+          matches.push({ line: i + 1, text: ln.trim().slice(0, 200) });
         }
       }
 
@@ -780,7 +781,7 @@ export class KBEngine {
    */
   static extractWikilinks(content: string): string[] {
     return [...String(content ?? '').matchAll(/\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g)]
-      .map((m) => m[1].trim())
+      .map((m) => (m[1] ?? '').trim())
       .filter(Boolean);
   }
 
@@ -875,13 +876,14 @@ export class KBEngine {
 
   async stats(): Promise<{ total_pages: number; by_category: Record<string, number> }> {
     const files = await this.listFiles();
-    const byCategory: Record<string, number> = {
+    const byCategory: Record<string, number> & { root: number } = {
       wiki: 0, entities: 0, concepts: 0, sources: 0,
       signals: 0, research: 0, decisions: 0, contradictions: 0, raw: 0, root: 0,
     };
     for (const f of files) {
       const top = f.split('/')[0];
-      if (top in byCategory) byCategory[top]++;
+      if (!top) continue;
+      if (top in byCategory) byCategory[top] = (byCategory[top] ?? 0) + 1;
       else byCategory.root++;
     }
     return {
@@ -916,6 +918,7 @@ function buildTree(paths: string[]): KBTreeNode[] {
     let node: { type: 'dir'; children: Record<string, unknown> } = root;
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
+      if (!part) continue;
       const isLast = i === parts.length - 1;
       if (isLast) {
         node.children[part] = { name: part, type: 'file', path };

@@ -265,7 +265,7 @@ export async function assembleInvestigationContext(task: InvestigationTask, busi
     for (const m of connectorMetrics) {
       if (!seen.has(m.metric_name)) {
         seen.add(m.metric_name);
-        currentMetrics[connector.type][m.metric_name] = {
+        currentMetrics[connector.type]![m.metric_name] = {
           value: m.metric_value,
           data: safeParseJSON(m.metric_data),
           recorded_at: m.recorded_at,
@@ -291,7 +291,7 @@ export async function assembleInvestigationContext(task: InvestigationTask, busi
 
     historicalMetrics[connector.type] = {};
     for (const m of historical) {
-      historicalMetrics[connector.type][m.metric_name] = {
+      historicalMetrics[connector.type]![m.metric_name] = {
         avg: m.avg_value,
         min: m.min_value,
         max: m.max_value,

@@ -4,6 +4,7 @@ import crypto from 'crypto';
 import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../crypto.js';
+import type { Connector } from '../types/db.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -24,7 +25,7 @@ async function getConnector(type: string): Promise<any> {
  * Fire-and-forget — never throws on the caller side.
  */
 async function runConnectorSync(rowId: string): Promise<void> {
-  const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(rowId) as any;
+  const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(rowId) as Connector | undefined;
   if (!row) return;
 
   let connector: any;
@@ -40,12 +41,12 @@ async function runConnectorSync(rowId: string): Promise<void> {
   }
 
   const parsed = parseRow(row);
-  const config: any = row.config ? JSON.parse(row.config) : {};
+  const config: Record<string, unknown> = row.config ? JSON.parse(row.config as unknown as string) : {};
   // Operator precedence: || binds tighter than ?:, so the original
   //   config.defaultDataType || row.type === 'pagespeed' ? 'performance' : ...
   // collapsed to "performance" whenever defaultDataType was set. Wrap the
   // fallback ternary in parens so the user's stored value wins.
-  const dataType: string = config.defaultDataType || (
+  const dataType: string = (config.defaultDataType as string | undefined) || (
     row.type === 'pagespeed' ? 'performance' :
     row.type === 'gsc' ? 'search_analytics' :
     row.type === 'ga4' ? 'report' :
@@ -56,19 +57,19 @@ async function runConnectorSync(rowId: string): Promise<void> {
   // business's website so syncs don't blow up on first run.
   if (!config.url) {
     try {
-      const biz = db.prepare('SELECT settings FROM businesses WHERE id = ?').get(row.business_id) as any;
-      const bizSettings: any = biz?.settings ? JSON.parse(biz.settings) : {};
+      const biz = db.prepare('SELECT settings FROM businesses WHERE id = ?').get(row.business_id) as { settings: string } | undefined;
+      const bizSettings: Record<string, unknown> = biz?.settings ? JSON.parse(biz.settings) : {};
       if (bizSettings.website) config.url = bizSettings.website;
     } catch {}
   }
-  const params: any = { ...config, businessId: row.business_id };
+  const params: Record<string, unknown> = { ...config, businessId: row.business_id };
 
   try {
     const data = await connector.fetch(dataType, parsed?.credentials, params);
     const now = new Date().toISOString();
 
     if (typeof connector.extractMetrics === 'function') {
-      const metrics: any[] = connector.extractMetrics(data, now);
+      const metrics: Array<{ name: string; value?: number | null; data?: unknown }> = connector.extractMetrics(data, now);
       for (const m of metrics) {
         db.prepare(`
           INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_value, metric_data, period_start, period_end, recorded_at)
@@ -117,7 +118,7 @@ async function runConnectorSync(rowId: string): Promise<void> {
         SELECT metric_data FROM metrics
         WHERE business_id = ? AND connector_id = ? AND metric_name = ?
         ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
-      `).get(row.business_id, row.id, `${row.type}_sync`) as any;
+      `).get(row.business_id, row.id, `${row.type}_sync`) as { metric_data: string | null } | undefined;
       let previousData: unknown = null;
       if (prevMetric?.metric_data) {
         try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
@@ -134,12 +135,12 @@ async function runConnectorSync(rowId: string): Promise<void> {
   }
 }
 
-function parseRow(row: any): any {
+function parseRow(row: Connector | null): (Omit<Connector, 'credentials' | 'config'> & { credentials: Record<string, unknown>; config: Record<string, unknown> }) | null {
   if (!row) return null;
   let credentials: Record<string, unknown> = {};
   if (row.credentials) {
     try {
-      const decrypted = decrypt(row.credentials);
+      const decrypted = decrypt(row.credentials as unknown as string);
       credentials = JSON.parse(decrypted);
     } catch {
       credentials = {};
@@ -148,11 +149,11 @@ function parseRow(row: any): any {
   return {
     ...row,
     credentials,
-    config: row.config ? JSON.parse(row.config) : {},
+    config: row.config ? JSON.parse(row.config as unknown as string) : {},
   };
 }
 
-function safeRow(row: any): any {
+function safeRow(row: Connector | null): (Omit<Connector, 'credentials' | 'config'> & { credentials: Record<string, string | null>; config: Record<string, unknown> }) | null {
   const parsed = parseRow(row);
   if (!parsed) return null;
   // Strip sensitive credential fields from API responses
@@ -172,7 +173,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
   try {
     const rows = db.prepare(`
       SELECT * FROM connectors WHERE business_id = ? ORDER BY name ASC
-    `).all(req.params['businessId'] as string);
+    `).all(req.params['businessId'] as string) as Connector[];
     return res.json(rows.map(safeRow));
   } catch (err) {
     console.error('[connectors] List error:', err);
@@ -206,7 +207,7 @@ router.post('/', async (req: Request, res: Response) => {
       VALUES (?, ?, ?, ?, ?, 'disconnected', ?, CURRENT_TIMESTAMP)
     `).run(id, business_id, type, name, encryptedCreds, JSON.stringify(config));
 
-    const created = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id));
+    const created = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | null);
     audit(business_id, 'connector', id, 'create', (req.session as any).userId, null, created);
 
     // Auto-sync — fire-and-forget so the user doesn't have to click sync
@@ -228,7 +229,7 @@ router.post('/', async (req: Request, res: Response) => {
 router.patch('/:id', async (req: Request, res: Response) => {
   try {
     const id = req.params['id'] as string;
-    const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as any;
+    const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | undefined;
     if (!existing) return res.status(404).json({ error: 'Connector not found.' });
 
     const before = safeRow(existing);
@@ -240,7 +241,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     };
 
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: (string | number | boolean | null)[] = [];
 
     if (name !== undefined) { updates.push('name = ?'); values.push(name); }
     if (status !== undefined) { updates.push('status = ?'); values.push(status); }
@@ -258,7 +259,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
     values.push(id);
     db.prepare(`UPDATE connectors SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-    const after = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id));
+    const after = safeRow(db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | null);
     audit(existing.business_id, 'connector', id, 'update', (req.session as any).userId, before, after);
 
     // If credentials or config changed, re-sync immediately so the user
@@ -281,7 +282,7 @@ router.patch('/:id', async (req: Request, res: Response) => {
 router.delete('/:id', (req: Request, res: Response) => {
   try {
     const id = req.params['id'] as string;
-    const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as any;
+    const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | undefined;
     if (!existing) return res.status(404).json({ error: 'Connector not found.' });
 
     db.prepare('DELETE FROM connectors WHERE id = ?').run(id);
@@ -357,7 +358,7 @@ router.get('/gsc/sites', async (req: Request, res: Response) => {
 router.post('/:id/sync', async (req: Request, res: Response) => {
   try {
     const id = req.params['id'] as string;
-    const row = db.prepare('SELECT id, name FROM connectors WHERE id = ?').get(id) as any;
+    const row = db.prepare('SELECT id, name FROM connectors WHERE id = ?').get(id) as Pick<Connector, 'id' | 'name'> | undefined;
     if (!row) return res.status(404).json({ error: 'Connector not found.' });
 
     res.status(202).json({ ok: true, message: 'Sync started.' });
@@ -380,7 +381,7 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
 router.get('/:id/health', async (req: Request, res: Response) => {
   try {
     const id = req.params['id'] as string;
-    const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as any;
+    const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | undefined;
     if (!row) return res.status(404).json({ error: 'Connector not found.' });
 
     const connector = await getConnector(row.type);
@@ -388,8 +389,8 @@ router.get('/:id/health', async (req: Request, res: Response) => {
       return res.status(422).json({ error: `Connector type '${row.type}' not supported.` });
     }
 
-    const parsed = parseRow(row);
-    const result: any = await connector.healthCheck(parsed.credentials);
+    const parsed = parseRow(row)!;
+    const result: { ok: boolean; error?: string } = await connector.healthCheck(parsed.credentials);
 
     const status = result.ok ? 'connected' : 'error';
     db.prepare('UPDATE connectors SET status = ?, last_error = ? WHERE id = ?').run(
@@ -415,7 +416,7 @@ router.get('/:id/health', async (req: Request, res: Response) => {
 router.get('/:id/file-changes', (req: Request, res: Response) => {
   try {
     const id = req.params['id'] as string;
-    const row = db.prepare('SELECT id, type FROM connectors WHERE id = ?').get(id) as any;
+    const row = db.prepare('SELECT id, type FROM connectors WHERE id = ?').get(id) as Pick<Connector, 'id' | 'type'> | undefined;
     if (!row) return res.status(404).json({ error: 'Connector not found.' });
     if (row.type !== 'server-access') {
       return res.json([]);

@@ -227,7 +227,7 @@ router.get('/businesses/:businessId/health', requirePermission('signals:read'), 
     const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
     // Signals summary
-    const signalCounts: Record<string, number> = {
+    const signalCounts: Record<string, number> & { total: number } = {
       total: 0, critical: 0, alert: 0, warning: 0, info: 0,
     };
     (db.prepare(
@@ -262,7 +262,7 @@ router.get('/businesses/:businessId/health', requirePermission('signals:read'), 
       if (latest.length > 0) {
         metricsSnapshot[c.type] = {};
         for (const m of latest) {
-          metricsSnapshot[c.type][m.metric_name] = m.metric_value;
+          metricsSnapshot[c.type]![m.metric_name] = m.metric_value;
         }
       }
     }
@@ -273,7 +273,7 @@ router.get('/businesses/:businessId/health', requirePermission('signals:read'), 
     ).get(businessId) as { started_at: string; status: string; tasks_proposed: number | null } | undefined;
     const runsToday = (db.prepare(
       "SELECT COUNT(*) as n FROM agent_runs WHERE business_id = ? AND started_at >= ?"
-    ).get(businessId, new Date().toISOString().split('T')[0]) as { n: number } | undefined)?.n ?? 0;
+    ).get(businessId, new Date().toISOString().slice(0, 10)) as { n: number } | undefined)?.n ?? 0;
 
     // Health score from last analysis
     const lastAnalysis = db.prepare(
@@ -559,8 +559,8 @@ router.get('/businesses/:businessId/kb/file/*', requirePermission('kb:read'), as
     if (!result) return res.status(404).json({ error: 'Business not found or KB not initialized.' });
 
     const filePath = (req.params as unknown as Record<string, string>)[0];
-    const file = await result.engine.readFile(filePath);
-    const backlinks = await result.engine.getBacklinks(filePath);
+    const file = await result.engine['readFile']!(filePath);
+    const backlinks = await result.engine['getBacklinks']!(filePath);
 
     return res.json({ ...(file as Record<string, unknown>), backlinks });
   } catch (err) {
@@ -579,7 +579,7 @@ router.get('/businesses/:businessId/kb/search', requirePermission('kb:read'), as
 
     const q = req.query.q;
     if (!q) return res.json({ results: [] });
-    const results = await result.engine.search(String(q), parseInt(String(req.query.limit ?? '20'), 10) || 20);
+    const results = await result.engine['search']!(String(q), parseInt(String(req.query.limit ?? '20'), 10) || 20);
     return res.json({ results, query: q });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -703,7 +703,7 @@ router.get('/businesses/:businessId/metrics/snapshot', requirePermission('metric
           const shortName = m.metric_name.includes('.')
             ? m.metric_name.split('.').slice(1).join('.')
             : m.metric_name;
-          snapshot[c.type][shortName] = m.metric_value;
+          snapshot[c.type]![shortName] = m.metric_value;
         }
       }
     }

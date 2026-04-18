@@ -38,6 +38,8 @@
  * critical → 🔴 Red    — urgent, requires immediate action
  */
 
+import type { Notification, Task } from '../types/db.js';
+
 export const SEVERITY_ICONS: Record<string, string> = {
   info: '🔵',
   warning: '🟡',
@@ -61,11 +63,11 @@ export class NotificationAdapter {
     throw new Error('Adapter must define channelId getter.');
   }
 
-  async send(notification: any): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  async send(notification: Notification): Promise<{ ok: boolean; messageId?: string; error?: string }> {
     throw new Error('send() not implemented.');
   }
 
-  async sendApprovalRequest(task: any, business: any): Promise<{ ok: boolean; messageId?: string; error?: string }> {
+  async sendApprovalRequest(task: Task, business: { id?: string; name: string; [k: string]: unknown } | null): Promise<{ ok: boolean; messageId?: string; error?: string }> {
     throw new Error('sendApprovalRequest() not implemented.');
   }
 }

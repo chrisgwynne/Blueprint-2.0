@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import db from '../db/db.js';
 import { decrypt } from '../crypto.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import type { Metric } from '../types/db.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -72,25 +73,25 @@ router.get('/:connectorId', (req: Request, res: Response) => {
     `).all(connectorId, prevStart, prevEnd) as Record<string, unknown>[];
 
     // Parse metric_data JSON
-    const parseMetrics = (rows: Record<string, unknown>[]): any[] => rows.map(r => ({
+    const parseMetrics = (rows: Record<string, unknown>[]): Metric[] => rows.map(r => ({
       ...r,
       metric_data: r['metric_data'] ? JSON.parse(r['metric_data'] as string) : null,
-    }));
+    })) as Metric[];
 
     // Helper: get latest value for a metric name.
     // If the row has parsed metric_data (non-null), return that (array/object).
     // Otherwise return the scalar metric_value.
-    const latest = (metrics: any[], name: string): unknown => {
-      const row = metrics.find((m: any) => m.metric_name === name);
+    const latest = (metrics: Metric[], name: string): unknown => {
+      const row = metrics.find((m: Metric) => m.metric_name === name);
       if (!row) return null;
       if (row.metric_data !== null && row.metric_data !== undefined) return row.metric_data;
       return row.metric_value ?? null;
     };
 
     // Helper: get all rows for a metric, sorted by date
-    const series = (metrics: any[], name: string): any[] => metrics
-      .filter((m: any) => m.metric_name === name)
-      .sort((a: any, b: any) => new Date(a.recorded_at as string).getTime() - new Date(b.recorded_at as string).getTime());
+    const series = (metrics: Metric[], name: string): Metric[] => metrics
+      .filter((m: Metric) => m.metric_name === name)
+      .sort((a: Metric, b: Metric) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
 
     const current = parseMetrics(currentMetrics);
     const prev = parseMetrics(prevMetrics);
@@ -100,14 +101,14 @@ router.get('/:connectorId', (req: Request, res: Response) => {
     // the short name they expect (e.g. 'clicks' in addition to
     // 'gsc.total_clicks'). Aliases never overwrite existing real entries.
     const latestObj: Record<string, unknown> = Object.fromEntries(
-      [...new Set((current as any[]).map((m: any) => m.metric_name as string))]
+      [...new Set(current.map((m: Metric) => m.metric_name))]
         .map(name => [name, latest(current, name)])
     );
     const seriesObj: Record<string, unknown> = Object.fromEntries(
-      [...new Set((current as any[]).map((m: any) => m.metric_name as string))]
+      [...new Set(current.map((m: Metric) => m.metric_name))]
         .map(name => [name, series(current, name)])
     );
-    const aliases: Record<string, string> = (ALIASES as any)[connector['type'] as string] || {};
+    const aliases: Record<string, string> = ALIASES[connector['type'] as string] || {};
     // For each alias, walk the raw rows to find the underlying metric and
     // pick the right shape: scalar metric_value if it's a number (so score
     // and rate aliases resolve to numbers), otherwise the parsed
@@ -116,7 +117,7 @@ router.get('/:connectorId', (req: Request, res: Response) => {
     // legacy callers.
     for (const [shortName, realName] of Object.entries(aliases)) {
       if (latestObj[shortName] === undefined) {
-        const row = (current as any[]).find((m: any) => m.metric_name === realName);
+        const row = current.find((m: Metric) => m.metric_name === realName);
         if (row) {
           // Prefer the scalar value when it's a non-null number — those
           // are the score/rate/count style metrics. Fall back to the
@@ -136,7 +137,7 @@ router.get('/:connectorId', (req: Request, res: Response) => {
     // because some legacy renderers read latest['top_pages_data'] etc. We
     // give both naming conventions so future cleanup is non-breaking.
     for (const [shortName, realName] of Object.entries(aliases)) {
-      const row = (current as any[]).find((m: any) => m.metric_name === realName);
+      const row = current.find((m: Metric) => m.metric_name === realName);
       if (row?.metric_data && Array.isArray(row.metric_data)) {
         const dataAlias = `${shortName}_data`;
         if (latestObj[dataAlias] === undefined) latestObj[dataAlias] = row.metric_data;
@@ -236,13 +237,13 @@ const ALIASES: Record<string, Record<string, string>> = {
 
 function buildSummary(
   type: string,
-  current: any[],
-  prev: any[],
+  current: Metric[],
+  prev: Metric[],
   aliases: Record<string, string> = {},
 ): Record<string, unknown> {
-  const latestOf = (metrics: any[], name: string): unknown => {
+  const latestOf = (metrics: Metric[], name: string): unknown => {
     const realName = aliases[name] || name;
-    return (metrics.find((m: any) => m.metric_name === realName)?.metric_value) ?? null;
+    return (metrics.find((m: Metric) => m.metric_name === realName)?.metric_value) ?? null;
   };
 
   if (type === 'ga4') {

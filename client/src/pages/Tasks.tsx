@@ -6,7 +6,7 @@ import TaskKanban from '../components/TaskKanban.jsx'
 import useStore from '../lib/store.js'
 import { getTasks, createTask, approveTask, rejectTask, getTaskDetail, getTaskHistory, addTaskComment } from '../lib/api.js'
 
-const STATUS_CONFIG: Record<string, { label: string; pill: string }> = {
+const STATUS_CONFIG: Record<string, { label: string; pill: string }> & { proposed: { label: string; pill: string } } = {
   proposed:  { label: 'Proposed',  pill: 'bp-pill-amber' },
   approved:  { label: 'Approved',  pill: 'bp-pill-blue' },
   executing: { label: 'Executing', pill: 'bp-pill-blue' },
@@ -285,7 +285,7 @@ function DeferredBadge({ task }: { task: any }) {
 
 // ─── Task Detail Drawer ───────────────────────────────────────────────────────
 
-const EVENT_ICONS: Record<string, { Icon: any; color: string }> = {
+const EVENT_ICONS: Record<string, { Icon: any; color: string }> & { default: { Icon: any; color: string } } = {
   created:   { Icon: Plus,          color: 'var(--bp-blue)'   },
   approved:  { Icon: Check,         color: 'var(--bp-green)'  },
   rejected:  { Icon: X,             color: 'var(--bp-red)'    },
@@ -859,7 +859,7 @@ function Tasks() {
               }}
             >
               <span style={{ textTransform: 'capitalize' }}>{s === 'all' ? 'All' : (cfg?.label || s)}</span>
-              {counts[s] > 0 && (
+              {(counts[s] ?? 0) > 0 && (
                 <span style={{
                   fontFamily: 'var(--bp-font-mono)', fontSize: 9,
                   padding: '0 4px', borderRadius: 2,

@@ -19,7 +19,7 @@ interface Signal {
   [key: string]: unknown
 }
 
-const SEVERITY: Record<string, { label: string; dot: string; border: string; pill: string }> = {
+const SEVERITY: Record<string, { label: string; dot: string; border: string; pill: string }> & { info: { label: string; dot: string; border: string; pill: string } } = {
   info:        { label: 'INFO',  dot: 'pulse-dot-blue',  border: 'var(--bp-blue)',   pill: 'bp-pill-blue' },
   warning:     { label: 'WARN',  dot: 'pulse-dot-amber', border: 'var(--bp-amber)',  pill: 'bp-pill-amber' },
   alert:       { label: 'ALERT', dot: 'pulse-dot-amber', border: 'var(--bp-orange)', pill: 'bp-pill-amber' },

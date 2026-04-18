@@ -3,6 +3,8 @@
  */
 import crypto from 'crypto';
 import db from '../db/db.js';
+import type { SchedulerLog } from '../types/db.js';
+import type { TaskRow as Task } from '../tasks/task-queue.js';
 
 interface AgentMetricMap {
   [agentId: string]: string[];
@@ -34,7 +36,7 @@ interface ConstraintResult {
   allowed: boolean;
   reason: string | null;
   delay_until: string | null;
-  constraints: Record<string, any>;
+  constraints: Record<string, unknown>;
 }
 
 interface LogDecisionRow {
@@ -44,7 +46,7 @@ interface LogDecisionRow {
   was_scheduled_for?: string | null;
   delayed_to?: string | null;
   reason?: string | null;
-  constraints?: Record<string, any> | null;
+  constraints?: Record<string, unknown> | null;
 }
 
 function logDecision(row: LogDecisionRow): void {
@@ -68,7 +70,7 @@ function logDecision(row: LogDecisionRow): void {
  * Check constraints for an agent run on a business.
  */
 export function checkAgentConstraints(agentId: string, businessId: string): ConstraintResult {
-  const constraints: Record<string, any> = { in_flight_count: 0, data_stale: false };
+  const constraints: Record<string, unknown> = { in_flight_count: 0, data_stale: false };
 
   // 1. Too many in-flight actions affecting this agent's metrics?
   const metrics = AGENT_METRIC_MAP[agentId] || [];
@@ -81,12 +83,13 @@ export function checkAgentConstraints(agentId: string, businessId: string): Cons
           SELECT 1 FROM json_each(am.metrics_expected) me WHERE me.value IN (${placeholders})
         )
     `).get(businessId, ...metrics) as { n: number } | undefined;
-    constraints.in_flight_count = row?.n ?? 0;
-    if (constraints.in_flight_count >= 3) {
+    const inFlightCount = row?.n ?? 0;
+    constraints.in_flight_count = inFlightCount;
+    if (inFlightCount >= 3) {
       const delay = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
       return {
         allowed: false,
-        reason: `${constraints.in_flight_count} in-flight actions affecting this agent's metrics — delay 24h to avoid contaminated analysis.`,
+        reason: `${inFlightCount} in-flight actions affecting this agent's metrics — delay 24h to avoid contaminated analysis.`,
         delay_until: delay,
         constraints,
       };
@@ -121,7 +124,7 @@ export function checkAgentConstraints(agentId: string, businessId: string): Cons
 /**
  * Run an agent with constraint checks applied.
  */
-export async function runAgentWithConstraints(agentId: string, businessId: string, trigger: string, triggerId: any, opts?: any): Promise<any> {
+export async function runAgentWithConstraints(agentId: string, businessId: string, trigger: string, triggerId: string | null, opts?: { skipCooldown?: boolean }): Promise<unknown> {
   const check = checkAgentConstraints(agentId, businessId);
   if (!check.allowed) {
     logDecision({
@@ -150,9 +153,9 @@ export async function runAgentWithConstraints(agentId: string, businessId: strin
  * Smart spacing — when a task completes, update any pending/deferred tasks
  * affecting the same URL/entity to defer until the measurement window closes.
  */
-export function applySmartSpacing(completedTask: any): number {
+export function applySmartSpacing(completedTask: Task): number {
   if (!completedTask?.action_type) return 0;
-  let payload: Record<string, any> = {};
+  let payload: Record<string, unknown> = {};
   try { payload = typeof completedTask.action_payload === 'string' ? JSON.parse(completedTask.action_payload) : (completedTask.action_payload || {}); } catch {}
   const url = payload.url;
   if (!url) return 0;
@@ -178,15 +181,15 @@ export function applySmartSpacing(completedTask: any): number {
     completedTask.id,
     `%"url":"${url}"%`
   );
-  return (affected as any).changes || 0;
+  return affected.changes || 0;
 }
 
 /**
  * Return recent scheduler decisions for System Health display.
  */
-export function listRecentSchedulerLog(limit: number = 50): any[] {
+export function listRecentSchedulerLog(limit: number = 50): SchedulerLog[] {
   return db.prepare(`
     SELECT * FROM scheduler_log
     ORDER BY created_at DESC LIMIT ?
-  `).all(limit);
+  `).all(limit) as SchedulerLog[];
 }

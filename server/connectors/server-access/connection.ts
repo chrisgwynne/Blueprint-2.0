@@ -6,6 +6,7 @@
  */
 import crypto from 'node:crypto';
 import { Client as SshClient } from 'ssh2';
+import type { SFTPWrapper, Stats as SFTPStats } from 'ssh2';
 import { Client as FtpClient, FileType } from 'basic-ftp';
 import { Writable, Readable } from 'node:stream';
 
@@ -14,6 +15,41 @@ import {
   MAX_FILE_SIZE, MAX_LIST_DEPTH, MAX_LIST_FILES,
 } from './security.js';
 
+// ─── Credential / config types ───────────────────────────────────────────────
+
+interface ServerAccessCredentials {
+  host: string;
+  port?: number | string;
+  username: string;
+  password?: string;
+  connectionMethod?: 'ssh-key' | 'password' | 'ssh-password' | 'sftp' | 'ftp' | 'ftps';
+  privateKey?: string;
+  passphrase?: string;
+  rootPath?: string;
+}
+interface ServerAccessConfig {
+  rootPath?: string;
+}
+
+interface FileReadResult {
+  refused: boolean;
+  path: string;
+  size: number;
+  reason?: string;
+  matched?: unknown;
+  modified?: string | null;
+  content?: string;
+  hash?: string;
+}
+
+interface FileWriteResult {
+  path: string;
+  bytes_written: number;
+  hash: string;
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
 const CONNECT_TIMEOUT_MS = 30_000;
 const OPERATION_TIMEOUT_MS = 60_000;
 
@@ -21,7 +57,7 @@ function hashContent(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-function streamToBuffer(readable: any, maxBytes: number = MAX_FILE_SIZE): Promise<Buffer> {
+function streamToBuffer(readable: Readable, maxBytes: number = MAX_FILE_SIZE): Promise<Buffer> {
   return new Promise((resolveFn, rejectFn) => {
     const chunks: Buffer[] = [];
     let total = 0;
@@ -41,13 +77,13 @@ function streamToBuffer(readable: any, maxBytes: number = MAX_FILE_SIZE): Promis
 // ─── SSH/SFTP connection ────────────────────────────────────────────────────
 
 class SshConnection {
-  credentials: any;
-  config: any;
+  credentials: ServerAccessCredentials;
+  config: ServerAccessConfig;
   rootPath: string | undefined;
-  client: any;
-  sftp: any;
+  client: SshClient | null;
+  sftp: SFTPWrapper | null;
 
-  constructor(credentials: any, config: any) {
+  constructor(credentials: ServerAccessCredentials, config: ServerAccessConfig) {
     this.credentials = credentials;
     this.config = config;
     this.rootPath = config?.rootPath || credentials?.rootPath;
@@ -58,7 +94,7 @@ class SshConnection {
   async connect(): Promise<void> {
     if (this.client) return;
     this.client = new SshClient();
-    const connectOpts: Record<string, any> = {
+    const connectOpts: Record<string, unknown> = {
       host: this.credentials.host,
       port: Number(this.credentials.port || 22),
       username: this.credentials.username,
@@ -75,13 +111,13 @@ class SshConnection {
 
     await new Promise<void>((resolveFn, rejectFn) => {
       const to = setTimeout(() => rejectFn(new Error('SSH connect timed out')), CONNECT_TIMEOUT_MS);
-      this.client.once('ready', () => { clearTimeout(to); resolveFn(); });
-      this.client.once('error', (err: Error) => { clearTimeout(to); rejectFn(err); });
-      this.client.connect(connectOpts);
+      this.client!.once('ready', () => { clearTimeout(to); resolveFn(); });
+      this.client!.once('error', (err: Error) => { clearTimeout(to); rejectFn(err); });
+      this.client!.connect(connectOpts);
     });
 
     this.sftp = await new Promise((resolveFn, rejectFn) => {
-      this.client.sftp((err: Error | null, sftp: any) => err ? rejectFn(err) : resolveFn(sftp));
+      this.client!.sftp((err: Error | undefined, sftp: SFTPWrapper) => err ? rejectFn(err) : resolveFn(sftp));
     });
   }
 
@@ -94,7 +130,7 @@ class SshConnection {
   exec(command: string): Promise<{ code: number; stdout: string; stderr: string }> {
     return new Promise((resolveFn, rejectFn) => {
       const to = setTimeout(() => rejectFn(new Error('SSH exec timed out')), OPERATION_TIMEOUT_MS);
-      this.client.exec(command, (err: Error | null, stream: any) => {
+      this.client!.exec(command, (err: Error | undefined, stream: NodeJS.ReadableStream & { stderr: NodeJS.ReadableStream; on(event: 'close', listener: (code: number) => void): void }) => {
         if (err) { clearTimeout(to); return rejectFn(err); }
         let stdout = '', stderr = '';
         stream.on('data', (d: Buffer) => { stdout += d.toString(); });
@@ -107,7 +143,7 @@ class SshConnection {
     });
   }
 
-  async listDirectory(remotePath: string, { depth = 1 } = {}): Promise<any[]> {
+  async listDirectory(remotePath: string, { depth = 1 } = {}): Promise<Array<{ path: string; name: string; size: number; modified: string; type: string }>> {
     if (!isPathSafe(remotePath, this.rootPath!)) {
       throw new Error(`listDirectory refused — path outside root or blocked: ${remotePath}`);
     }
@@ -118,10 +154,13 @@ class SshConnection {
       .split('\n')
       .filter(Boolean)
       .map((line) => {
-        const [path, size, mtime] = line.split('\t');
+        const parts = line.split('\t');
+        const path = parts[0] ?? '';
+        const size = parts[1] ?? '0';
+        const mtime = parts[2] ?? '0';
         return {
           path,
-          name: path.split('/').pop(),
+          name: path.split('/').pop() ?? '',
           size: Number(size) || 0,
           modified: new Date(Number(mtime) * 1000).toISOString(),
           type: 'file',
@@ -130,16 +169,16 @@ class SshConnection {
       .filter((f) => isReadableFile(f.path));
   }
 
-  async stat(remotePath: string): Promise<any> {
+  async stat(remotePath: string): Promise<SFTPStats> {
     if (!isPathSafe(remotePath, this.rootPath!)) {
       throw new Error(`stat refused — path outside root or blocked: ${remotePath}`);
     }
     return new Promise((resolveFn, rejectFn) => {
-      this.sftp.stat(remotePath, (err: Error | null, attrs: any) => err ? rejectFn(err) : resolveFn(attrs));
+      this.sftp!.stat(remotePath, (err: Error | undefined, attrs: SFTPStats) => err ? rejectFn(err) : resolveFn(attrs));
     });
   }
 
-  async readFile(remotePath: string): Promise<any> {
+  async readFile(remotePath: string): Promise<FileReadResult> {
     if (!isPathSafe(remotePath, this.rootPath!)) {
       throw new Error(`readFile refused — path outside root or blocked: ${remotePath}`);
     }
@@ -148,7 +187,7 @@ class SshConnection {
       throw new Error(`readFile refused — file exceeds ${MAX_FILE_SIZE} bytes (${attrs.size})`);
     }
     const buf = await new Promise<Buffer>((resolveFn, rejectFn) => {
-      const stream = this.sftp.createReadStream(remotePath);
+      const stream = this.sftp!.createReadStream(remotePath);
       streamToBuffer(stream).then(resolveFn, rejectFn);
     });
     const content = buf.toString('utf8');
@@ -172,7 +211,7 @@ class SshConnection {
     };
   }
 
-  async writeFile(remotePath: string, content: string): Promise<any> {
+  async writeFile(remotePath: string, content: string): Promise<FileWriteResult> {
     if (!isPathSafe(remotePath, this.rootPath!, { forWrite: true })) {
       throw new Error(`writeFile refused — path outside root, blocked, or wrong extension: ${remotePath}`);
     }
@@ -180,7 +219,7 @@ class SshConnection {
       throw new Error(`writeFile refused — content exceeds ${MAX_FILE_SIZE} bytes`);
     }
     await new Promise<void>((resolveFn, rejectFn) => {
-      const stream = this.sftp.createWriteStream(remotePath);
+      const stream = this.sftp!.createWriteStream(remotePath);
       stream.on('close', resolveFn);
       stream.on('error', rejectFn);
       stream.end(content, 'utf8');
@@ -196,12 +235,12 @@ class SshConnection {
 // ─── FTP/FTPS connection ────────────────────────────────────────────────────
 
 class FtpConnection {
-  credentials: any;
-  config: any;
+  credentials: ServerAccessCredentials;
+  config: ServerAccessConfig;
   rootPath: string | undefined;
   client: FtpClient | null;
 
-  constructor(credentials: any, config: any) {
+  constructor(credentials: ServerAccessCredentials, config: ServerAccessConfig) {
     this.credentials = credentials;
     this.config = config;
     this.rootPath = config?.rootPath || credentials?.rootPath;
@@ -230,12 +269,12 @@ class FtpConnection {
     throw new Error('exec not supported on FTP connection.');
   }
 
-  async listDirectory(remotePath: string, { depth = 1 } = {}): Promise<any[]> {
+  async listDirectory(remotePath: string, { depth = 1 } = {}): Promise<Array<{ path: string; name: string; size: number | undefined; modified: string | null; type: string }>> {
     if (!isPathSafe(remotePath, this.rootPath!)) {
       throw new Error(`listDirectory refused — path outside root or blocked: ${remotePath}`);
     }
     const items = await this.client!.list(remotePath);
-    const out: any[] = [];
+    const out: Array<{ path: string; name: string; size: number | undefined; modified: string | null; type: string }> = [];
     for (const item of items) {
       if (item.type !== FileType.File) continue;
       const full = `${remotePath.replace(/\/$/, '')}/${item.name}`;
@@ -262,7 +301,7 @@ class FtpConnection {
     return { size: f.size, mtime: f.modifiedAt ? f.modifiedAt.getTime() / 1000 : null };
   }
 
-  async readFile(remotePath: string): Promise<any> {
+  async readFile(remotePath: string): Promise<FileReadResult> {
     if (!isPathSafe(remotePath, this.rootPath!)) {
       throw new Error(`readFile refused — path outside root or blocked: ${remotePath}`);
     }
@@ -296,7 +335,7 @@ class FtpConnection {
     };
   }
 
-  async writeFile(remotePath: string, content: string): Promise<any> {
+  async writeFile(remotePath: string, content: string): Promise<FileWriteResult> {
     if (!isPathSafe(remotePath, this.rootPath!, { forWrite: true })) {
       throw new Error(`writeFile refused — path outside root, blocked, or wrong extension: ${remotePath}`);
     }
@@ -319,7 +358,7 @@ class FtpConnection {
 /**
  * Create a connection of the right kind based on credentials.connectionMethod.
  */
-export async function createServerConnection(credentials: any, config: any = {}): Promise<SshConnection | FtpConnection> {
+export async function createServerConnection(credentials: ServerAccessCredentials, config: ServerAccessConfig = {}): Promise<SshConnection | FtpConnection> {
   const method = credentials?.connectionMethod || 'ssh-key';
   let conn: SshConnection | FtpConnection;
   if (method === 'ssh-key' || method === 'ssh-password') {

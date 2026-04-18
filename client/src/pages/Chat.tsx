@@ -356,7 +356,7 @@ export default function Chat() {
     const cursorPos = e.target.selectionStart
     const before = value.slice(0, cursorPos)
     const match = before.match(/@([\w-]*)$/)
-    if (match) setMentionQuery(match[1])
+    if (match) setMentionQuery(match[1] ?? null)
     else setMentionQuery(null)
   }
 

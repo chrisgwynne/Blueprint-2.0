@@ -22,7 +22,7 @@ interface SignalRule {
 // ─── Signal cool-down (per rule) ─────────────────────────────────────────────
 // Prevents the same signal from re-firing too soon after resolution.
 
-const COOLDOWN_HOURS: Record<string, number> = {
+const COOLDOWN_HOURS: Record<string, number> & { default: number } = {
   default: 24,
   monitor_down: 1,
   monitor_seems_down: 1,

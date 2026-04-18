@@ -37,7 +37,7 @@ function buildMetrics(businessId: string): Array<{ label: string; value: string;
     const prev = rows[1]?.metric_value;
     const change = current != null && prev != null ? fmtChange(prev, current) : { label: '', direction: 'flat' };
     return {
-      label: labels[name],
+      label: labels[name] ?? name,
       value: current != null ? Math.round(current).toLocaleString() : '—',
       change_label: change.label,
       direction: change.direction,
@@ -102,8 +102,8 @@ function healthDirection(businessId: string): string {
     WHERE business_id = ? AND health_score IS NOT NULL
     ORDER BY started_at DESC LIMIT 2
   `).all(businessId) as Array<{ health_score: number }>;
-  if (scores.length < 2 || scores[0].health_score === scores[1].health_score) return 'stable';
-  return scores[0].health_score > scores[1].health_score ? '↑ improving' : '↓ declining';
+  if (scores.length < 2 || scores[0]!.health_score === scores[1]!.health_score) return 'stable';
+  return scores[0]!.health_score > scores[1]!.health_score ? '↑ improving' : '↓ declining';
 }
 
 function currentHealthScore(businessId: string): number {

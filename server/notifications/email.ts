@@ -44,14 +44,14 @@ export function getEmailProvider(): string {
   try { return JSON.parse(row.value); } catch { return 'smtp'; }
 }
 
-export function getEmailConfig(provider: string): Record<string, any> {
+export function getEmailConfig(provider: string): SmtpConfig & ApiKeyConfig {
   const key = `email_config_${provider}`;
   const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
   if (!row) return {};
-  try { return JSON.parse(row.value); } catch { return {}; }
+  try { return JSON.parse(row.value) as SmtpConfig & ApiKeyConfig; } catch { return {}; }
 }
 
-export function saveEmailConfig(provider: string, config: Record<string, any>): void {
+export function saveEmailConfig(provider: string, config: SmtpConfig | ApiKeyConfig): void {
   const key = `email_config_${provider}`;
   db.prepare(`
     INSERT INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
@@ -161,7 +161,7 @@ async function sendViaBrevo({ from, to, subject, html, text, config }: { from: s
   if (!config.api_key) throw new Error('Brevo api_key missing');
   // Parse "Name <email>" or bare email
   const fromMatch = from.match(/^(.+?)\s*<(.+)>$/);
-  const sender = fromMatch ? { name: fromMatch[1].trim(), email: fromMatch[2] } : { email: from };
+  const sender = fromMatch ? { name: (fromMatch[1] ?? '').trim(), email: fromMatch[2] ?? from } : { email: from };
   const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
     headers: {

@@ -47,7 +47,7 @@ Rules:
 function extractJSON(content: string | null | undefined): any | null {
   if (!content) return null;
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const str = fenced ? fenced[1] : (content.match(/\{[\s\S]*\}/)?.[0] ?? content);
+  const str = fenced?.[1] ?? content.match(/\{[\s\S]*\}/)?.[0] ?? content;
   try { return JSON.parse(str.trim()); } catch { return null; }
 }
 

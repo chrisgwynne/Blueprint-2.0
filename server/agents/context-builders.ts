@@ -76,7 +76,7 @@ export function buildMetricsContext(
     if (!byConnector[row.connector_type]) {
       byConnector[row.connector_type] = { name: row.connector_name, metrics: [] };
     }
-    byConnector[row.connector_type].metrics.push({
+    byConnector[row.connector_type]!.metrics.push({
       name:  row.metric_name,
       value: row.metric_value,
       at:    row.recorded_at,

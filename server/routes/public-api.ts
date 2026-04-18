@@ -12,11 +12,22 @@ import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import db, { generateId } from '../db/db.js';
 
+interface ApiKeyRow {
+  id: string;
+  key_prefix: string;
+  key_hash: string;
+  name: string | null;
+  scopes: string | null;
+  rate_limit: number;
+  expires_at: string | null;
+  total_calls: number;
+}
+
 // Augment Express Request to carry API key fields set by apiKeyAuth middleware
 declare global {
   namespace Express {
     interface Request {
-      apiKey?: Record<string, any>;
+      apiKey?: ApiKeyRow;
       apiKeyScopes?: string[];
     }
   }
@@ -37,7 +48,7 @@ async function apiKeyAuth(req: Request, res: Response, next: NextFunction): Prom
   const rawKey = header.replace('Bearer ', '');
   const prefix = keyPrefix(rawKey);
 
-  const row = db.prepare('SELECT * FROM api_keys WHERE key_prefix = ?').get(prefix) as Record<string, any> | null;
+  const row = db.prepare('SELECT * FROM api_keys WHERE key_prefix = ?').get(prefix) as ApiKeyRow | null;
   if (!row) { res.status(401).json({ error: 'Invalid API key.' }); return; }
 
   // Verify hash
@@ -126,7 +137,7 @@ router.get('/businesses', (_req: Request, res: Response) => {
 });
 
 router.get('/businesses/:id', (req: Request, res: Response) => {
-  const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(String(req.params.id)) as Record<string, any> | null;
+  const biz = db.prepare('SELECT * FROM businesses WHERE id = ?').get(String(req.params.id)) as { settings: string | null; [k: string]: unknown } | null;
   if (!biz) return res.status(404).json({ error: 'Business not found.' });
   res.json({ business: { ...biz, settings: safeJSON(biz.settings, {}) } });
 });
@@ -163,7 +174,7 @@ router.post('/businesses/:id/signals', requireScope('write'), (req: Request, res
 });
 
 router.get('/signals/:id', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM signals WHERE id = ?').get(String(req.params.id)) as Record<string, any> | null;
+  const row = db.prepare('SELECT * FROM signals WHERE id = ?').get(String(req.params.id)) as { data: string | null; [k: string]: unknown } | null;
   if (!row) return res.status(404).json({ error: 'Signal not found.' });
   res.json({ signal: { ...row, data: safeJSON(row.data, {}) } });
 });
@@ -189,7 +200,7 @@ router.get('/businesses/:id/tasks', (req: Request, res: Response) => {
 
 router.post('/businesses/:id/tasks', requireScope('write'), async (req: Request, res: Response) => {
   try {
-    const { createTask } = await import('../tasks/task-queue.js') as unknown as { createTask: (opts: Record<string, any>) => any };
+    const { createTask } = await import('../tasks/task-queue.js') as unknown as { createTask: (opts: Record<string, unknown>) => Record<string, unknown> };
     const { title, description, action_type, priority = 'p2', confidence, estimated_impact } = req.body;
     if (!title) return res.status(400).json({ error: 'title is required.' });
     const task = createTask({
@@ -203,7 +214,7 @@ router.post('/businesses/:id/tasks', requireScope('write'), async (req: Request,
 });
 
 router.get('/tasks/:id', (req: Request, res: Response) => {
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(String(req.params.id)) as Record<string, any> | null;
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(String(req.params.id)) as { action_payload: string | null; outcome_data: string | null; [k: string]: unknown } | null;
   if (!row) return res.status(404).json({ error: 'Task not found.' });
   const events = db.prepare('SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at').all(String(req.params.id));
   res.json({ task: { ...row, action_payload: safeJSON(row.action_payload, {}), outcome_data: safeJSON(row.outcome_data, null) }, events });
@@ -233,21 +244,21 @@ router.patch('/tasks/:id/reject', requireScope('admin'), async (req: Request, re
 
 router.get('/businesses/:id/metrics', (req: Request, res: Response) => {
   const connectors = db.prepare("SELECT id, type FROM connectors WHERE business_id = ? AND status = 'connected'").all(String(req.params.id)) as any[];
-  const snapshot: Record<string, any> = {};
+  const snapshot: Record<string, Record<string, unknown>> = {};
   for (const c of connectors) {
     const latest = db.prepare('SELECT metric_name, metric_value FROM metrics WHERE business_id = ? AND connector_id = ? AND metric_value IS NOT NULL ORDER BY recorded_at DESC LIMIT 30')
-      .all(String(req.params.id), c.id) as any[];
+      .all(String(req.params.id), c.id) as Array<{ metric_name: string; metric_value: unknown }>;
     if (latest.length > 0) {
       snapshot[c.type] = {};
-      for (const m of latest) snapshot[c.type][m.metric_name] = m.metric_value;
+      for (const m of latest) (snapshot[c.type] as Record<string, unknown>)[m.metric_name] = m.metric_value;
     }
   }
   // Include custom metrics
   const custom = db.prepare("SELECT metric_name, metric_value, metric_data, recorded_at FROM metrics WHERE business_id = ? AND metric_name LIKE 'custom.%' ORDER BY recorded_at DESC LIMIT 50")
-    .all(String(req.params.id)) as any[];
+    .all(String(req.params.id)) as Array<{ metric_name: string; metric_value: unknown }>;
   if (custom.length > 0) {
     snapshot.custom = {};
-    for (const m of custom) snapshot.custom[m.metric_name] = m.metric_value;
+    for (const m of custom) (snapshot.custom as Record<string, unknown>)[m.metric_name] = m.metric_value;
   }
   res.json({ snapshot_at: new Date().toISOString(), connectors: snapshot });
 });
@@ -309,7 +320,7 @@ router.post('/businesses/:id/ingest/zapier', requireScope('write'), async (req: 
     }
 
     if (type === 'task') {
-      const { createTask } = await import('../tasks/task-queue.js') as unknown as { createTask: (opts: Record<string, any>) => any };
+      const { createTask } = await import('../tasks/task-queue.js') as unknown as { createTask: (opts: Record<string, unknown>) => Record<string, unknown> };
       const task = createTask({
         business_id: businessId, title: data.title ?? 'Zapier task',
         description: data.description ?? null, proposed_by: 'zapier',

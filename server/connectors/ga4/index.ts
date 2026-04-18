@@ -51,7 +51,7 @@ async function ensureFreshToken(credentials: Creds): Promise<Creds> {
 function dateString(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
-  return d.toISOString().split('T')[0];
+  return d.toISOString().slice(0, 10);
 }
 
 const connector = {

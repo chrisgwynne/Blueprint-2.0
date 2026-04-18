@@ -19,7 +19,7 @@ import ProducedByEvent from '../components/ProducedByEvent.jsx'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const SEVERITY_CONFIG: Record<string, { label: string; dot: string; pill: string; border: string; bg: string }> = {
+const SEVERITY_CONFIG: Record<string, { label: string; dot: string; pill: string; border: string; bg: string }> & { info: { label: string; dot: string; pill: string; border: string; bg: string }; warning: { label: string; dot: string; pill: string; border: string; bg: string } } = {
   info:        { label: 'INFO',   dot: 'pulse-dot-blue',  pill: 'bp-pill-blue',   border: 'var(--bp-blue)',   bg: 'rgba(77,166,255,0.06)'  },
   warning:     { label: 'WARN',   dot: 'pulse-dot-amber', pill: 'bp-pill-amber',  border: 'var(--bp-amber)',  bg: 'rgba(245,158,11,0.06)'  },
   alert:       { label: 'ALERT',  dot: 'pulse-dot-amber', pill: 'bp-pill-amber',  border: 'var(--bp-orange)', bg: 'rgba(255,140,66,0.06)'  },
@@ -361,7 +361,7 @@ const STEP_LABELS = [
   'Generating explanation…',
 ]
 
-const RECOMMENDATION_STYLES: Record<string, { bg: string; color: string; label: string }> = {
+const RECOMMENDATION_STYLES: Record<string, { bg: string; color: string; label: string }> & { investigate: { bg: string; color: string; label: string } } = {
   act_now:     { bg: 'rgba(46,160,67,0.15)', color: 'var(--bp-green)', label: 'ACT NOW' },
   wait:        { bg: 'rgba(210,153,34,0.15)', color: 'var(--bp-amber)', label: 'WAIT' },
   monitor:     { bg: 'rgba(139,148,158,0.15)', color: 'var(--bp-text-3)', label: 'MONITOR' },
@@ -1152,7 +1152,7 @@ function Signals() {
 
   const connectorTypes = [...new Set(signals.map(s => s.connector_type).filter(Boolean))]
   const sevCounts: Record<string, number> = { all: signals.length, critical: 0, alert: 0, warning: 0, info: 0 }
-  signals.forEach(s => { if (sevCounts[s.severity] !== undefined) sevCounts[s.severity]++ })
+  signals.forEach(s => { if (s.severity in sevCounts) sevCounts[s.severity] = (sevCounts[s.severity] ?? 0) + 1 })
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -1197,7 +1197,7 @@ function Signals() {
       <div style={{ display: 'flex', gap: 0, marginBottom: 16, borderBottom: '1px solid var(--bp-border)' }}>
         {TABS.map(({ key, label, Icon }) => {
           const active = activeTab === key
-          const count  = tabCounts[key]
+          const count  = tabCounts[key] ?? 0
           return (
             <button
               key={key}

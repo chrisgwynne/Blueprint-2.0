@@ -16,6 +16,7 @@ import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { computeROIReport } from '../roi/attribution-engine.js';
 import { computeAllAgentROI } from '../roi/agent-roi.js';
+import type { AgentROIRow } from '../roi/agent-roi.js';
 import { getBaselines } from '../roi/baselines.js';
 
 const router = Router();
@@ -69,7 +70,7 @@ router.get('/:businessId/trajectory', (req: Request, res: Response) => {
       : null;
 
     const baselines = getBaselines(businessId);
-    const out: any[] = [];
+    const out: Array<{ metric_name: string; baseline_value: number | null; baseline_date: string; points: unknown[] }> = [];
     for (const b of baselines) {
       if (metricsFilter && !metricsFilter.includes(b.metric_name)) continue;
       const points = db.prepare(`
@@ -166,15 +167,17 @@ router.get('/:businessId/assessment', async (req: Request, res: Response) => {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function buildAssessmentPrompt(report: any, agentRows: any[]): string {
-  const declines = report.attributed_declines ?? [];
-  const improvements = report.attributed_improvements ?? [];
-  const unattributed = report.unattributed_improvements ?? [];
+type OutcomeRow = { task_title: string; proposed_by: string; metric_name: string; change_pct?: number | null; estimated_monthly_usd?: number | null; confidence?: string | number | null };
+
+function buildAssessmentPrompt(report: any, agentRows: AgentROIRow[]): string {
+  const declines: OutcomeRow[] = report.attributed_declines ?? [];
+  const improvements: OutcomeRow[] = report.attributed_improvements ?? [];
+  const unattributed: Array<{ metric_name: string; change_pct?: number | null }> = report.unattributed_improvements ?? [];
   const agentsByStatus = {
-    strong: agentRows.filter((a: any) => a.status === 'strong'),
-    marginal: agentRows.filter((a: any) => a.status === 'marginal'),
-    review: agentRows.filter((a: any) => a.status === 'review_needed'),
-    too_soon: agentRows.filter((a: any) => a.status === 'too_soon'),
+    strong: agentRows.filter((a) => a.status === 'strong'),
+    marginal: agentRows.filter((a) => a.status === 'marginal'),
+    review: agentRows.filter((a) => a.status === 'review_needed'),
+    too_soon: agentRows.filter((a) => a.status === 'too_soon'),
   };
 
   return `Summarise Blueprint's performance on ${report.business_name} over the ${report.days_since_install} days since installation.
@@ -189,19 +192,19 @@ Attributed monthly decline: £${report.attributed_decline_usd_per_month}
 ROI ratio: ${report.roi_ratio ?? 'not yet computed'}
 
 Improved outcomes attributed to Blueprint (${improvements.length}):
-${improvements.slice(0, 5).map((r: any) =>
-  `- ${r.task_title} (${r.proposed_by}, ${r.metric_name}, ${r.change_pct?.toFixed?.(1)}%, ` +
+${improvements.slice(0, 5).map((r) =>
+  `- ${r.task_title} (${r.proposed_by}, ${r.metric_name}, ${(r.change_pct as number | null | undefined)?.toFixed?.(1)}%, ` +
   `£${r.estimated_monthly_usd}/mo, confidence: ${r.confidence})`
 ).join('\n') || '- none yet'}
 
 Declined outcomes attributed to Blueprint (${declines.length}):
-${declines.slice(0, 5).map((r: any) =>
-  `- ${r.task_title} (${r.proposed_by}, ${r.metric_name}, ${r.change_pct?.toFixed?.(1)}%, ` +
+${declines.slice(0, 5).map((r) =>
+  `- ${r.task_title} (${r.proposed_by}, ${r.metric_name}, ${(r.change_pct as number | null | undefined)?.toFixed?.(1)}%, ` +
   `-£${Math.abs(r.estimated_monthly_usd ?? 0)}/mo)`
 ).join('\n') || '- none'}
 
 Unattributed improvements (metric moved up, no Blueprint task linked, ${unattributed.length}):
-${unattributed.slice(0, 3).map((r: any) => `- ${r.metric_name} ${r.change_pct?.toFixed?.(1)}% — no Blueprint cause identified`).join('\n') || '- none'}
+${unattributed.slice(0, 3).map((r) => `- ${r.metric_name} ${(r.change_pct as number | null | undefined)?.toFixed?.(1)}% — no Blueprint cause identified`).join('\n') || '- none'}
 
 Natural trajectory (pre-Blueprint growth projection):
 ${report.natural_trajectory?.available
@@ -209,10 +212,10 @@ ${report.natural_trajectory?.available
   : report.natural_trajectory?.reason ?? 'not yet available'}
 
 Agents:
-- Strong ROI: ${agentsByStatus.strong.map((a: any) => `${a.agent_name} (${a.roi_ratio?.toFixed?.(1)}x)`).join(', ') || 'none'}
-- Marginal ROI: ${agentsByStatus.marginal.map((a: any) => `${a.agent_name}`).join(', ') || 'none'}
-- Review needed: ${agentsByStatus.review.map((a: any) => `${a.agent_name} (${a.outcomes_worsened} worsened of ${a.tasks_with_outcomes} measured)`).join(', ') || 'none'}
-- Too soon to tell: ${agentsByStatus.too_soon.map((a: any) => a.agent_name).join(', ') || 'none'}
+- Strong ROI: ${agentsByStatus.strong.map((a) => `${a.agent_name} (${a.roi_ratio?.toFixed?.(1)}x)`).join(', ') || 'none'}
+- Marginal ROI: ${agentsByStatus.marginal.map((a) => `${a.agent_name}`).join(', ') || 'none'}
+- Review needed: ${agentsByStatus.review.map((a) => `${a.agent_name} (${a.outcomes_worsened} worsened of ${a.tasks_with_outcomes} measured)`).join(', ') || 'none'}
+- Too soon to tell: ${agentsByStatus.too_soon.map((a) => a.agent_name).join(', ') || 'none'}
 
 # Rules for your response
 
@@ -226,28 +229,28 @@ Agents:
 This assessment will be shown directly to the business owner. Be useful, not reassuring.`;
 }
 
-function buildTemplateAssessment(report: any, agentRows: any[]): string {
+function buildTemplateAssessment(report: any, agentRows: AgentROIRow[]): string {
   const parts: string[] = [];
   parts.push(report.narrative);
   parts.push('');
 
-  const strong = agentRows.filter((a: any) => a.status === 'strong');
-  const review = agentRows.filter((a: any) => a.status === 'review_needed');
-  const tooSoon = agentRows.filter((a: any) => a.status === 'too_soon');
+  const strong = agentRows.filter((a) => a.status === 'strong');
+  const review = agentRows.filter((a) => a.status === 'review_needed');
+  const tooSoon = agentRows.filter((a) => a.status === 'too_soon');
 
   if (strong.length > 0) {
     parts.push(
-      `Working well: ${strong.map((a: any) => `${a.agent_name} (${a.roi_ratio?.toFixed?.(1)}x ROI)`).join(', ')}.`
+      `Working well: ${strong.map((a) => `${a.agent_name} (${a.roi_ratio?.toFixed?.(1)}x ROI)`).join(', ')}.`
     );
   }
   if (review.length > 0) {
     parts.push(
-      `Not working: ${review.map((a: any) => `${a.agent_name} (${a.outcomes_worsened}/${a.tasks_with_outcomes} outcomes worsened)`).join(', ')}. ` +
+      `Not working: ${review.map((a) => `${a.agent_name} (${a.outcomes_worsened}/${a.tasks_with_outcomes} outcomes worsened)`).join(', ')}. ` +
       `Consider pausing or tightening these agents' task-proposal thresholds.`
     );
   } else if (tooSoon.length > 0) {
     parts.push(
-      `Not known yet: ${tooSoon.map((a: any) => a.agent_name).join(', ')} — fewer than 5 measured outcomes, insufficient data.`
+      `Not known yet: ${tooSoon.map((a) => a.agent_name).join(', ')} — fewer than 5 measured outcomes, insufficient data.`
     );
   }
 

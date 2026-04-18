@@ -11,24 +11,58 @@
  * These two contexts NEVER mix.
  */
 
+import type { Database } from 'bun:sqlite';
+
+// ─── GitHub response shapes ───────────────────────────────────────────────────
+
+interface GitHubIssueResponse {
+  number: number;
+  html_url: string;
+  id: number;
+}
+
+interface GitHubPRResponse {
+  number: number;
+  html_url: string;
+}
+
+interface GitHubRefResponse {
+  object?: { sha?: string };
+}
+
+interface GitHubFileResponse {
+  content?: string;
+  sha?: string;
+}
+
+interface GitHubRateLimitResponse {
+  rate?: { remaining?: number };
+}
+
+// ─── DB row shape ─────────────────────────────────────────────────────────────
+
+interface SettingsRow {
+  value: string;
+}
+
 const GITHUB_API = 'https://api.github.com';
 
 const BLUEPRINT_OWNER = 'chrisgwynne';
 const BLUEPRINT_REPO  = 'Blueprint';
 
-function parseJsonValue(raw: any): any {
+function parseJsonValue(raw: unknown): unknown {
   if (raw == null) return null;
-  try { return JSON.parse(raw); } catch { return raw; }
+  try { return JSON.parse(String(raw)); } catch { return raw; }
 }
 
 /**
  * Is the user's Blueprint GitHub integration enabled?
  */
-export function isBlueprintGitHubEnabled(db: any): boolean {
+export function isBlueprintGitHubEnabled(db: Database): boolean {
   try {
     const row = db.prepare(
       "SELECT value FROM settings WHERE key = 'blueprint_github_enabled'"
-    ).get();
+    ).get() as SettingsRow | null;
     const val = parseJsonValue(row?.value);
     return val === null || val === undefined ? true : val !== false;
   } catch {
@@ -36,15 +70,16 @@ export function isBlueprintGitHubEnabled(db: any): boolean {
   }
 }
 
-function getBlueprintGitHubConfig(db: any): { token: string; owner: string; repo: string } {
+function getBlueprintGitHubConfig(db: Database): { token: string; owner: string; repo: string } {
   if (!isBlueprintGitHubEnabled(db)) {
     throw new Error('Blueprint GitHub integration is disabled in Settings.');
   }
 
   const row = db.prepare(
     "SELECT value FROM settings WHERE key = 'blueprint_github_token'"
-  ).get();
-  const token = parseJsonValue(row?.value) || process.env.BLUEPRINT_GITHUB_TOKEN;
+  ).get() as SettingsRow | null;
+  const parsedToken = parseJsonValue(row?.value);
+  const token = (typeof parsedToken === 'string' ? parsedToken : null) || process.env.BLUEPRINT_GITHUB_TOKEN;
 
   if (!token) {
     throw new Error(
@@ -59,7 +94,7 @@ function getBlueprintGitHubConfig(db: any): { token: string; owner: string; repo
 
 // ─── HTTP ─────────────────────────────────────────────────────────────────────
 
-async function githubRequest(method: string, path: string, body: any, config: { token: string; owner: string; repo: string }): Promise<any> {
+async function githubRequest(method: string, path: string, body: Record<string, unknown> | null, config: { token: string; owner: string; repo: string }): Promise<unknown> {
   const { token, owner, repo } = config;
   const url = `${GITHUB_API}/repos/${owner}/${repo}${path}`;
 
@@ -86,7 +121,7 @@ async function githubRequest(method: string, path: string, body: any, config: { 
 }
 
 // Direct request to GITHUB_API root (not repo-scoped) — used for rate limit / identity checks
-async function githubRootRequest(path: string, token: string): Promise<any> {
+async function githubRootRequest(path: string, token: string): Promise<unknown> {
   const response = await fetch(`${GITHUB_API}${path}`, {
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -108,10 +143,10 @@ async function githubRootRequest(path: string, token: string): Promise<any> {
 /**
  * Create an issue on the Blueprint repository.
  */
-export async function createBlueprintIssue({ title, body, labels = [] }: { title: string; body: string; labels?: string[] }, db: any): Promise<{ number: number; url: string; id: number }> {
+export async function createBlueprintIssue({ title, body, labels = [] }: { title: string; body: string; labels?: string[] }, db: Database): Promise<{ number: number; url: string; id: number }> {
   const config = getBlueprintGitHubConfig(db);
 
-  const issue = await githubRequest('POST', '/issues', { title, body, labels }, config);
+  const issue = await githubRequest('POST', '/issues', { title, body, labels }, config) as GitHubIssueResponse;
 
   console.log(
     `[Blueprint GitHub] Issue #${issue.number} created:`,
@@ -129,11 +164,11 @@ export async function createBlueprintIssue({ title, body, labels = [] }: { title
  * Create a draft PR on the Blueprint repository.
  * ALWAYS targets develop, ALWAYS draft.
  */
-export async function createBlueprintPR({ title, body, branch, diff }: { title: string; body: string; branch: string; diff?: string }, db: any): Promise<{ number: number; url: string; branch: string }> {
+export async function createBlueprintPR({ title, body, branch, diff }: { title: string; body: string; branch: string; diff?: string }, db: Database): Promise<{ number: number; url: string; branch: string }> {
   const config = getBlueprintGitHubConfig(db);
 
   // Get the current develop branch SHA
-  const devRef = await githubRequest('GET', '/git/refs/heads/develop', null, config).catch(() => null);
+  const devRef = await githubRequest('GET', '/git/refs/heads/develop', null, config).catch(() => null) as GitHubRefResponse | null;
   const baseSha = devRef?.object?.sha;
 
   if (!baseSha) {
@@ -160,7 +195,7 @@ export async function createBlueprintPR({ title, body, branch, diff }: { title: 
       try {
         const currentFile = await githubRequest(
           'GET', `/contents/${change.path}?ref=${fixBranch}`, null, config
-        ).catch(() => null);
+        ).catch(() => null) as GitHubFileResponse | null;
 
         if (!currentFile?.content) continue;
 
@@ -176,8 +211,8 @@ export async function createBlueprintPR({ title, body, branch, diff }: { title: 
         }, config);
 
         appliedAny = true;
-      } catch (fileErr: any) {
-        console.warn(`[Blueprint GitHub] Could not apply diff to ${change.path}:`, fileErr.message);
+      } catch (fileErr: unknown) {
+        console.warn(`[Blueprint GitHub] Could not apply diff to ${change.path}:`, fileErr instanceof Error ? fileErr.message : String(fileErr));
       }
     }
   }
@@ -194,7 +229,7 @@ export async function createBlueprintPR({ title, body, branch, diff }: { title: 
     head: fixBranch,
     base: 'develop',  // ALWAYS develop
     draft: true,       // ALWAYS draft
-  }, config);
+  }, config) as GitHubPRResponse;
 
   console.log(
     `[Blueprint GitHub] Draft PR #${pr.number} created:`,
@@ -211,7 +246,7 @@ export async function createBlueprintPR({ title, body, branch, diff }: { title: 
 /**
  * Check whether Blueprint GitHub is configured and the token is valid.
  */
-export async function isBlueprintGitHubConfigured(db: any): Promise<{
+export async function isBlueprintGitHubConfigured(db: Database): Promise<{
   configured: boolean;
   enabled?: boolean;
   repo: string;
@@ -232,7 +267,7 @@ export async function isBlueprintGitHubConfigured(db: any): Promise<{
   try {
     const config = getBlueprintGitHubConfig(db);
     // Use rate_limit endpoint — cheap, doesn't count against limit
-    const rateLimit = await githubRootRequest('/rate_limit', config.token);
+    const rateLimit = await githubRootRequest('/rate_limit', config.token) as GitHubRateLimitResponse;
     return {
       configured: true,
       enabled: true,
@@ -240,13 +275,13 @@ export async function isBlueprintGitHubConfigured(db: any): Promise<{
       owner: config.owner,
       rate_limit_remaining: rateLimit?.rate?.remaining ?? null,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     return {
       configured: false,
       enabled: true,
       repo: `${BLUEPRINT_OWNER}/${BLUEPRINT_REPO}`,
       owner: BLUEPRINT_OWNER,
-      error: err.message,
+      error: err instanceof Error ? err.message : String(err),
     };
   }
 }
@@ -265,7 +300,7 @@ function parseDiffToFileChanges(diff: string): Array<{ path: string; patch: stri
   for (const block of fileBlocks) {
     const pathMatch = block.match(/a\/(.+?) b\//);
     if (!pathMatch) continue;
-    files.push({ path: pathMatch[1], patch: block });
+    files.push({ path: pathMatch[1] ?? '', patch: block });
   }
 
   return files;
@@ -283,7 +318,7 @@ function applyDiff(original: string, patch: string): string | null {
     // Only apply if there is exactly one hunk (safety constraint)
     if (hunks.length !== 1) return null;
 
-    const changeLines = hunks[0][5].split('\n');
+    const changeLines = (hunks[0]![5] ?? '').split('\n');
     const removals = changeLines.filter(l => l.startsWith('-')).map(l => l.slice(1));
     const additions = changeLines.filter(l => l.startsWith('+')).map(l => l.slice(1));
 

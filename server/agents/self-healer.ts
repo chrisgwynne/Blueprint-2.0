@@ -527,7 +527,7 @@ function gatherSourceContext(error: Error): SourceContext {
     .filter(l => l.includes('.js:') && !l.includes('node_modules') && l.includes('Blueprint'))
     .map(l => {
       const m = l.match(/\((.+\.js):(\d+):\d+\)/) || l.match(/at (.+\.js):(\d+):\d+/);
-      return m ? { file: m[1], line: parseInt(m[2]) } : null;
+      return m ? { file: m[1] ?? '', line: parseInt(m[2] ?? '0') } : null;
     })
     .filter((f): f is { file: string; line: number } => f !== null)
     .slice(0, 3);
@@ -637,7 +637,7 @@ Set code_diff to null if you are not confident in the fix.`;
     });
     const raw = result?.content ?? '';
     const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
-    return JSON.parse((m ? m[1] : raw).trim()) as HealingDiagnosis;
+    return JSON.parse((m?.[1] ?? raw).trim()) as HealingDiagnosis;
   } catch (e) {
     console.warn('[self-heal] diagnoseAndFix LLM failed:', (e as Error).message);
     return null;

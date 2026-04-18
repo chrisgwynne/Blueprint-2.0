@@ -313,7 +313,7 @@ const connector = {
     }
 
     let flowRevenueTotal = 0;
-    const revenueByClass: Record<string, number> = { abandoned_cart: 0, welcome: 0, post_purchase: 0, win_back: 0, browse_abandon: 0 };
+    const revenueByClass: Record<'abandoned_cart' | 'welcome' | 'post_purchase' | 'win_back' | 'browse_abandon', number> = { abandoned_cart: 0, welcome: 0, post_purchase: 0, win_back: 0, browse_abandon: 0 };
     const flowRows: Array<Record<string, unknown>> = [];
     for (const f of flows) {
       const attrs = f.attributes as Record<string, unknown> | undefined;
@@ -322,7 +322,7 @@ const connector = {
       const recipients = Number(stats.recipients ?? 0);
       flowRevenueTotal += revenue;
       const cls = classifyFlow(attrs?.name as string | undefined);
-      if (cls && revenueByClass[cls] != null) revenueByClass[cls] += revenue;
+      if (cls && cls in revenueByClass) { const rc = revenueByClass as Record<string, number>; rc[cls] = (rc[cls] ?? 0) + revenue; }
       flowRows.push({
         id: f.id,
         name: (attrs?.name as string | undefined) ?? '(unnamed)',

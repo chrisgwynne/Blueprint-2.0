@@ -25,7 +25,7 @@ const AGENTS_DIR = resolve(__dirname, '../agents');
 const MAX_INBOX_ENTRIES = 50;
 const TRIGGER_COOLDOWN_MINUTES = 30;
 
-interface InboxEntry {
+export interface InboxEntry {
   from: string;
   to: string;
   business_id: string | null;
