@@ -545,14 +545,32 @@ async function start(): Promise<void> {
 
     // Start Telegram polling
     try {
-      const { startTelegramPolling } = await import('./notifications/telegram.js');
+      const { startTelegramPolling, stopTelegramPolling } = await import('./notifications/telegram.js');
       startTelegramPolling();
+
+      // Graceful shutdown — stop polling and close the server cleanly
+      const shutdown = async (signal: string) => {
+        console.log(`[startup] Received ${signal}, shutting down gracefully...`);
+        stopTelegramPolling();
+        if (server) {
+          server.close(() => {
+            console.log('[startup] HTTP server closed.');
+            process.exit(0);
+          });
+          // Force exit after 10s if graceful close hangs
+          setTimeout(() => { console.error('[startup] Force-exit after timeout.'); process.exit(1); }, 10_000);
+        } else {
+          process.exit(0);
+        }
+      };
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+      process.on('SIGINT', () => shutdown('SIGINT'));
     } catch (err: any) {
       console.warn('[startup] Telegram polling not started:', err.message);
     }
 
     // Start server
-    app.listen(PORT, () => {
+    const server = app.listen(PORT, () => {
       console.log(`[startup] Blueprint server running on http://localhost:${PORT}`);
       console.log(`[startup] Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`[startup] API health: http://localhost:${PORT}/api/health`);
