@@ -1,6 +1,7 @@
 import type { CompleteOptions, CompleteResult, ProviderCredentials } from './types.js';
 
 const DEFAULT_API_URL = 'https://api.openai.com/v1';
+const REQUEST_TIMEOUT_MS = 60_000;
 
 export const KNOWN_MODELS: string[] = [
   'gpt-4o',
@@ -27,7 +28,6 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
 // All three call sites accept a baseUrl override so OpenAI-compatible
 // providers (MiniMax, Kimi, custom) can reuse this adapter without
 // duplicating the fetch/parse logic.
-
 export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 4096 }: CompleteOptions): Promise<CompleteResult> {
   const root = baseUrl || DEFAULT_API_URL;
   const allMessages: Array<{ role: string; content: string }> = [];
@@ -51,6 +51,12 @@ export async function complete({ apiKey, baseUrl, model, messages, system, tempe
       max_tokens,
       temperature,
     }),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  }).catch(err => {
+    if (err.name === 'TimeoutError') {
+      throw new Error(`OpenAI API request timed out after ${REQUEST_TIMEOUT_MS / 1000}s. Check network and provider status.`);
+    }
+    throw err;
   });
 
   if (!response.ok) {
@@ -76,6 +82,7 @@ export async function listModels({ apiKey, baseUrl }: ProviderCredentials = {}):
   try {
     const response = await fetch(`${root}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return KNOWN_MODELS;
     const data = await response.json() as { data?: Array<{ id: string }> };
@@ -90,6 +97,7 @@ export async function validateApiKey({ apiKey, baseUrl, ...rest }: ProviderCrede
   try {
     const modelsRes = await fetch(`${root}/models`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(10_000),
     });
     if (modelsRes.ok) return true;
 
@@ -109,6 +117,7 @@ export async function validateApiKey({ apiKey, baseUrl, ...rest }: ProviderCrede
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
       }),
+      signal: AbortSignal.timeout(10_000),
     });
     return chatRes.ok;
   } catch {
