@@ -156,6 +156,17 @@ export function startTelegramPolling(): void {
   if ((pollingInterval as any)?.unref) (pollingInterval as any).unref();
 }
 
+/**
+ * Stop the Telegram polling loop. Used during graceful shutdown.
+ */
+export function stopTelegramPolling(): void {
+  if (pollingInterval) {
+    clearInterval(pollingInterval);
+    pollingInterval = null;
+    console.log('[telegram] Polling loop stopped.');
+  }
+}
+
 async function pollBot({ botToken, chatId, businessId, businessName }: { botToken: string; chatId: string; businessId: string | null; businessName: string }): Promise<void> {
   const offset = (updateOffsets.get(botToken) ?? 0);
 
