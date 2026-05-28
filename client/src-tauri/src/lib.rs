@@ -445,15 +445,17 @@ pub fn run() {
                 format!("http://localhost:{port}").parse().unwrap()
             );
 
-            WebviewWindowBuilder::new(app, "main", win_url)
+            let win = WebviewWindowBuilder::new(app, "main", win_url)
                 .title("Blueprint")
                 .inner_size(1280.0, 800.0)
                 .min_inner_size(960.0, 600.0)
                 .visible(cfg!(debug_assertions))
                 .decorations(true)
-                .center()
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .build()?;
+                .center();
+            // Overlay title bar (traffic lights over content) is macOS-only.
+            #[cfg(target_os = "macos")]
+            let win = win.title_bar_style(tauri::TitleBarStyle::Overlay);
+            win.build()?;
 
             // Show the window once the sidecar's HTTP port accepts connections.
             #[cfg(not(debug_assertions))]
