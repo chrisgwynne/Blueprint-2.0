@@ -9,9 +9,11 @@ import db from './db/db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Load .env from the repo root regardless of which directory the server
-// process was launched from (bun run --cwd server sets CWD to server/).
-loadEnv({ path: resolve(__dirname, '../.env') });
+// When running as a Tauri sidecar all config arrives via process.env (set by
+// the Rust host).  Only load the .env file in standalone / dev mode.
+if (!process.env.BLUEPRINT_SIDECAR) {
+  loadEnv({ path: resolve(__dirname, '../.env') });
+}
 
 // ─── Session Store (SQLite-backed) ──────────────────────────────────────────
 
@@ -451,9 +453,11 @@ const mountRoutes = async () => {
   app.get('/docs/:section', serveDocIndex);
   app.get('/docs/:section/:page', serveDoc);
 
-  // Serve static client files in production
+  // Serve static client files in production.
+  // CLIENT_DIST_PATH is set by the Tauri host to the bundled resources path.
   if (process.env.NODE_ENV === 'production') {
-    const clientDistPath = resolve(__dirname, '../client/dist');
+    const clientDistPath = process.env.CLIENT_DIST_PATH
+      || resolve(__dirname, '../client/dist');
     if (existsSync(clientDistPath)) {
       app.use(express.static(clientDistPath));
       app.get('*', (req, res) => {
@@ -499,7 +503,7 @@ async function start(): Promise<void> {
       const { existsSync: fsExists, mkdirSync: fsMkdir, cpSync, readFileSync: fsRead, writeFileSync: fsWrite } = await import('fs');
       const { resolve: fsResolve, join: fsJoin } = await import('path');
       const yaml = (await import('js-yaml')).default;
-      const AGENTS_DIR = fsResolve(__dirname, 'agents');
+      const AGENTS_DIR = process.env.AGENTS_DIR || fsResolve(__dirname, 'agents');
       const TEMPLATES_DIR = fsJoin(AGENTS_DIR, 'templates');
       const liveDir = fsJoin(AGENTS_DIR, 'conductor');
       const templateDir = fsJoin(TEMPLATES_DIR, 'conductor');

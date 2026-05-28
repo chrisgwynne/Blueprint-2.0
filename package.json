@@ -15,7 +15,11 @@
     "build": "bun run --cwd client build",
     "start": "bun run --cwd server start",
     "db:init": "bun run --cwd server db:init",
-    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck"
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck",
+    "build:sidecar": "bun scripts/build-sidecar.js",
+    "tauri": "bun run --cwd client tauri",
+    "tauri:dev": "bun run --cwd client tauri dev",
+    "tauri:build": "bun run --cwd client tauri build"
   },
   "devDependencies": {
     "typescript": "^6.0.2"
