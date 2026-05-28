@@ -433,6 +433,73 @@ const mountRoutes = async () => {
     }
   });
 
+  // ─── Internal status endpoint (Tauri tray polling) ─────────────────────────
+  // Protected by BLUEPRINT_INTERNAL_TOKEN + localhost-only check in isAuthenticated.
+  app.get('/api/internal/status', _isAuth, async (req, res) => {
+    try {
+      let dbOk = false;
+      try { db.prepare('SELECT 1').get(); dbOk = true; } catch {}
+
+      const hasError = (() => {
+        try {
+          return (db.prepare(`
+            SELECT COUNT(*) as n FROM connectors WHERE status = 'error'
+          `).get() as any)?.n > 0;
+        } catch { return false; }
+      })();
+      const hasStale = (() => {
+        try {
+          return (db.prepare(`
+            SELECT COUNT(*) as n FROM connectors
+            WHERE status = 'connected'
+            AND last_sync < datetime('now', '-24 hours')
+          `).get() as any)?.n > 0;
+        } catch { return false; }
+      })();
+      const conductorFails = (() => {
+        try {
+          const rows = db.prepare(
+            "SELECT status FROM agent_runs WHERE agent_id = 'conductor' ORDER BY started_at DESC LIMIT 5"
+          ).all() as { status: string }[];
+          const firstOk = rows.findIndex((r) => r.status !== 'failed');
+          return firstOk === -1 ? rows.length : firstOk;
+        } catch { return 0; }
+      })();
+      const paused = (() => {
+        try {
+          return JSON.parse(
+            (db.prepare("SELECT value FROM settings WHERE key = 'agents_globally_paused'").get() as any)?.value ?? 'false'
+          );
+        } catch { return false; }
+      })();
+
+      let health: 'healthy' | 'degraded' | 'critical' = 'healthy';
+      if (!dbOk || hasError || conductorFails >= 3) health = 'critical';
+      else if (hasStale || paused) health = 'degraded';
+
+      const pendingTasks = (() => {
+        try {
+          return (db.prepare(`
+            SELECT id, title, action_type, created_at
+            FROM tasks
+            WHERE status = 'pending_approval'
+            ORDER BY created_at ASC
+            LIMIT 20
+          `).all() as any[]).map((t) => ({
+            id: t.id as string,
+            title: (t.title ?? t.action_type ?? 'Task') as string,
+            action_type: t.action_type as string,
+            created_at: t.created_at as string,
+          }));
+        } catch { return []; }
+      })();
+
+      res.json({ health, tasks: pendingTasks });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Telegram webhook (no auth — validated by Telegram's IP or secret header)
   app.post('/api/telegram/webhook', (req, res, next) => {
     const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;

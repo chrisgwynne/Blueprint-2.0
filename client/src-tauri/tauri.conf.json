@@ -14,12 +14,6 @@
     "security": {
       "csp": null,
       "dangerousDisableAssetCspModification": true
-    },
-    "trayIcon": {
-      "id": "main",
-      "iconPath": "icons/tray-icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "Blueprint"
     }
   },
   "bundle": {
