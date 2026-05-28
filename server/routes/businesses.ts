@@ -179,8 +179,42 @@ router.delete('/:id', (req: Request, res: Response) => {
 
     const before = parseRow(existing);
 
-    // Hard delete
-    db.prepare('DELETE FROM businesses WHERE id = ?').run(id);
+    // Cascade delete all child rows in dependency order so FK constraints are satisfied.
+    // Tables with FK chains (e.g. task_events → tasks) must be cleared leaf-first.
+    db.transaction(() => {
+      // Leaf tables that reference tasks/signals/connectors
+      db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(id);
+      db.prepare(`DELETE FROM task_outcomes WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(id);
+      db.prepare(`DELETE FROM chat_reactions WHERE message_id IN (SELECT id FROM chat_messages WHERE business_id = ?)`).run(id);
+      db.prepare(`DELETE FROM connector_syncs WHERE connector_id IN (SELECT id FROM connectors WHERE business_id = ?)`).run(id);
+
+      // Tables that directly reference businesses (or have business_id without constraint)
+      const directTables = [
+        'agent_runs', 'analysis_runs', 'signals', 'tasks', 'missions',
+        'metrics', 'signal_clusters', 'chat_messages', 'chat_conversations',
+        'notifications', 'kb_docs', 'scenarios', 'conflicts', 'retrospectives',
+        'goal_suggestions', 'goal_checks', 'goals', 'projects',
+        'workflows', 'workflow_runs', 'workflow_step_runs',
+        'action_memory', 'seasonal_patterns', 'investigations',
+        'file_backups', 'server_file_cache', 'baselines', 'roi_snapshots',
+        'counterfactual_estimates', 'attribution_records', 'connector_gaps',
+        'intelligence_events', 'job_queue',
+      ];
+      for (const table of directTables) {
+        try {
+          db.prepare(`DELETE FROM ${table} WHERE business_id = ?`).run(id);
+        } catch {
+          // Table may not exist in this DB version — skip safely
+        }
+      }
+
+      // Delete connectors last (signals/metrics reference them)
+      db.prepare('DELETE FROM connectors WHERE business_id = ?').run(id);
+
+      // Finally the business itself
+      db.prepare('DELETE FROM businesses WHERE id = ?').run(id);
+    })();
+
     audit(id, 'business', id, 'delete', (req.session as any).userId, before, null);
 
     return res.json({ ok: true });

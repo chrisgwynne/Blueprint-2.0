@@ -1,18 +1,14 @@
 id: trend-spotter
-name: "Trend Spotter"
-title: "Analytics & Opportunity Intelligence"
-avatar: "📈"
-version: "1.0.0"
+name: Trend Spotter
+title: Analytics & Opportunity Intelligence
+avatar: 📈
+version: 1.0.0
 status: active
-created_at: "2026-01-01"
-
+created_at: '2026-01-01'
 llm:
   temperature: 0.5
   max_tokens: 3000
-  
-  
-  cost_cap_daily_usd: 1.00
-
+  cost_cap_daily_usd: 1
 connectors_required: []
 connectors_optional:
   - gsc
@@ -20,19 +16,21 @@ connectors_optional:
   - shopify
   - social
   - buffer
-
 schedule:
   - id: weekly-opportunity-scan
-    cron: "0 10 * * 1"
-    task: "Identify growth opportunities. Focus on: keywords gaining momentum (position improving + impressions rising), product pages with high traffic but low conversion, and emerging search clusters not yet covered. Propose 2-3 specific actions."
+    cron: 0 10 * * 1
+    task: >-
+      Identify growth opportunities. Focus on: keywords gaining momentum (position improving +
+      impressions rising), product pages with high traffic but low conversion, and emerging search
+      clusters not yet covered. Propose 2-3 specific actions.
   - id: monthly-trend-report
-    cron: "0 9 1 * *"
-    task: "Monthly trend analysis. Compare this month vs last month. Which channels are growing fastest? Where is growth slowing? What keyword clusters are emerging? Surface 3 biggest opportunities and 1 key risk."
-
+    cron: 0 9 1 * *
+    task: >-
+      Monthly trend analysis. Compare this month vs last month. Which channels are growing fastest?
+      Where is growth slowing? What keyword clusters are emerging? Surface 3 biggest opportunities
+      and 1 key risk.
 trust_tier: yellow
 approval_mode: requires_approval
-
 notification_channels:
   - dashboard
-
 memory_docs: []

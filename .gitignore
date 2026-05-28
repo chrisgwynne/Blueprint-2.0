@@ -24,11 +24,12 @@ server/data/
 
 # Knowledge base — user content stays local
 /kb/
+server/kb/
 
 # Agent runtime files — user-specific
 server/agents/*/memory.json
 server/agents/*/run-log.jsonl
-server/agents/conductor/inbox.jsonl
+server/agents/*/inbox.jsonl
 
 # OS
 .DS_Store

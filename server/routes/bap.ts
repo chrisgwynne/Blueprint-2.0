@@ -49,6 +49,13 @@ function safeJSON(val: unknown, fallback: unknown = []): unknown {
   try { return JSON.parse(val as string); } catch { return fallback; }
 }
 
+// Strip <think>...</think> reasoning blocks from content posted by external agents
+// (e.g. Hermes using MiniMax-M2 / DeepSeek-R1 which emit chain-of-thought inline)
+function stripThink(text: string | null | undefined): string | null {
+  if (!text) return text ?? null;
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim() || null;
+}
+
 function businessRow(businessId: string): Record<string, unknown> | undefined {
   return db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId) as Record<string, unknown> | undefined;
 }
@@ -362,7 +369,7 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
       VALUES (?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
     `).run(
       id, businessId, connector_id ?? null,
-      type, severity, title, description ?? null,
+      type, severity, stripThink(title) ?? title, stripThink(description),
       JSON.stringify(data ?? {}), confidence ?? null,
       bapAgent.id as string
     );
@@ -475,8 +482,8 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
     const task = createTask({
       business_id: businessId,
       signal_id: signal_id ?? null,
-      title,
-      description: description ?? null,
+      title: stripThink(title) ?? title,
+      description: stripThink(description),
       proposed_by: `bap:${bapAgent.id as string}`,
       assigned_to: assigned_to ?? null,
       action_type: action_type ?? null,

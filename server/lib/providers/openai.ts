@@ -28,7 +28,7 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
 // All three call sites accept a baseUrl override so OpenAI-compatible
 // providers (MiniMax, Kimi, custom) can reuse this adapter without
 // duplicating the fetch/parse logic.
-export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 4096 }: CompleteOptions): Promise<CompleteResult> {
+export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 8192 }: CompleteOptions): Promise<CompleteResult> {
   const root = baseUrl || DEFAULT_API_URL;
   const allMessages: Array<{ role: string; content: string }> = [];
   if (system) allMessages.push({ role: 'system', content: system });

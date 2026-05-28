@@ -39,6 +39,7 @@ interface InvestigationContext {
   kb_context?: string | null;
   seasonal_context?: string | null;
   all_connected_connectors?: string[];
+  theme_files?: Record<string, string> | null;
   [key: string]: unknown;
 }
 
@@ -55,6 +56,7 @@ export function buildInvestigationPrompt(task: InvestigationTask, context: Inves
   const inFlightBlock = buildInFlightBlock(context.in_flight_actions);
   const outcomesBlock = buildOutcomesBlock(context.recent_outcomes);
   const goalsBlock = buildGoalsBlock(context.active_goals);
+  const themeFilesBlock = buildThemeFilesBlock(context.theme_files);
 
   const actionTypesBlock = buildActionTypesBlock(context.all_connected_connectors ?? []);
 
@@ -64,6 +66,20 @@ export function buildInvestigationPrompt(task: InvestigationTask, context: Inves
   const kbSanitised = sanitiseExternalContent(rawKbContext, 'kb_context') as { content: string };
   const kbContext = wrapInContentBoundary(kbSanitised.content, 'kb_context') as string;
   const seasonalContext = _truncate(context.seasonal_context ?? null, MAX_SEASONAL_CHARS) || 'No seasonal patterns detected yet.';
+
+  const fullFileContent = context.theme_files?.['layout/theme.liquid'] ?? '';
+  const themeFileIsTruncated = fullFileContent.length > MAX_THEME_FILE_CHARS;
+  const themeSection = themeFilesBlock
+    ? `\n# SHOPIFY THEME FILES (read by Blueprint from the live theme)\n` +
+      `When proposing a shopify_theme_edit action:\n` +
+      `  • Set file_key to "layout/theme.liquid"\n` +
+      (themeFileIsTruncated
+        ? `  • Only the <head> section is shown (file too large to display in full)\n` +
+          `  • Set new_content to the COMPLETE modified <head>…</head> block only — Blueprint will splice it into the live file\n`
+        : `  • The complete file is shown below — set new_content to the ENTIRE modified file\n`) +
+      `\n` +
+      themeFilesBlock + '\n'
+    : '';
 
   return `Investigate this specific business problem and produce actionable findings.
 
@@ -92,7 +108,7 @@ ${kbContext}
 
 # SEASONAL CONTEXT
 ${seasonalContext}
-
+${themeSection}
 ---
 
 Produce a complete investigation report as JSON.
@@ -183,6 +199,7 @@ const MAX_METRICS_BLOCK_CHARS   = 4_000;
 const MAX_SIGNAL_DATA_CHARS     = 500;
 const MAX_KB_CONTEXT_CHARS      = 2_000;
 const MAX_SEASONAL_CHARS        = 1_000;
+const MAX_THEME_FILE_CHARS      = 10_000;
 
 function buildMetricsBlock(context: InvestigationContext): string | null {
   const entries = Object.entries(context.current_metrics);
@@ -276,6 +293,25 @@ function buildGoalsBlock(goals: Array<{ title: string; metric_name: string; metr
   ).join('\n');
 }
 
+function buildThemeFilesBlock(themeFiles: Record<string, string> | null | undefined): string | null {
+  if (!themeFiles) return null;
+
+  const fullFile = themeFiles['layout/theme.liquid'] ?? '';
+  const headSection = themeFiles['layout/theme.liquid#head'] ?? fullFile;
+
+  if (!fullFile && !headSection) return null;
+
+  // Show the full file if it fits — LLM needs the complete file to write new_content.
+  // If too large, show the <head> section only (still useful for targeted changes).
+  const fitsInFull = fullFile.length <= MAX_THEME_FILE_CHARS;
+  const display = fitsInFull ? fullFile : headSection;
+  const content = _truncate(display || fullFile, MAX_THEME_FILE_CHARS);
+  if (!content) return null;
+
+  const label = fitsInFull ? 'layout/theme.liquid (complete file)' : 'layout/theme.liquid (<head> section — rest of file omitted)';
+  return [`## ${label}`, '```liquid', content, '```'].join('\n');
+}
+
 // ─── Action types filtered to connected connectors ────────────────────────────
 
 // Maps connector type → action types it enables.
@@ -295,7 +331,7 @@ const ACTION_TYPE_PAYLOADS: Record<string, string> = {
   content_draft:              'payload: { content_type: "blog_post|landing_page|product_description|email", title: string, brief: string, target_keyword: string, word_count: number }',
   meta_update:                'payload: { url: string, field: "title|description", current: string, proposed: string }',
   shopify_description_update: 'payload: { product_id: string, product_title: string, current_description: string, proposed_description: string }',
-  shopify_theme_edit:         'payload: { file_key: string, change_description: string, change_type: "add_defer|add_async|image_optimization|remove_render_blocking|css_optimization|other" }',
+  shopify_theme_edit:         'payload: { file_key: string, new_content: string, change_description: string }',
   shopify_product_create:     'payload: { title: string, description: string, product_type: string }',
   shopify_page_create:        'payload: { title: string, body_html: string, handle: string }',
   shopify_meta_update:        'payload: { resource_type: "product|page|collection", resource_id: string, seo_title: string, seo_description: string }',

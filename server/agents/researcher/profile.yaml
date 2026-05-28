@@ -1,0 +1,33 @@
+id: researcher
+name: Researcher
+title: Competitive Intelligence Analyst
+avatar: 🔬
+version: 1.0.0
+status: active
+created_at: '2026-01-01'
+llm:
+  temperature: 0.5
+  max_tokens: 3000
+  cost_cap_daily_usd: 1
+connectors_required: []
+connectors_optional: []
+schedule:
+  - id: weekly-competitor-scan
+    cron: 0 11 * * 2
+    task: >-
+      Analyse search visibility patterns vs competitive benchmark. Identify keyword clusters where
+      competitors outrank us. Find gaps in our content coverage vs what the market is searching for.
+      Propose 2-3 strategic responses.
+  - id: monthly-landscape-review
+    cron: 0 10 15 * *
+    task: >-
+      Monthly competitive landscape review. Map the search landscape for our top 20 keywords.
+      Identify new entrants, ranking shifts, and emerging topic clusters. Produce strategic brief
+      for Conductor.
+trust_tier: yellow
+approval_mode: requires_approval
+notification_channels:
+  - dashboard
+memory_docs: []
+required_connectors: []
+preferred_connectors: []

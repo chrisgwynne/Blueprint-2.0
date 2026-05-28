@@ -156,6 +156,51 @@ const KEYWORD_CONNECTOR_MAP: Record<string, string[]> = {
   'goal': ['ga4'],
 };
 
+// ─── Shopify theme context ────────────────────────────────────────────────────
+
+const THEME_INVESTIGATION_KEYWORDS = [
+  'javascript', ' js ', '.js', 'css', 'script', 'performance', 'lcp', 'speed',
+  'unused', 'render blocking', 'render-blocking', 'defer', 'async', 'pagespeed',
+  'bundle', 'theme', 'liquid', 'stylesheet', 'asset',
+];
+
+async function fetchShopifyThemeContext(taskText: string, businessId: string): Promise<Record<string, string> | null> {
+  const isRelevant = THEME_INVESTIGATION_KEYWORDS.some(kw => taskText.includes(kw));
+  if (!isRelevant) return null;
+
+  try {
+    const connRow = db.prepare(
+      `SELECT credentials FROM connectors WHERE business_id = ? AND type = 'shopify' AND status = 'connected' LIMIT 1`
+    ).get(businessId) as { credentials: string } | null;
+    if (!connRow?.credentials) return null;
+
+    const { decrypt } = await import('../../crypto.js') as { decrypt(s: string): string };
+    const creds = JSON.parse(decrypt(connRow.credentials)) as Record<string, string>;
+
+    const { default: shopify } = await import('../../connectors/shopify/index.js') as {
+      default: {
+        getActiveThemeId(creds: Record<string, string>): Promise<string | number>;
+        readThemeFile(creds: Record<string, string>, themeId: string | number, fileKey: string): Promise<{ value?: string | null; attachment?: string }>;
+      };
+    };
+
+    const themeId = await shopify.getActiveThemeId(creds);
+    const { value } = await shopify.readThemeFile(creds, themeId, 'layout/theme.liquid');
+    if (!value) return null;
+
+    // Extract <head>…</head> for display in the prompt; store full file for new_content generation
+    const headMatch = value.match(/<head[\s\S]*?<\/head>/i);
+    const headSection = headMatch ? headMatch[0] : value.slice(0, 12288);
+
+    return {
+      'layout/theme.liquid': value,
+      'layout/theme.liquid#head': headSection,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function safeParseJSON(val: unknown): unknown {
@@ -348,6 +393,9 @@ export async function assembleInvestigationContext(task: InvestigationTask, busi
   // 11. Business info
   const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId) as Record<string, unknown> | null;
 
+  // 12. Shopify theme files — for performance/JS/CSS investigations
+  const themeFiles = await fetchShopifyThemeContext(text, businessId);
+
   return {
     task,
     signal,
@@ -363,5 +411,6 @@ export async function assembleInvestigationContext(task: InvestigationTask, busi
     active_goals: activeGoals,
     seasonal_context: seasonalContext,
     business,
+    theme_files: themeFiles,
   };
 }

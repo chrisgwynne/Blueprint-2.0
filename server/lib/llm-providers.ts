@@ -158,6 +158,9 @@ export async function runLLM(providerId: string, model: string, { messages, syst
     max_tokens,
   });
 
+  // Strip <think>...</think> reasoning blocks emitted by models like DeepSeek-R1 / QwQ
+  const content = result.content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+
   // Use provider-reported cost if available (claude-cli reports actual cost), else estimate
   const costUsd = result.cost_usd != null
     ? result.cost_usd
@@ -165,7 +168,7 @@ export async function runLLM(providerId: string, model: string, { messages, syst
         ? entry.adapter.estimateCost(model, result.usage.input_tokens, result.usage.output_tokens)
         : 0);
 
-  return { ...result, cost_usd: costUsd };
+  return { ...result, content, cost_usd: costUsd };
 }
 
 // ─── Model listing ────────────────────────────────────────────────────────────

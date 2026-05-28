@@ -285,7 +285,12 @@ router.delete('/:id', (req: Request, res: Response) => {
     const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | undefined;
     if (!existing) return res.status(404).json({ error: 'Connector not found.' });
 
-    db.prepare('DELETE FROM connectors WHERE id = ?').run(id);
+    db.transaction(() => {
+      db.prepare('DELETE FROM connector_syncs WHERE connector_id = ?').run(id);
+      db.prepare('DELETE FROM metrics WHERE connector_id = ?').run(id);
+      db.prepare('DELETE FROM signals WHERE connector_id = ?').run(id);
+      db.prepare('DELETE FROM connectors WHERE id = ?').run(id);
+    })();
     audit(existing.business_id, 'connector', id, 'delete', (req.session as any).userId, safeRow(existing), null);
 
     return res.json({ ok: true });

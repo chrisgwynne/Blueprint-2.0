@@ -80,6 +80,7 @@ export const getMe = () => get('/auth/me')
 export const getBusinesses = () => get('/businesses')
 export const createBusiness = (data: unknown) => post('/businesses', data)
 export const updateBusiness = (id: string, data: unknown) => patch(`/businesses/${id}`, data)
+export const deleteBusiness = (id: string) => del(`/businesses/${id}`)
 
 // ============================================
 // Dashboard

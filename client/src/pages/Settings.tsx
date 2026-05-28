@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, deleteBusiness, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import type { Business } from '../types/index.js'
@@ -199,6 +199,8 @@ function BusinessTab() {
   const [showNewBusiness, setShowNewBusiness] = useState(false)
   const [newBizForm, setNewBizForm] = useState({ name: '', type: '' })
   const [creating, setCreating] = useState(false)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const logoInputRef = useRef<HTMLInputElement>(null)
   const addNotification = useStore((s) => s.addNotification) as (n: { type: string; title?: string; message: string }) => void
 
@@ -268,6 +270,24 @@ function BusinessTab() {
     }
   }
 
+  async function handleDeleteBusiness(id: string) {
+    setDeleting(true)
+    try {
+      await deleteBusiness(id)
+      const remaining = businesses.filter((b) => b.id !== id)
+      setBusinesses(remaining)
+      if (currentBusiness?.id === id) {
+        setCurrentBusiness(remaining[0] ?? null as unknown as Business)
+      }
+      setConfirmDeleteId(null)
+      addNotification({ type: 'success', message: 'Business deleted' })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* Business Switcher */}
@@ -275,31 +295,61 @@ function BusinessTab() {
         <Section title="Your Businesses" description="Switch between businesses or add a new one">
           <div className="space-y-2">
             {businesses.map((biz) => (
-              <button
-                key={biz.id}
-                onClick={() => setCurrentBusiness(biz)}
-                className={clsx(
-                  'w-full flex items-center gap-3 p-3 rounded border text-left transition-colors',
+              <div key={biz.id} className="space-y-1">
+                <div className={clsx(
+                  'w-full flex items-center gap-3 p-3 rounded border transition-colors',
                   currentBusiness?.id === biz.id
                     ? 'border-blueprint-blue/40 bg-blueprint-blue/5'
-                    : 'border-blueprint-border hover:border-blueprint-blue/20'
-                )}
-              >
-                {(biz.settings?.logo as string) ? (
-                  <img src={biz.settings.logo as string} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
-                ) : (
-                  <div className="w-7 h-7 rounded bg-blueprint-blue/20 flex items-center justify-center flex-shrink-0">
-                    <Building2 size={13} className="text-blueprint-blue" />
+                    : 'border-blueprint-border'
+                )}>
+                  <button
+                    onClick={() => setCurrentBusiness(biz)}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left"
+                  >
+                    {(biz.settings?.logo as string) ? (
+                      <img src={biz.settings.logo as string} alt="" className="w-7 h-7 rounded object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-7 h-7 rounded bg-blueprint-blue/20 flex items-center justify-center flex-shrink-0">
+                        <Building2 size={13} className="text-blueprint-blue" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-slate-200 truncate">{biz.name}</p>
+                      {biz.type && <p className="text-xs text-blueprint-muted capitalize">{biz.type}</p>}
+                    </div>
+                    {currentBusiness?.id === biz.id && (
+                      <Check size={14} className="text-blueprint-blue flex-shrink-0" />
+                    )}
+                  </button>
+                  {businesses.length > 1 && (
+                    <button
+                      onClick={() => setConfirmDeleteId(confirmDeleteId === biz.id ? null : biz.id)}
+                      className="p-1.5 rounded text-blueprint-muted hover:text-blueprint-red hover:bg-blueprint-red/10 transition-colors flex-shrink-0"
+                      title="Remove business"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+                {confirmDeleteId === biz.id && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded border border-blueprint-red/30 bg-blueprint-red/5 text-xs">
+                    <span className="text-slate-300 flex-1">Delete <strong>{biz.name}</strong> and all its data? This cannot be undone.</span>
+                    <button
+                      onClick={() => void handleDeleteBusiness(biz.id)}
+                      disabled={deleting}
+                      className="bp-btn bp-btn-danger text-xs py-0.5 px-2"
+                    >
+                      {deleting ? 'Deleting…' : 'Delete'}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="bp-btn bp-btn-secondary text-xs py-0.5 px-2"
+                    >
+                      Cancel
+                    </button>
                   </div>
                 )}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-200 truncate">{biz.name}</p>
-                  {biz.type && <p className="text-xs text-blueprint-muted capitalize">{biz.type}</p>}
-                </div>
-                {currentBusiness?.id === biz.id && (
-                  <Check size={14} className="text-blueprint-blue flex-shrink-0" />
-                )}
-              </button>
+              </div>
             ))}
           </div>
 

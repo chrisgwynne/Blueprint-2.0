@@ -273,8 +273,34 @@ Return only valid JSON. No prose outside the JSON object.`;
 function extractInvestigationJSON(content: string): Record<string, unknown> | null {
   if (!content) return null;
   const fenced = content.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const str = fenced?.[1] ?? content.match(/\{[\s\S]*\}/)?.[0] ?? content;
-  try { return JSON.parse(str.trim()) as Record<string, unknown>; } catch { return null; }
+  const str = (fenced?.[1] ?? content.match(/\{[\s\S]*\}/)?.[0] ?? content).trim();
+
+  // Happy path
+  try { return JSON.parse(str) as Record<string, unknown>; } catch { /* try repair */ }
+
+  // Truncation repair: walk backwards from end, closing any open braces/brackets.
+  // Handles max_tokens cutoff mid-JSON (common with reasoning models).
+  try {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (const ch of str) {
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && inString) { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (ch === '{' || ch === '[') depth++;
+      else if (ch === '}' || ch === ']') depth--;
+    }
+    if (depth > 0) {
+      // Strip trailing incomplete key/value (e.g. ,"key": or ,"key":"partial)
+      const trimmed = str.replace(/,?\s*"[^"]*"?\s*:?\s*[^,}\]]*$/, '');
+      const repaired = trimmed + '}'.repeat(depth);
+      return JSON.parse(repaired) as Record<string, unknown>;
+    }
+  } catch { /* fall through */ }
+
+  return null;
 }
 
 async function fileInvestigationToKB(task: Task, findings: Record<string, unknown>): Promise<void> {
@@ -359,7 +385,7 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
       system: INVESTIGATION_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
-      max_tokens: 4096,
+      max_tokens: 16384,
     });
   } catch (err) {
     recordAgentActivity({
@@ -887,8 +913,21 @@ async function executeShopifyThemeEdit(task: Task): Promise<ExecuteResult> {
     crypto.createHash('sha256').update(previousContent).digest('hex'),
   );
 
+  // Determine the final content to write.
+  // If new_content is just a <head>…</head> block (LLM was shown a truncated file),
+  // splice it into the existing file to avoid clobbering the rest of the template.
+  let finalContent = payload.new_content as string;
+  const isHeadOnly = /^\s*<head[\s>]/i.test(finalContent) && /<\/head>\s*$/i.test(finalContent);
+  if (isHeadOnly && previousContent) {
+    const spliced = previousContent.replace(/<head[\s\S]*?<\/head>/i, finalContent);
+    // Only use the splice if the replacement actually found a head section
+    if (spliced !== previousContent) {
+      finalContent = spliced;
+    }
+  }
+
   // Write the new content
-  const written = await (shopify as Record<string, unknown> & { writeThemeFile(creds: Record<string, string>, themeId: string, fileKey: string, content: string): Promise<{ updated_at?: string }> }).writeThemeFile(credentials, themeId, fileKey, payload.new_content as string);
+  const written = await (shopify as Record<string, unknown> & { writeThemeFile(creds: Record<string, string>, themeId: string, fileKey: string, content: string): Promise<{ updated_at?: string }> }).writeThemeFile(credentials, themeId, fileKey, finalContent);
 
   // Store rollback data
   db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
