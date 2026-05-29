@@ -19,6 +19,10 @@ import db from '../../db/db.js';
 import { isPathSafe, isReadableFile } from './security.js';
 
 type Creds = Record<string, string | undefined>;
+// The connection layer requires a fully-formed credential shape (host/username
+// required). Connector methods receive decrypted creds as a loose string map,
+// so we cast at the createServerConnection boundary via this alias.
+type ServerConnCreds = Parameters<typeof createServerConnection>[0];
 
 // Structural type covering both SSH and FTP connections — exec is SSH-only
 // (guarded by `isSsh` checks at every call site).
@@ -185,7 +189,7 @@ const connector = {
   async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
     let conn: ServerConn | undefined;
     try {
-      conn = await createServerConnection(credentials, config) as unknown as ServerConn;
+      conn = await createServerConnection(credentials as unknown as ServerConnCreds, config) as unknown as ServerConn;
       // Cheap canary: the connection itself succeeding is 90% of the signal.
       // If SSH, run a trivial exec to confirm we can execute commands.
       const serverInfo: Record<string, unknown> = { method: credentials.connectionMethod };
@@ -211,7 +215,7 @@ const connector = {
     const siteType = (config.siteType as string | undefined) || 'custom';
     const dirsToScan = SITE_STRUCTURES[siteType] ?? SITE_STRUCTURES.custom;
 
-    const conn = await createServerConnection(credentials, config) as unknown as ServerConn;
+    const conn = await createServerConnection(credentials as unknown as ServerConnCreds, config) as unknown as ServerConn;
     try {
       const isSsh = credentials.connectionMethod?.startsWith('ssh');
 
@@ -371,13 +375,13 @@ const connector = {
 
   // ─── Explicit read/write helpers (used by routes + executor) ───────────
   async readFile(credentials: Creds, remotePath: string): Promise<unknown> {
-    const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath }) as unknown as ServerConn;
+    const conn = await createServerConnection(credentials as unknown as ServerConnCreds, { rootPath: credentials.rootPath }) as unknown as ServerConn;
     try { return await conn.readFile(remotePath); }
     finally { await conn.disconnect(); }
   },
 
   async listDirectory(credentials: Creds, remotePath: string, opts: Record<string, unknown> = {}): Promise<unknown[]> {
-    const conn = await createServerConnection(credentials, { rootPath: credentials.rootPath }) as unknown as ServerConn;
+    const conn = await createServerConnection(credentials as unknown as ServerConnCreds, { rootPath: credentials.rootPath }) as unknown as ServerConn;
     try { return await conn.listDirectory(remotePath, opts); }
     finally { await conn.disconnect(); }
   },

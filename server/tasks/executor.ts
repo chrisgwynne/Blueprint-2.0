@@ -1071,6 +1071,14 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
     return { ok: false, error: `action_type '${task.action_type}' is not executable` };
   }
 
+  // Defense-in-depth: the executor never runs a task that has not been
+  // explicitly approved. The status-transition table also blocks a
+  // non-approved → executing move, but this explicit gate keeps the executor
+  // safe regardless of caller, and independent of the transition table.
+  if (task.status !== 'approved') {
+    return { ok: false, error: `Task '${taskId}' is not approved (status: '${task.status}')` };
+  }
+
   // Transition: approved → executing
   try {
     updateTaskStatus(task.id, 'executing', 'system:executor', {});

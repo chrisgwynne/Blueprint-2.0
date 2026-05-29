@@ -286,7 +286,7 @@ export function updateTaskStatus(
       import('../brain/action-windows.js').then((m) => {
         try {
           const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow;
-          m.recordActionMemory(task);
+          m.recordActionMemory(task as unknown as Record<string, unknown>);
           // Smart spacing — defer related pending tasks until the window closes
           import('../jobs/constraint-check.js').then((cc) => {
             try { cc.applySmartSpacing(task); } catch {}

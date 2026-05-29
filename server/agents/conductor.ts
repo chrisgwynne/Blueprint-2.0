@@ -215,7 +215,7 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
       try {
         console.log(`[conductor] Running agent '${agent.id}' for scheduled job '${job.id}'`);
         const result = await runAgentWithConstraints(agent.id, businessId, 'schedule', job.id);
-        runs.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, ...result });
+        runs.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, ...(result as Record<string, unknown>) });
       } catch (err) {
         console.error(`[conductor] Agent '${agent.id}' failed for job '${job.id}':`, (err as Error).message);
         errors.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, error: (err as Error).message });

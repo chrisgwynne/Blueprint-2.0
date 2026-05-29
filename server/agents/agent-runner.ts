@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 import db, { generateId, audit } from '../db/db.js';
 import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
-import { shouldAutoApprove, sendApprovalRequest } from '../tasks/approval.js';
+import { shouldAutoApprove, sendApprovalRequest, DANGEROUS_ACTION_TYPES } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM, getFallbackLLM } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
@@ -1479,6 +1479,18 @@ export async function runAgent(
           description = `${description ?? ''}\n\n ${restraint.confounding_warning}`.trim();
         }
 
+        // Security: the server — not the model — owns the trust tier and
+        // approval mode for destructive/outward-facing actions. A model (or
+        // injected external content) must not be able to lower its own gate by
+        // emitting trust_tier:'green'. Dangerous actions are forced to red +
+        // manual approval regardless of the model's proposed values.
+        let trustTier = taskDef.trust_tier ?? profile.trust_tier ?? 'yellow';
+        let approvalMode = profile.approval_mode ?? 'requires_approval';
+        if (taskDef.action_type && DANGEROUS_ACTION_TYPES.has(taskDef.action_type)) {
+          trustTier = 'red';
+          approvalMode = 'requires_approval';
+        }
+
         const task = createTask({
           business_id: businessId,
           signal_id: triggerId && trigger === 'signal' ? triggerId : null,
@@ -1487,11 +1499,11 @@ export async function runAgent(
           proposed_by: agentId,
           action_type: taskDef.action_type ?? null,
           action_payload: taskDef.action_payload ?? {},
-          trust_tier: taskDef.trust_tier ?? profile.trust_tier ?? 'yellow',
+          trust_tier: trustTier,
           priority: taskDef.priority ?? 'p2',
           confidence: taskDef.confidence ?? null,
           estimated_impact: taskDef.estimated_impact ?? null,
-          approval_mode: profile.approval_mode ?? 'requires_approval',
+          approval_mode: approvalMode,
           degraded_data: taskDef._degraded_data ? 1 : 0,
         }) as TaskRow | null;
 

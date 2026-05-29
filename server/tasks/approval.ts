@@ -28,6 +28,24 @@ type ApprovalPolicy = 'auto' | 'manual';
 type ApprovalPolicies = Record<string, ApprovalPolicy>;
 
 /**
+ * Action types that are destructive, irreversible, or outward-facing. These can
+ * NEVER be auto-approved and their trust tier is always forced to 'red' at task
+ * creation (see agent-runner). This is the server-owned safety floor: neither a
+ * settings policy nor a model-supplied trust_tier can lower the gate on these.
+ */
+export const DANGEROUS_ACTION_TYPES = new Set<string>([
+  'server_file_write',
+  'server_file_rollback',
+  'shopify_theme_edit',
+  'shopify_product_create',
+  'shopify_page_create',
+  'shopify_blog_post_create',
+  'github_pr',
+  'wix_seo_update',
+  'delete_product',
+]);
+
+/**
  * Read the user-configurable approval policies from the settings table.
  * Shape: { default?: 'auto' | 'manual', <action_type>?: 'auto' | 'manual' }
  */
@@ -51,6 +69,12 @@ function readApprovalPolicies(): ApprovalPolicies {
  *   3. Legacy fallback: trust_tier === 'green' && approval_mode === 'auto'
  */
 export function shouldAutoApprove(task: TaskRow): boolean {
+  // Hard floor: destructive / outward-facing actions are never auto-approved,
+  // regardless of any settings policy or trust tier. A blanket
+  // `default: 'auto'` policy (or an over-eager / injected model) must not be
+  // able to execute an irreversible change unattended.
+  if (task.action_type && DANGEROUS_ACTION_TYPES.has(task.action_type)) return false;
+
   const policies = readApprovalPolicies();
   const perAction = task.action_type ? policies[task.action_type] : undefined;
   if (perAction === 'auto') return true;
