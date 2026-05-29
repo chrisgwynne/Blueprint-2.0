@@ -332,3 +332,138 @@ export interface ConnectorDataPoint {
   change_pct?: number;
   period?: string;
 }
+
+// ── Agent lifecycle + sidebar types (mirror server/agents/agentLifecycle.ts) ──
+
+export type AgentLifecycleState =
+  | 'candidate'
+  | 'proposed'
+  | 'approved'
+  | 'hired'
+  | 'standby'
+  | 'triggered'
+  | 'assigned'
+  | 'working'
+  | 'blocked'
+  | 'awaiting_approval'
+  | 'completed'
+  | 'verified'
+  | 'archived';
+
+export type ActivationChannel = 'signal' | 'schedule' | 'manual' | 'workflow' | 'escalation';
+
+export type AgentRiskLevel = 'low' | 'medium' | 'high';
+
+/** A single agent as returned by GET /api/agents-status/roster. */
+export interface AgentRosterEntry {
+  id: string;
+  name: string;
+  avatar: string;
+  lifecycle_state: AgentLifecycleState;
+  role: string | null;
+  purpose: string | null;
+  current_task: { id: string; title: string; status: string } | null;
+  trigger_reason: string | null;
+  trigger_source: ActivationChannel | string | null;
+  matched_areas: string[];
+  confidence: number | null;
+  requires_approval: boolean;
+  kb_scope: string[];
+  tools_allowed: string[];
+  data_sources_allowed: string[];
+  task_types_allowed: string[];
+  evidence_count: number;
+  last_run_at: string | null;
+  last_run_status: string | null;
+  last_action: string | null;
+  last_error: string | null;
+  cooldown_until: string | null;
+  next_check_minutes: number;
+  success_count: number;
+  failure_count: number;
+  success_rate: number | null;
+  busy: boolean;
+}
+
+export interface AgentRosterResponse {
+  business_id: string | null;
+  agents: AgentRosterEntry[];
+}
+
+/** One row of an agent's activity timeline (GET /agents-status/:id/timeline). */
+export interface AgentActivationRecord {
+  id: string;
+  trigger_source: string;
+  selection_reason: string | null;
+  matched_areas: string;
+  confidence: number | null;
+  task_id: string | null;
+  evidence: string;
+  run_id: string | null;
+  created_at: string;
+}
+
+export interface AgentLifecycleEventRecord {
+  id: string;
+  from_state: string | null;
+  to_state: string;
+  actor: string;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface AgentRunRecord {
+  id: string;
+  trigger: string | null;
+  trigger_type: string | null;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  tasks_proposed: number | null;
+  signals_detected: number | null;
+  cost_usd: number | null;
+  error: string | null;
+}
+
+export interface AgentTimelineResponse {
+  agent_id: string;
+  activations: AgentActivationRecord[];
+  lifecycle_events: AgentLifecycleEventRecord[];
+  runs: AgentRunRecord[];
+}
+
+/** A suggested (not-yet-hired) agent — GET /api/agents/proposals. */
+export interface ProposedAgent {
+  task_id: string;
+  template_id: string | null;
+  title: string;
+  why_needed: string | null;
+  gap_filled: string | null;
+  role: string | null;
+  can_access: string[];
+  can_do: string[];
+  kb_scope: string[];
+  risk_level: AgentRiskLevel;
+  confidence: number | null;
+  priority: string | null;
+  estimated_impact: string | null;
+  requires_approval: boolean;
+  created_at: string;
+}
+
+export interface ProposedAgentsResponse {
+  business_id: string;
+  proposals: ProposedAgent[];
+}
+
+/**
+ * UI grouping for the sidebar roster. Drives the section headers
+ * (Working / Standby / Triggered / Blocked / Awaiting approval / Recently completed).
+ */
+export type AgentSidebarGroup =
+  | 'working'
+  | 'awaiting_approval'
+  | 'triggered'
+  | 'blocked'
+  | 'standby'
+  | 'completed';

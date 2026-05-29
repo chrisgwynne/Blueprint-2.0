@@ -10,7 +10,7 @@ import {
   HelpCircle,
 } from 'lucide-react'
 import Sidebar from './Sidebar'
-import AgentPanel from './AgentPanel'
+import AgentSidebar from './agents/AgentSidebar'
 import useStore from '../lib/store.js'
 import { formatDistanceToNow } from 'date-fns'
 import clsx from 'clsx'
@@ -351,7 +351,7 @@ function Layout() {
           <Outlet />
         </main>
       </div>
-      <AgentPanel open={agentPanelOpen} onToggle={() => setAgentPanelOpen(!agentPanelOpen)} />
+      <AgentSidebar open={agentPanelOpen} onToggle={() => setAgentPanelOpen(!agentPanelOpen)} />
       <NotificationArea />
     </div>
   )

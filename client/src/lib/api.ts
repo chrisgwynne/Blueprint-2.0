@@ -387,6 +387,22 @@ export const getTimeline = (businessId: string, params?: Params) => get(`/timeli
 // ============================================
 export const getAgentStatuses = () => get('/agents-status')
 
+// ── Agent lifecycle sidebar (structured roster + timeline + proposals) ────────
+import type {
+  AgentRosterResponse, AgentTimelineResponse, ProposedAgentsResponse,
+} from '../types/index.js'
+
+export const getAgentRoster = (businessId: string): Promise<AgentRosterResponse> =>
+  get('/agents-status/roster', { business_id: businessId })
+export const getAgentTimeline = (agentId: string, limit = 30): Promise<AgentTimelineResponse> =>
+  get(`/agents-status/${agentId}/timeline`, { limit })
+export const getAgentProposals = (businessId: string): Promise<ProposedAgentsResponse> =>
+  get('/agents/proposals', { business_id: businessId })
+export const approveAgentProposal = (taskId: string) =>
+  post(`/agents/proposals/${taskId}/approve`)
+export const rejectAgentProposal = (taskId: string, reason?: string) =>
+  post(`/agents/proposals/${taskId}/reject`, { reason })
+
 // ============================================
 // Brain
 // ============================================

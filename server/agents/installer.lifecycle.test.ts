@@ -53,6 +53,7 @@ describe('installAgent — no auto-activation on hire', () => {
   test('a lifecycle event is recorded for the hire', () => {
     installAgent('merchant', BIZ, 'test');
     const ev = db.prepare("SELECT to_state FROM agent_lifecycle_events WHERE agent_id='merchant' ORDER BY created_at DESC LIMIT 1").get() as { to_state: string } | undefined;
-    expect(['standby', 'candidate']).toContain(ev?.to_state);
+    expect(ev).toBeDefined();
+    expect(['standby', 'candidate']).toContain(ev!.to_state);
   });
 });

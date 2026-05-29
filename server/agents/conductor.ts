@@ -6,9 +6,9 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
-import { matchAgent, recordActivation, MAX_ACTIVE_AGENTS, countBusyAgents, isScopeInFlight, deriveRequirements } from './agentMatcher.js';
+import { matchAgent, MAX_ACTIVE_AGENTS, countBusyAgents, isScopeInFlight } from './agentMatcher.js';
 import { evaluateActivation } from './agentActivationRules.js';
-import { getAgentScope, getLifecycleState, isInCooldown, BUSY_STATES, LIVE_STATES, type AgentLifecycleState } from './agentLifecycle.js';
+import { getAgentScope, getLifecycleState, isInCooldown, BUSY_STATES, LIVE_STATES } from './agentLifecycle.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -301,24 +301,42 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
   }
 
   // 6. Run scheduled jobs for agents whose cron is due
+  const { runWithActivation: runWithActivationScheduled } = await import('./agentActivationService.js');
   for (const agent of agents) {
     const profile = profileMap.get(agent.id);
     if (!profile) continue;
 
+    // Guardrail: don't double-run an agent in the same cycle if it already ran
+    // via a signal above, and respect cooldown / busy state.
+    if (runs.some((r) => r.agentId === agent.id)) continue;
+    if (isInCooldown(agent.id)) continue;
+    const state = getLifecycleState(agent.id);
+    if (state && (BUSY_STATES as readonly string[]).includes(state)) continue;
+
     const dueJobs = getDueScheduledJobs(agent, profile);
 
     for (const job of dueJobs) {
-      // Check we haven't already run this agent above via signal trigger
-      const alreadyRanViaSignal = runs.some(r => r.agentId === agent.id);
-
       try {
         console.log(`[conductor] Running agent '${agent.id}' for scheduled job '${job.id}'`);
-        const result = await runAgentWithConstraints(agent.id, businessId, 'schedule', job.id);
+        // Bracket the scheduled run with the activation lifecycle/recording,
+        // delegating the actual run to the constraint-aware runner.
+        const result = await runWithActivationScheduled({
+          agentId: agent.id,
+          businessId,
+          channel: 'schedule',
+          trigger: 'schedule',
+          triggerRef: job.id,
+          matchedAreas: [],
+          selectionReason: `Scheduled job '${job.id}' is due.`,
+          evidence: [{ type: 'schedule', job_id: job.id }],
+          runner: (a, b, t, id) => runAgentWithConstraints(a, b, t, id) as Promise<unknown>,
+        });
         runs.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, ...(result as Record<string, unknown>) });
       } catch (err) {
         console.error(`[conductor] Agent '${agent.id}' failed for job '${job.id}':`, (err as Error).message);
         errors.push({ agentId: agent.id, trigger: 'schedule', jobId: job.id, error: (err as Error).message });
       }
+      break; // at most one scheduled job per agent per cycle
     }
   }
 
