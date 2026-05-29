@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- ============================================================
+       Blueprint — Marketing site
+       Plain HTML + CSS + vanilla JS. No frameworks, no build step,
+       no external fonts/CDNs. Works fully offline.
+       Sections:
+         1. Hero            7. Comparison table
+         2. Problem         8. Knowledge base
+         3. How it works    9. Security / controls
+         4. Feature grid   10. Final CTA
+         5. Real action    11. Footer
+         6. Example workflows
+       ============================================================ -->
+
+  <title>Blueprint — Mission Control for your existing business</title>
+  <meta
+    name="description"
+    content="Blueprint turns business signals into real action. Connect Shopify, Analytics, Search Console, Brevo, GitHub and servers — Blueprint detects what matters, executes fixes, verifies results, and builds a living knowledge base."
+  />
+
+  <!-- Open Graph / social preview (text only, no external images) -->
+  <meta property="og:title" content="Blueprint — Mission Control for your existing business" />
+  <meta
+    property="og:description"
+    content="Blueprint spots what matters, creates tasks, executes fixes, verifies the result, and builds a living knowledge base of your business."
+  />
+  <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#f6f8ff" />
+
+  <!-- Inline SVG favicon as a data-URI (no external request) -->
+  <link
+    rel="icon"
+    href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f46e5'/%3E%3Cpath d='M9 22V10h6a3.5 3.5 0 0 1 0 7H9m6 0h1a3 3 0 0 1 0 5H9' fill='none' stroke='white' stroke-width='2.2' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E"
+  />
+
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <!-- Skip link for keyboard / screen-reader users -->
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- Animated ambient background (decorative). aria-hidden so it's ignored by AT. -->
+  <div class="bg-aurora" aria-hidden="true">
+    <span class="orb orb--1"></span>
+    <span class="orb orb--2"></span>
+    <span class="orb orb--3"></span>
+    <div class="bg-grid"></div>
+  </div>
+
+  <!-- ============================================================
+       STICKY NAV
+       ============================================================ -->
+  <header class="nav" id="nav">
+    <div class="container nav__inner">
+      <a href="#hero" class="brand" aria-label="Blueprint home">
+        <span class="brand__mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" width="28" height="28">
+            <rect width="32" height="32" rx="8" fill="url(#brandGrad)"></rect>
+            <path d="M9 22V10h6a3.5 3.5 0 0 1 0 7H9m6 0h1a3 3 0 0 1 0 5H9"
+              fill="none" stroke="white" stroke-width="2.2"
+              stroke-linejoin="round" stroke-linecap="round"></path>
+            <defs>
+              <linearGradient id="brandGrad" x1="0" y1="0" x2="32" y2="32">
+                <stop offset="0" stop-color="#6366f1"></stop>
+                <stop offset="1" stop-color="#22d3ee"></stop>
+              </linearGradient>
+            </defs>
+          </svg>
+        </span>
+        <span class="brand__name">Blueprint</span>
+      </a>
+
+      <nav class="nav__links" aria-label="Primary">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#workflows">Workflows</a>
+        <a href="#compare">Compare</a>
+        <a href="#security">Security</a>
+      </nav>
+
+      <div class="nav__cta">
+        <a href="#download" class="btn btn--ghost btn--sm">Sign in</a>
+        <a href="#download" class="btn btn--primary btn--sm">Download</a>
+      </div>
+
+      <!-- Mobile menu toggle -->
+      <button class="nav__toggle" id="navToggle" aria-label="Toggle navigation menu" aria-expanded="false" aria-controls="mobileMenu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+
+    <!-- Mobile dropdown menu -->
+    <div class="nav__mobile" id="mobileMenu" hidden>
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#workflows">Workflows</a>
+      <a href="#compare">Compare</a>
+      <a href="#security">Security</a>
+      <a href="#download" class="btn btn--primary">Download Blueprint</a>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- ============================================================
+         1. HERO
+         ============================================================ -->
+    <section class="hero" id="hero" aria-labelledby="hero-title">
+      <div class="container hero__grid">
+        <div class="hero__copy">
+          <p class="eyebrow reveal">
+            <span class="eyebrow__dot" aria-hidden="true"></span>
+            Mission Control for your existing business
+          </p>
+
+          <h1 class="hero__title reveal" id="hero-title">
+            Blueprint turns business signals into
+            <span class="grad-text">real action.</span>
+          </h1>
+
+          <p class="hero__sub reveal">
+            Connect Shopify, Analytics, Search Console, Brevo, GitHub, servers and more.
+            Blueprint spots what matters, creates tasks, executes fixes, verifies the result,
+            and builds a living knowledge base of your business.
+          </p>
+
+          <div class="hero__actions reveal">
+            <a href="#download" class="btn btn--primary btn--glow btn--lg">
+              Download Blueprint
+              <svg class="btn__icon" viewBox="0 0 20 20" aria-hidden="true">
+                <path d="M10 3v10m0 0 4-4m-4 4-4-4M4 16h12" fill="none"
+                  stroke="currentColor" stroke-width="1.8"
+                  stroke-linecap="round" stroke-linejoin="round"></path>
+              </svg>
+            </a>
+            <a href="#how" class="btn btn--soft btn--lg">See how it works</a>
+          </div>
+
+          <!-- Trust / feature badges -->
+          <ul class="hero__badges reveal" aria-label="Key capabilities">
+            <li><span class="dot dot--green" aria-hidden="true"></span> Executes real work</li>
+            <li><span class="dot dot--blue" aria-hidden="true"></span> Human approval gates</li>
+            <li><span class="dot dot--violet" aria-hidden="true"></span> Verified results</li>
+            <li><span class="dot dot--cyan" aria-hidden="true"></span> 14+ connectors</li>
+          </ul>
+        </div>
+
+        <!-- Dashboard mockup with floating signal cards -->
+        <div class="hero__visual reveal" aria-hidden="true">
+          <div class="mockup glass">
+            <div class="mockup__bar">
+              <span class="mockup__dot"></span>
+              <span class="mockup__dot"></span>
+              <span class="mockup__dot"></span>
+              <span class="mockup__title">Blueprint — Mission Control</span>
+            </div>
+            <div class="mockup__body">
+              <aside class="mockup__side">
+                <span class="mockup__logo"></span>
+                <span class="bar bar--active"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar"></span>
+                <span class="bar bar--sm"></span>
+              </aside>
+              <div class="mockup__main">
+                <div class="mockup__row">
+                  <div class="stat">
+                    <span class="stat__label">Signals today</span>
+                    <span class="stat__value">12</span>
+                    <span class="spark"></span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat__label">Tasks executed</span>
+                    <span class="stat__value">7</span>
+                    <span class="spark spark--alt"></span>
+                  </div>
+                  <div class="stat">
+                    <span class="stat__label">Verified wins</span>
+                    <span class="stat__value">5</span>
+                    <span class="spark spark--green"></span>
+                  </div>
+                </div>
+                <div class="mockup__chart">
+                  <!-- Decorative inline SVG chart -->
+                  <svg viewBox="0 0 320 120" preserveAspectRatio="none" width="100%" height="100%">
+                    <defs>
+                      <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0" stop-color="rgba(99,102,241,0.35)"></stop>
+                        <stop offset="1" stop-color="rgba(99,102,241,0)"></stop>
+                      </linearGradient>
+                    </defs>
+                    <path d="M0 90 L40 80 L80 86 L120 60 L160 66 L200 40 L240 48 L280 24 L320 30 L320 120 L0 120 Z" fill="url(#areaGrad)"></path>
+                    <path d="M0 90 L40 80 L80 86 L120 60 L160 66 L200 40 L240 48 L280 24 L320 30" fill="none" stroke="#6366f1" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </div>
+                <div class="mockup__list">
+                  <div class="task task--done"><span></span> Compress hero images · −1.2s LCP</div>
+                  <div class="task task--run"><span></span> Re-title 14 product pages for GSC</div>
+                  <div class="task"><span></span> Draft win-back email · segment 4</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Floating signal cards orbiting the dashboard -->
+          <div class="signal-card signal-card--1 float">
+            <span class="signal-card__tag tag--red">Shopify</span>
+            <p>Conversion dropped <strong>18%</strong> on mobile checkout</p>
+          </div>
+          <div class="signal-card signal-card--2 float">
+            <span class="signal-card__tag tag--amber">GSC</span>
+            <p>3 pages slipped off page 1 for “running shoes”</p>
+          </div>
+          <div class="signal-card signal-card--3 float">
+            <span class="signal-card__tag tag--green">Verified</span>
+            <p>Speed fix shipped · LCP <strong>2.1s → 0.9s</strong></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Connector strip -->
+      <div class="container">
+        <p class="connector-label reveal">Connects to the systems you already run</p>
+        <ul class="connector-strip reveal" aria-label="Supported integrations">
+          <li>Shopify</li>
+          <li>GA4</li>
+          <li>Search Console</li>
+          <li>Brevo</li>
+          <li>GitHub</li>
+          <li>SSH / Servers</li>
+          <li>Websites</li>
+          <li>Analytics</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         2. PROBLEM
+         ============================================================ -->
+    <section class="section problem" id="problem" aria-labelledby="problem-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">The dashboard problem</p>
+          <h2 id="problem-title" class="section__title">
+            Most dashboards only <span class="strike">show</span> data.
+            <br />Blueprint <span class="grad-text">acts</span> on it.
+          </h2>
+          <p class="section__lede">
+            You don’t have a data problem — you have an action problem. Charts pile up,
+            alerts fire into the void, and the real work still lands on your desk.
+            Blueprint closes the loop between knowing and doing.
+          </p>
+        </div>
+
+        <div class="problem__split reveal">
+          <article class="panel panel--muted">
+            <h3 class="panel__title">Traditional dashboards</h3>
+            <ul class="ticklist ticklist--bad">
+              <li>Surface a number, then stop</li>
+              <li>Leave diagnosis up to you</li>
+              <li>Need a human to do every fix</li>
+              <li>Forget context between sessions</li>
+              <li>Measure activity, not outcomes</li>
+            </ul>
+          </article>
+          <div class="panel__arrow" aria-hidden="true">
+            <svg viewBox="0 0 48 24" width="48" height="24">
+              <path d="M2 12h40m0 0-8-7m8 7-8 7" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+          <article class="panel panel--accent">
+            <h3 class="panel__title">Blueprint</h3>
+            <ul class="ticklist ticklist--good">
+              <li>Detects the signal and diagnoses why</li>
+              <li>Creates a specific, scoped task</li>
+              <li>Executes the fix through your tools</li>
+              <li>Verifies the result with evidence</li>
+              <li>Remembers everything, forever</li>
+            </ul>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         3. HOW IT WORKS
+         ============================================================ -->
+    <section class="section how" id="how" aria-labelledby="how-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">The loop</p>
+          <h2 id="how-title" class="section__title">How Blueprint works</h2>
+          <p class="section__lede">
+            A continuous operating loop that runs on your business around the clock —
+            with you in control at every step.
+          </p>
+        </div>
+
+        <ol class="steps" aria-label="How Blueprint works, six steps">
+          <li class="step reveal">
+            <span class="step__num">01</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 7h8M8 12h8M8 17h5M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Connect your systems</h3>
+            <p>Securely link Shopify, GA4, Search Console, Brevo, GitHub, servers and more in minutes.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">02</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M3 12h4l2 6 4-14 2 8h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Detect signals</h3>
+            <p>Blueprint watches your data and flags anomalies, drops, risks and opportunities as they happen.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">03</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M9 11l3 3 8-8M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Create tasks</h3>
+            <p>Each signal becomes a clear, scoped task with a diagnosis and a recommended action.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">04</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M13 2 3 14h7l-1 8 10-12h-7l1-8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Execute real work</h3>
+            <p>Agents act through your connected tools — editing pages, opening PRs, shipping emails, tuning servers.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">05</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M12 3a9 9 0 1 0 9 9M21 4l-9 9-3-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Verify results</h3>
+            <p>Blueprint tests the outcome, gathers evidence, and confirms the change actually worked.</p>
+          </li>
+          <li class="step reveal">
+            <span class="step__num">06</span>
+            <span class="step__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="22" height="22"><path d="M4 7c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3Zm0 0v10c0 1.7 3.6 3 8 3s8-1.3 8-3V7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </span>
+            <h3>Store knowledge</h3>
+            <p>Every decision, fix and result is saved to a permanent, searchable company knowledge base.</p>
+          </li>
+        </ol>
+
+        <!-- Connecting flow line under the steps (decorative) -->
+        <div class="steps__flow" aria-hidden="true"></div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         4. FEATURE GRID
+         ============================================================ -->
+    <section class="section features" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">Capabilities</p>
+          <h2 id="features-title" class="section__title">Everything Mission Control needs</h2>
+          <p class="section__lede">
+            One operating layer across your whole stack — detection, execution and memory in a single place.
+          </p>
+        </div>
+
+        <div class="feature-grid">
+          <!-- Each card: icon + title + supporting copy -->
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-radar" aria-hidden="true"></span>
+            <h3>Signal detection</h3>
+            <p>Continuously scans every connected source for anomalies, drops, spikes and opportunities.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-task" aria-hidden="true"></span>
+            <h3>Autonomous task creation</h3>
+            <p>Turns raw signals into scoped, prioritised tasks with a clear diagnosis and plan.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-cart" aria-hidden="true"></span>
+            <h3>Shopify performance analysis</h3>
+            <p>Tracks conversion, AOV and funnel drop-off, then acts on the pages and flows that lose sales.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-search" aria-hidden="true"></span>
+            <h3>SEO &amp; GSC monitoring</h3>
+            <p>Watches rankings, impressions and clicks; fixes titles, metadata and content that slips.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-mail" aria-hidden="true"></span>
+            <h3>Email campaign intelligence</h3>
+            <p>Reads Brevo performance, spots underperforming sends, and drafts higher-converting follow-ups.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-gauge" aria-hidden="true"></span>
+            <h3>Website speed &amp; code audits</h3>
+            <p>Profiles Core Web Vitals and front-end code, then ships concrete performance improvements.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-branch" aria-hidden="true"></span>
+            <h3>GitHub &amp; SSH workflows</h3>
+            <p>Opens pull requests, runs deploy checks and operates servers over SSH — safely and transparently.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-book" aria-hidden="true"></span>
+            <h3>Knowledge base</h3>
+            <p>A compounding memory of every finding, decision and outcome across your business.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-logs" aria-hidden="true"></span>
+            <h3>Agent execution logs</h3>
+            <p>A complete, timestamped paper trail of every action an agent takes on your behalf.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-shield" aria-hidden="true"></span>
+            <h3>Human approval gates</h3>
+            <p>Hold any write action for sign-off via dashboard or chat. Nothing risky ships without you.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-report" aria-hidden="true"></span>
+            <h3>Business reports</h3>
+            <p>Clear, plain-language reports on what happened, what was done and what it changed.</p>
+          </article>
+          <article class="feature-card glass reveal">
+            <span class="feature-card__icon i-loop" aria-hidden="true"></span>
+            <h3>Continuous optimisation</h3>
+            <p>An always-on improvement loop that revisits past wins and compounds results over time.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         5. REAL ACTION, NOT SUMMARIES
+         ============================================================ -->
+    <section class="section real" id="real" aria-labelledby="real-title">
+      <div class="container real__grid">
+        <div class="real__copy reveal">
+          <p class="kicker">Beyond summaries</p>
+          <h2 id="real-title" class="section__title">Real action, not summaries</h2>
+          <p class="section__lede">
+            Plenty of tools will summarise your numbers back to you. Blueprint goes further —
+            it investigates the cause, takes the action, tests whether it worked, and reports
+            back with evidence. The work gets done, not just described.
+          </p>
+          <ul class="real__list">
+            <li><strong>Investigates</strong> — traces the signal to a root cause across your systems.</li>
+            <li><strong>Acts</strong> — executes the fix through your real, connected tools.</li>
+            <li><strong>Tests</strong> — re-measures to confirm the change moved the metric.</li>
+            <li><strong>Reports</strong> — writes up the outcome with before-and-after evidence.</li>
+          </ul>
+          <a href="#workflows" class="btn btn--soft">See example workflows</a>
+        </div>
+
+        <!-- Live agent timeline visual -->
+        <div class="real__timeline glass reveal" aria-label="Example agent timeline" role="img">
+          <div class="timeline__head">
+            <span class="pulse" aria-hidden="true"></span>
+            Live agent timeline
+          </div>
+          <ol class="timeline">
+            <li class="timeline__item">
+              <span class="timeline__time">09:02</span>
+              <span class="timeline__tag tag--red">signal</span>
+              <p>Checkout conversion down 18% vs. 7-day baseline.</p>
+            </li>
+            <li class="timeline__item">
+              <span class="timeline__time">09:03</span>
+              <span class="timeline__tag tag--blue">diagnose</span>
+              <p>Mobile LCP regressed to 4.1s after theme update.</p>
+            </li>
+            <li class="timeline__item">
+              <span class="timeline__time">09:05</span>
+              <span class="timeline__tag tag--violet">act</span>
+              <p>Opened PR: defer hero video, compress 6 images.</p>
+            </li>
+            <li class="timeline__item">
+              <span class="timeline__time">09:18</span>
+              <span class="timeline__tag tag--amber">verify</span>
+              <p>Re-ran Lighthouse: LCP 4.1s → 1.4s on mobile.</p>
+            </li>
+            <li class="timeline__item">
+              <span class="timeline__time">09:19</span>
+              <span class="timeline__tag tag--green">report</span>
+              <p>Conversion recovered +16%. Saved to knowledge base.</p>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         6. EXAMPLE WORKFLOWS
+         ============================================================ -->
+    <section class="section workflows" id="workflows" aria-labelledby="workflows-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">In practice</p>
+          <h2 id="workflows-title" class="section__title">Example workflows</h2>
+          <p class="section__lede">
+            Every workflow follows the same trustworthy path:
+            <span class="flow-inline">Signal → Diagnosis → Action → Verification → Report</span>.
+          </p>
+        </div>
+
+        <div class="workflow-grid">
+          <!-- Reusable workflow card pattern -->
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--red">Shopify</span>
+              <h3>Sales drop detected</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> Revenue down 22% week-over-week.</li>
+              <li><b>Diagnosis</b> A best-seller variant is out of stock and hidden.</li>
+              <li><b>Action</b> Re-enable variant, surface back-in-stock badge.</li>
+              <li><b>Verify</b> Add-to-cart rate restored within 24h.</li>
+              <li><b>Report</b> Recovered ~£3.4k/wk; logged to memory.</li>
+            </ol>
+          </article>
+
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--cyan">Performance</span>
+              <h3>Website speed issue</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> LCP crossed 4s on key landing pages.</li>
+              <li><b>Diagnosis</b> Unoptimised images and render-blocking JS.</li>
+              <li><b>Action</b> PR to lazy-load assets and inline critical CSS.</li>
+              <li><b>Verify</b> LCP 4.2s → 1.1s; CLS within budget.</li>
+              <li><b>Report</b> Bounce rate −9%; change documented.</li>
+            </ol>
+          </article>
+
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--amber">SEO</span>
+              <h3>Search ranking drop</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> Top query fell from position 3 to 11.</li>
+              <li><b>Diagnosis</b> Thin content and a missing canonical tag.</li>
+              <li><b>Action</b> Expand page, fix canonical, request re-index.</li>
+              <li><b>Verify</b> Impressions +40% over two weeks.</li>
+              <li><b>Report</b> Back on page one; insight stored.</li>
+            </ol>
+          </article>
+
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--violet">Email</span>
+              <h3>Campaign underperformance</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> Newsletter open rate dropped below 18%.</li>
+              <li><b>Diagnosis</b> Weak subject lines and poor send timing.</li>
+              <li><b>Action</b> Draft A/B subjects, reschedule to peak window.</li>
+              <li><b>Verify</b> Open rate 18% → 31% on next send.</li>
+              <li><b>Report</b> Revenue per email +24%; saved.</li>
+            </ol>
+          </article>
+
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--red">DevOps</span>
+              <h3>GitHub / deployment error</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> Production deploy failing on CI.</li>
+              <li><b>Diagnosis</b> Broken migration and missing env var.</li>
+              <li><b>Action</b> PR with fix; flag rollback for approval.</li>
+              <li><b>Verify</b> Pipeline green; health checks pass.</li>
+              <li><b>Report</b> Incident timeline written to memory.</li>
+            </ol>
+          </article>
+
+          <article class="workflow-card glass reveal">
+            <header class="workflow-card__head">
+              <span class="workflow-card__chip tag--green">Conversion</span>
+              <h3>Product page optimisation</h3>
+            </header>
+            <ol class="flow">
+              <li><b>Signal</b> High traffic, low conversion on a hero SKU.</li>
+              <li><b>Diagnosis</b> Missing reviews, weak above-the-fold copy.</li>
+              <li><b>Action</b> Add social proof, rewrite benefits, test layout.</li>
+              <li><b>Verify</b> Conversion +13% vs. control.</li>
+              <li><b>Report</b> Winning variant promoted; logged.</li>
+            </ol>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         7. COMPARISON TABLE
+         ============================================================ -->
+    <section class="section compare" id="compare" aria-labelledby="compare-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">Where Blueprint fits</p>
+          <h2 id="compare-title" class="section__title">Built to improve what you already run</h2>
+          <p class="section__lede">
+            Tools like RunCabinet and Paperclip shine when you’re building or running a business from
+            scratch. Blueprint is purpose-built for a different job: improving an
+            <strong>existing</strong> business by connecting to the systems already powering it.
+          </p>
+        </div>
+
+        <div class="compare__wrap reveal">
+          <table class="compare-table">
+            <caption class="sr-only">Feature comparison between Blueprint, RunCabinet and Paperclip</caption>
+            <thead>
+              <tr>
+                <th scope="col" class="compare-table__feature">Capability</th>
+                <th scope="col" class="compare-table__brand is-highlight">
+                  <span class="compare-table__brandname">Blueprint</span>
+                  <span class="compare-table__brandtag">Mission Control</span>
+                </th>
+                <th scope="col">RunCabinet</th>
+                <th scope="col">Paperclip</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">Built for existing businesses</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Connects to current business systems</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Detects business signals</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Creates actionable tasks</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Executes real fixes</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Shopify / eCommerce optimisation</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">SEO / GSC workflows</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Email campaign analysis</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Website / code performance improvement</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Knowledge base of company findings</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Human approval controls</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--part" role="img" aria-label="Partial"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M5 10h10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+              <tr>
+                <th scope="row">Continuous improvement loop</th>
+                <td class="is-highlight"><span class="cmp cmp--yes" role="img" aria-label="Yes"><svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M4 10.5 8 14l8-8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+                <td><span class="cmp cmp--no" role="img" aria-label="No"><svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M6 6l8 8M14 6l-8 8" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="compare__note reveal">
+          Different tools for different jobs — if your business already exists, Blueprint is built to make it better.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         8. KNOWLEDGE BASE
+         ============================================================ -->
+    <section class="section kb" id="knowledge" aria-labelledby="kb-title">
+      <div class="container kb__grid">
+        <div class="kb__copy reveal">
+          <p class="kicker">Company memory</p>
+          <h2 id="kb-title" class="section__title">A knowledge base that compounds</h2>
+          <p class="section__lede">
+            Every signal, decision, fix, report and result becomes searchable business memory.
+            Blueprint never solves the same problem twice — it gets smarter with every cycle, so
+            your operating knowledge grows instead of walking out the door.
+          </p>
+          <ul class="kb__points">
+            <li><span class="dot dot--violet"></span> Searchable history of what worked and what didn’t</li>
+            <li><span class="dot dot--blue"></span> Context carried across teams, tools and time</li>
+            <li><span class="dot dot--green"></span> Decisions backed by evidence and outcomes</li>
+          </ul>
+        </div>
+
+        <!-- Search mockup -->
+        <div class="kb__panel glass reveal" aria-hidden="true">
+          <div class="kb__search">
+            <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M9 3a6 6 0 1 0 3.7 10.7l4.3 4.3M15 9a6 6 0 1 0-12 0 6 6 0 0 0 12 0Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>checkout conversion mobile</span>
+            <span class="kb__cursor"></span>
+          </div>
+          <div class="kb__results">
+            <div class="kb__result">
+              <span class="kb__chip tag--green">resolved</span>
+              <div>
+                <strong>Mobile LCP regression after theme update</strong>
+                <small>Fixed Apr 12 · conversion +16% · evidence attached</small>
+              </div>
+            </div>
+            <div class="kb__result">
+              <span class="kb__chip tag--blue">insight</span>
+              <div>
+                <strong>Express checkout lifts mobile conversion</strong>
+                <small>Validated across 3 tests · +9% median</small>
+              </div>
+            </div>
+            <div class="kb__result">
+              <span class="kb__chip tag--amber">watch</span>
+              <div>
+                <strong>Cart abandonment spikes on payday weekends</strong>
+                <small>Seasonal pattern · monitor &amp; pre-empt</small>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         9. SECURITY / CONTROLS
+         ============================================================ -->
+    <section class="section security" id="security" aria-labelledby="security-title">
+      <div class="container">
+        <div class="section__head reveal">
+          <p class="kicker">Trust &amp; control</p>
+          <h2 id="security-title" class="section__title">Powerful, but never reckless</h2>
+          <p class="section__lede">
+            Autonomy with guardrails. Blueprint is designed so you stay in command — every action is
+            permissioned, evidenced and reversible.
+          </p>
+        </div>
+
+        <div class="security-grid">
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-shield" aria-hidden="true"></span>
+            <h3>Approval gates</h3>
+            <p>Hold any sensitive or write action for explicit human sign-off before it runs.</p>
+          </article>
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-logs" aria-hidden="true"></span>
+            <h3>Audit logs</h3>
+            <p>A complete, timestamped record of every signal, decision and action taken.</p>
+          </article>
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-key" aria-hidden="true"></span>
+            <h3>Tool permissions</h3>
+            <p>Scope exactly what each connector and agent is allowed to read and change.</p>
+          </article>
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-check" aria-hidden="true"></span>
+            <h3>Evidence before completion</h3>
+            <p>Tasks only close when results are verified with measurable, attached proof.</p>
+          </article>
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-lock" aria-hidden="true"></span>
+            <h3>Safe write actions</h3>
+            <p>Changes run through guarded, least-privilege paths with sensible defaults.</p>
+          </article>
+          <article class="security-card glass reveal">
+            <span class="security-card__icon i-rewind" aria-hidden="true"></span>
+            <h3>Rollback-focused workflows</h3>
+            <p>Designed for reversibility, so you can undo any change with confidence.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================================
+         10. FINAL CTA
+         ============================================================ -->
+    <section class="section final" id="download" aria-labelledby="final-title">
+      <div class="container">
+        <div class="final__card glass reveal">
+          <div class="final__glow" aria-hidden="true"></div>
+          <p class="kicker kicker--center">Mission Control for your business</p>
+          <h2 id="final-title" class="final__title">
+            Stop watching dashboards.<br />
+            <span class="grad-text">Start improving the business.</span>
+          </h2>
+          <p class="final__sub">
+            Connect your systems in minutes and let Blueprint detect, act, verify and remember —
+            with your approval at every step.
+          </p>
+          <div class="final__actions">
+            <a href="#download" class="btn btn--primary btn--glow btn--lg">Download Blueprint</a>
+            <a href="#workflows" class="btn btn--soft btn--lg">View demo workflow</a>
+          </div>
+          <p class="final__fine">Runs on Windows, macOS and Linux · Free local model option · Your data stays yours</p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================================================
+       11. FOOTER
+       ============================================================ -->
+  <footer class="footer" aria-labelledby="footer-title">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <a href="#hero" class="brand brand--footer" aria-label="Blueprint home">
+          <span class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 32 32" width="26" height="26">
+              <rect width="32" height="32" rx="8" fill="url(#brandGradF)"></rect>
+              <path d="M9 22V10h6a3.5 3.5 0 0 1 0 7H9m6 0h1a3 3 0 0 1 0 5H9"
+                fill="none" stroke="white" stroke-width="2.2"
+                stroke-linejoin="round" stroke-linecap="round"></path>
+              <defs>
+                <linearGradient id="brandGradF" x1="0" y1="0" x2="32" y2="32">
+                  <stop offset="0" stop-color="#6366f1"></stop>
+                  <stop offset="1" stop-color="#22d3ee"></stop>
+                </linearGradient>
+              </defs>
+            </svg>
+          </span>
+          <span class="brand__name">Blueprint</span>
+        </a>
+        <p id="footer-title" class="footer__tag">Mission Control for your existing business.</p>
+      </div>
+
+      <nav class="footer__cols" aria-label="Footer">
+        <div class="footer__col">
+          <h4>Product</h4>
+          <a href="#features">Features</a>
+          <a href="#compare">Comparison</a>
+          <a href="#download">Download</a>
+        </div>
+        <div class="footer__col">
+          <h4>Resources</h4>
+          <a href="#" rel="nofollow">GitHub</a>
+          <a href="#" rel="nofollow">Docs</a>
+          <a href="#how">How it works</a>
+        </div>
+        <div class="footer__col">
+          <h4>Company</h4>
+          <a href="#" rel="nofollow">Privacy</a>
+          <a href="#security">Security</a>
+          <a href="#download">Get started</a>
+        </div>
+      </nav>
+    </div>
+    <div class="container footer__bar">
+      <p>© <span id="year">2026</span> Blueprint. All rights reserved.</p>
+      <p class="footer__made">Built to act, not just observe.</p>
+    </div>
+  </footer>
+
+  <script src="script.js" defer></script>
+</body>
+</html>
