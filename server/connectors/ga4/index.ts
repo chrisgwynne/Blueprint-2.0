@@ -1,5 +1,6 @@
 import fetch from 'node-fetch';
 import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
+import { sessionsWeightedAverage } from '../metrics-math.js';
 
 type Creds = Record<string, string | undefined>;
 
@@ -240,21 +241,24 @@ async function fetchReport(creds: Creds, propertyId: string, params: Record<stri
 
   // Aggregate totals
   function aggregate(rangeIndex: number): { sessions: number; activeUsers: number; bounceRate: number; conversions: number } {
-    let sessions = 0, users = 0, bounceRate = 0, conversions = 0, count = 0;
+    let sessions = 0, users = 0, conversions = 0;
+    const bouncePairs: Array<{ value: number; weight: number }> = [];
     for (const row of allRows) {
       if (row.dataRangeIndex !== undefined && row.dataRangeIndex !== rangeIndex) continue;
       if (row.dataRangeIndex === undefined && rangeIndex !== 0) continue;
       const metricValues = row.metricValues as Array<Record<string, string>> | undefined;
-      sessions += parseFloat((metricValues?.[0]?.value ?? '0') as string);
+      const rowSessions = parseFloat((metricValues?.[0]?.value ?? '0') as string);
+      sessions += rowSessions;
       users += parseFloat((metricValues?.[1]?.value ?? '0') as string);
-      bounceRate += parseFloat((metricValues?.[2]?.value ?? '0') as string);
+      // bounceRate is a per-row ratio — weight it by that row's sessions rather
+      // than taking an unweighted mean of daily rates (which skewed the signal).
+      bouncePairs.push({ value: parseFloat((metricValues?.[2]?.value ?? '0') as string), weight: rowSessions });
       conversions += parseFloat((metricValues?.[3]?.value ?? '0') as string);
-      count++;
     }
     return {
       sessions: Math.round(sessions),
       activeUsers: Math.round(users),
-      bounceRate: count > 0 ? Math.round((bounceRate / count) * 100) / 100 : 0,
+      bounceRate: Math.round(sessionsWeightedAverage(bouncePairs) * 100) / 100,
       conversions: Math.round(conversions),
     };
   }

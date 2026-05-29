@@ -10,6 +10,7 @@
  * NOTE: cost_micros is in micros — divide by 1,000,000 to get currency value.
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
+import { previousPeriodRange } from '../metrics-math.js';
 
 type Creds = Record<string, string | undefined>;
 
@@ -136,6 +137,10 @@ const connector = {
     const fresh = await ensureFreshToken(credentials);
     const managerAccountId = (params?.managerAccountId as string | undefined) || credentials?.managerAccountId;
 
+    // Previous 30-day window (the 30 days before LAST_30_DAYS), computed from
+    // today — replaces a hard-coded March-2025 range that broke every trend.
+    const prev = previousPeriodRange(new Date(), 30);
+
     // Run all GAQL queries in parallel
     const [accountTotals, accountTotalsPrev, campaigns, keywords] = await Promise.all([
       gaqlQuery(
@@ -153,7 +158,7 @@ const connector = {
            metrics.conversions, metrics.conversions_value,
            metrics.average_cpc, metrics.ctr
          FROM customer
-         WHERE segments.date BETWEEN '2025-03-01' AND '2025-03-31'`,
+         WHERE segments.date BETWEEN '${prev.start}' AND '${prev.end}'`,
         fresh, customerId, managerAccountId
       ).catch(() => ({ results: [] })),
       gaqlQuery(

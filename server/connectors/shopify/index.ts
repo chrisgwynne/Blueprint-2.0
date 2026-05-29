@@ -119,7 +119,16 @@ async function fetchProducts(credentials: Creds): Promise<ShopifyProduct[]> {
 
   while (url) {
     const res = await shopifyFetch(credentials, url);
-    if (!res.ok) break;
+    if (!res.ok) {
+      // Don't silently return a partial list — a truncated catalogue would be
+      // reported as the whole catalogue and trip false "products dropped"
+      // signals. Surface the failure so the sync is marked errored instead.
+      const body = await res.text().catch(() => '');
+      throw new Error(
+        `Shopify products fetch failed (status ${res.status}) after ${products.length} product(s); ` +
+        `aborting to avoid reporting a truncated catalogue. ${body.slice(0, 200)}`
+      );
+    }
     const data = await res.json() as { products?: ShopifyProduct[] };
     products.push(...(data.products ?? []));
 
