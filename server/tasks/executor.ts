@@ -538,6 +538,11 @@ async function executeDeepInvestigation(task: Task): Promise<ExecuteResult> {
     throw new Error(`Deep investigation produced no findings (stopped: ${result.stoppedReason}, ${result.iterations} iterations).`);
   }
 
+  // This handler spawns no follow-on tasks; strip any action_tasks the model
+  // emitted so the KB report never claims tasks were created (the investigation
+  // KB writer renders findings.action_tasks under "Action Tasks Spawned").
+  if ('action_tasks' in findings) delete (findings as Record<string, unknown>).action_tasks;
+
   // File the evidence-backed report to the KB (reuses the investigation writer).
   await fileInvestigationToKB(task, findings);
 

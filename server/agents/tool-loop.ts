@@ -174,8 +174,11 @@ export async function runToolLoop(opts: ToolLoopOptions, deps: ToolLoopDeps = {}
       break;
     }
 
-    // Repeated-identical-call guard.
-    const callHash = `${toolName}:${JSON.stringify(parsed.args ?? {})}`;
+    const args = (parsed.args && typeof parsed.args === 'object') ? parsed.args as Record<string, unknown> : {};
+    const argsPreview = JSON.stringify(args).slice(0, 120);
+
+    // Repeated-identical-call guard — hash the SAME normalised args we dispatch.
+    const callHash = `${toolName}:${JSON.stringify(args)}`;
     if (callHash === lastCallHash) {
       repeatCount++;
       if (repeatCount >= 2) { stopped = 'repeated_calls'; break; }
@@ -184,41 +187,41 @@ export async function runToolLoop(opts: ToolLoopOptions, deps: ToolLoopDeps = {}
       lastCallHash = callHash;
     }
 
-    const args = (parsed.args && typeof parsed.args === 'object') ? parsed.args as Record<string, unknown> : {};
-    const argsPreview = JSON.stringify(args).slice(0, 120);
-
     // Registry-only dispatch + read-only guard. Unknown/forbidden tools are
     // refused with an error observation and NEVER executed.
     const tool = registry[toolName];
-    let observation: string;
+    let rawObservation: string;
+    let executed = false;
     if (!tool) {
-      observation = `ERROR: unknown tool "${toolName}". Available tools: ${Object.keys(registry).join(', ')}.`;
+      rawObservation = `ERROR: unknown tool "${toolName}". Available tools: ${Object.keys(registry).join(', ')}.`;
       log('tool_call', `refused unknown tool: ${toolName}`, { tool: toolName, refused: true });
     } else if (tool.readOnly !== true) {
-      observation = `ERROR: tool "${toolName}" is not permitted in this loop (write tools are blocked).`;
+      rawObservation = `ERROR: tool "${toolName}" is not permitted in this loop (write tools are blocked).`;
       log('tool_call', `refused non-read-only tool: ${toolName}`, { tool: toolName, refused: true });
     } else {
+      executed = true;
       toolCalls++;
-      let raw: string;
       try {
         const result = await tool.run(toolCtx, args);
-        raw = result.ok ? result.observation : `ERROR: ${result.error}`;
+        rawObservation = result.ok ? result.observation : `ERROR: ${result.error}`;
       } catch (err) {
-        raw = `ERROR: tool "${toolName}" threw: ${(err as Error).message}`;
+        rawObservation = `ERROR: tool "${toolName}" threw: ${(err as Error).message}`;
       }
-      // ALL tool output is untrusted — sanitise + boundary-wrap before it
-      // re-enters the model's context.
-      const { wrapped, detection } = sanitiseAndWrap(raw.slice(0, maxObs), `tool:${toolName}`);
-      observation = wrapped;
+    }
+
+    // EVERY observation (tool output AND refusal strings) is treated as
+    // untrusted and sanitised + boundary-wrapped before re-entering the model.
+    const { wrapped, detection } = sanitiseAndWrap(rawObservation.slice(0, maxObs), `tool:${toolName}`);
+    if (executed) {
       log('tool_call', `${toolName}(${argsPreview})`, {
         tool: toolName,
         injection_detected: detection.injection_detected,
-        result_preview: raw.slice(0, 200),
+        result_preview: rawObservation.slice(0, 200),
       });
     }
 
     messages.push({ role: 'assistant', content: JSON.stringify({ tool: toolName, args }) });
-    messages.push({ role: 'user', content: observation });
+    messages.push({ role: 'user', content: wrapped });
   }
 
   // Forced summarisation on any cap that left us without findings — never
@@ -242,9 +245,10 @@ export async function runToolLoop(opts: ToolLoopOptions, deps: ToolLoopDeps = {}
       if (sp) {
         const f = sp.findings;
         findings = (f && typeof f === 'object') ? f as Record<string, unknown> : sp;
-      } else {
-        stopped = 'parse_failure';
       }
+      // If the summary couldn't be parsed, keep the loop's original
+      // stoppedReason (e.g. 'repeated_calls') — it's more informative than
+      // overwriting it with 'parse_failure'.
     } catch (err) {
       log('tool_loop_error', `Forced summary failed: ${(err as Error).message}`, {});
       stopped = 'error';
