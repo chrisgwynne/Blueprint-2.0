@@ -18,6 +18,8 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import db from '../db/db.js';
 import { checkAgentReadiness } from './readiness.js';
+import { setLifecycleState, type AgentLifecycleState } from './agentLifecycle.js';
+import { ROLE_SPECS } from './agentActivationRules.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENTS_DIR = resolve(__dirname);
@@ -40,7 +42,11 @@ interface ReadinessResult {
 
 interface InstallResult {
   agentId: string;
+  /** Legacy free-text status (kept for backward compat with existing callers). */
   status: 'active' | 'pending';
+  /** Structured lifecycle state. A freshly hired agent is 'standby' (never
+   *  auto-activated) or 'candidate' if its connectors aren't ready yet. */
+  lifecycle_state: AgentLifecycleState;
   readiness: ReadinessResult;
   alreadyInstalled: boolean;
 }
@@ -82,9 +88,14 @@ export function installAgent(
     cpSync(templateDir, liveDir, { recursive: true });
   }
 
-  // 2. Run readiness check to decide starting status.
+  // 2. Run readiness check to decide the starting LIFECYCLE state.
+  //    CRITICAL: hiring never auto-activates work. A ready agent lands in
+  //    `standby` (installed, resting, will run only when activated by a
+  //    matching trigger). An agent that isn't ready yet lands in `candidate`
+  //    (legacy status 'pending') until its connectors are present + fresh.
   const readiness = checkAgentReadiness(templateId, businessId) as unknown as ReadinessResult;
-  const startStatus: 'active' | 'pending' = readiness.ready ? 'active' : 'pending';
+  const startState: AgentLifecycleState = readiness.ready ? 'standby' : 'candidate';
+  const legacyStatus: 'active' | 'pending' = readiness.ready ? 'active' : 'pending';
 
   // 3. Write the live profile with the correct runtime status. Preserve every
   //    other field that shipped with the template.
@@ -95,23 +106,55 @@ export function installAgent(
   } catch {
     profile = {};
   }
-  profile.status = startStatus;
+  profile.status = legacyStatus;
   writeFileSync(profilePath, yaml.dump(profile, { lineWidth: 100, noRefs: true, sortKeys: false }));
 
-  // 4. Upsert the agents DB row.
+  // 4. Upsert the agents DB row, seeding the structured scope from ROLE_SPECS.
+  const spec = ROLE_SPECS[templateId];
   const existingRow = db.prepare('SELECT id FROM agents WHERE id = ?').get(templateId) as { id: string } | null;
   if (existingRow) {
     db.prepare(`
       UPDATE agents
       SET status = ?, profile_path = ?, name = ?, created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
       WHERE id = ?
-    `).run(startStatus, `server/agents/${templateId}/profile.yaml`, profile.name ?? templateId, templateId);
+    `).run(legacyStatus, `server/agents/${templateId}/profile.yaml`, profile.name ?? templateId, templateId);
   } else {
     db.prepare(`
       INSERT INTO agents (id, profile_path, name, status, created_at)
       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    `).run(templateId, `server/agents/${templateId}/profile.yaml`, profile.name ?? templateId, startStatus);
+    `).run(templateId, `server/agents/${templateId}/profile.yaml`, profile.name ?? templateId, legacyStatus);
   }
+
+  // Seed structured scope/role columns (idempotent — always refreshed from the
+  // canonical ROLE_SPECS so a re-install picks up updated scopes).
+  if (spec) {
+    try {
+      db.prepare(`
+        UPDATE agents SET
+          role = ?, purpose = ?, requires_approval = ?,
+          kb_scope = ?, tools_allowed = ?, data_sources_allowed = ?, task_types_allowed = ?
+        WHERE id = ?
+      `).run(
+        spec.role, spec.purpose, spec.requires_approval ? 1 : 0,
+        JSON.stringify(spec.kb_scope), JSON.stringify(spec.tools),
+        JSON.stringify(spec.data_sources), JSON.stringify(spec.task_types),
+        templateId,
+      );
+    } catch (err) {
+      console.warn('[installer] scope seed failed (non-fatal):', (err as Error).message);
+    }
+  }
+
+  // Set the structured lifecycle_state (bridges to legacy status). This is the
+  // single place hiring transitions an agent into the working roster — into
+  // standby, never straight into work.
+  setLifecycleState(templateId, startState, installedBy, {
+    businessId,
+    reason: readiness.ready
+      ? 'Hired and placed in standby — will activate only on a matching trigger.'
+      : `Hired but waiting for: ${(readiness.missing_required ?? []).join(', ') || 'required connectors'}.`,
+    metadata: { readiness_status: readiness.status },
+  });
 
   // 5. Audit.
   try {
@@ -119,7 +162,8 @@ export function installAgent(
       INSERT INTO audit_log (id, business_id, entity_type, entity_id, action, actor, metadata, created_at)
       VALUES (lower(hex(randomblob(16))), ?, 'agent', ?, 'install', ?, ?, CURRENT_TIMESTAMP)
     `).run(businessId, templateId, installedBy, JSON.stringify({
-      status: startStatus,
+      status: legacyStatus,
+      lifecycle_state: startState,
       readiness_status: readiness.status,
       missing_required: readiness.missing_required,
       missing_preferred: readiness.missing_preferred,
@@ -128,11 +172,12 @@ export function installAgent(
     console.warn('[installer] audit insert failed:', (err as Error).message);
   }
 
-  console.log(`[installer] Installed '${templateId}' for business ${businessId} → status=${startStatus} (readiness=${readiness.status})`);
+  console.log(`[installer] Installed '${templateId}' for business ${businessId} → lifecycle=${startState} (status=${legacyStatus}, readiness=${readiness.status})`);
 
   return {
     agentId: templateId,
-    status: startStatus,
+    status: legacyStatus,
+    lifecycle_state: startState,
     readiness,
     alreadyInstalled,
   };
@@ -159,7 +204,13 @@ export function uninstallAgent(
     }
   }
 
-  db.prepare("UPDATE agents SET status = 'retired' WHERE id = ?").run(agentId);
+  // Archive via the lifecycle state machine (sets status='retired' through the
+  // legacy bridge and records the transition event).
+  try {
+    setLifecycleState(agentId, 'archived', uninstalledBy, { reason: 'Agent retired/uninstalled.' });
+  } catch {
+    db.prepare("UPDATE agents SET status = 'retired' WHERE id = ?").run(agentId);
+  }
 
   try {
     db.prepare(`

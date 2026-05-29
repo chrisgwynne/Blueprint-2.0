@@ -565,6 +565,60 @@ const STARTUP_MIGRATIONS: string[] = [
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_sanitisation_enabled', 'true', CURRENT_TIMESTAMP)`,
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_kb_scan_enabled',      'true', CURRENT_TIMESTAMP)`,
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_output_monitor_enabled', 'true', CURRENT_TIMESTAMP)`,
+
+  // ─── Agent lifecycle redesign (structured hiring / activation model) ────────
+  // Additive columns on `agents`. lifecycle_state is the structured source of
+  // truth that runs in parallel with the legacy free-text `status` column
+  // (which run-gates in conductor/readiness/agent-runner still read). See
+  // server/agents/agentLifecycle.ts for the state machine.
+  `ALTER TABLE agents ADD COLUMN lifecycle_state TEXT`,
+  `ALTER TABLE agents ADD COLUMN role TEXT`,
+  `ALTER TABLE agents ADD COLUMN purpose TEXT`,
+  `ALTER TABLE agents ADD COLUMN last_activation_reason TEXT`,
+  `ALTER TABLE agents ADD COLUMN confidence REAL`,
+  `ALTER TABLE agents ADD COLUMN requires_approval INTEGER DEFAULT 1`,
+  `ALTER TABLE agents ADD COLUMN success_count INTEGER DEFAULT 0`,
+  `ALTER TABLE agents ADD COLUMN failure_count INTEGER DEFAULT 0`,
+  `ALTER TABLE agents ADD COLUMN cooldown_until DATETIME`,
+  `ALTER TABLE agents ADD COLUMN kb_scope JSON DEFAULT '[]'`,
+  `ALTER TABLE agents ADD COLUMN tools_allowed JSON DEFAULT '[]'`,
+  `ALTER TABLE agents ADD COLUMN data_sources_allowed JSON DEFAULT '[]'`,
+  `ALTER TABLE agents ADD COLUMN task_types_allowed JSON DEFAULT '[]'`,
+  `ALTER TABLE agents ADD COLUMN current_task_id TEXT`,
+  `ALTER TABLE agents ADD COLUMN lifecycle_updated_at DATETIME`,
+  // Per-activation audit trail: every time an agent is activated we record the
+  // trigger source, matched knowledge areas, selection reasoning, alternatives,
+  // confidence, the assigned task and the evidence used.
+  `CREATE TABLE IF NOT EXISTS agent_activations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    trigger_source TEXT NOT NULL,
+    trigger_ref TEXT,
+    matched_areas JSON DEFAULT '[]',
+    selection_reason TEXT,
+    alternatives JSON DEFAULT '[]',
+    confidence REAL,
+    task_id TEXT,
+    evidence JSON DEFAULT '[]',
+    run_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_activations_agent ON agent_activations(agent_id, created_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_activations_business ON agent_activations(business_id, created_at DESC)`,
+  // Transition audit trail for the lifecycle state machine.
+  `CREATE TABLE IF NOT EXISTS agent_lifecycle_events (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    business_id TEXT,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_lifecycle_events_agent ON agent_lifecycle_events(agent_id, created_at DESC)`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {
@@ -613,6 +667,36 @@ for (const sql of STARTUP_MIGRATIONS) {
     }
   } catch (err) {
     console.warn('[db] agent lifecycle migration skipped:', (err as Error).message);
+  }
+})();
+
+// ─── Backfill structured lifecycle_state from legacy status (idempotent) ──────
+// Maps the existing free-text `status` column onto the new structured
+// lifecycle_state for any row that hasn't been backfilled yet. Run-gating still
+// reads `status`; lifecycle_state is the structured view the new model owns.
+(function backfillAgentLifecycleState() {
+  try {
+    const rows = db.prepare(
+      "SELECT id, status, lifecycle_state FROM agents WHERE lifecycle_state IS NULL"
+    ).all() as Array<{ id: string; status: string | null; lifecycle_state: string | null }>;
+    if (rows.length === 0) return;
+    const map: Record<string, string> = {
+      active: 'standby',     // installed + ready, but not actively working until triggered
+      pending: 'candidate',  // installed but not ready / not approved to work
+      paused: 'standby',
+      disabled: 'archived',
+      retired: 'archived',
+    };
+    const stmt = db.prepare(
+      "UPDATE agents SET lifecycle_state = ?, lifecycle_updated_at = CURRENT_TIMESTAMP WHERE id = ?"
+    );
+    for (const r of rows) {
+      const next = map[r.status ?? 'active'] ?? 'standby';
+      stmt.run(next, r.id);
+    }
+    console.log(`[db] Backfilled lifecycle_state for ${rows.length} agent(s).`);
+  } catch (err) {
+    console.warn('[db] lifecycle_state backfill skipped:', (err as Error).message);
   }
 })();
 

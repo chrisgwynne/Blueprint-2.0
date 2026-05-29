@@ -9,9 +9,9 @@ import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 import db, { audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
-import { runAgent } from '../agents/agent-runner.js';
 import { installAgent } from '../agents/installer.js';
 import { analyseAndProposeHires } from '../agents/conductor-hiring.js';
+import { ROLE_SPECS } from '../agents/agentActivationRules.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -400,33 +400,121 @@ router.post('/hire', async (req: Request, res: Response) => {
     const result = installAgent(template_id, business_id, actor) as {
       agentId: string;
       status: string;
+      lifecycle_state: string;
       readiness: { missing_required: string[] };
     };
 
-    // If the agent is immediately ready, run it right away so the user sees
-    // output in the onboarding flow. Fire-and-forget so we don't hold the
-    // response while the LLM runs.
-    let initialRunQueued = false;
-    if (result.status === 'active') {
-      initialRunQueued = true;
-      runAgent(template_id, business_id, 'post_hire_initial_run', null).catch((err: Error) => {
-        console.warn(`[agents] post-hire initial run for '${template_id}' failed:`, err.message);
-      });
-    }
-
+    // CRITICAL (lifecycle redesign): hiring no longer auto-runs the agent.
+    // A hired agent lands in `standby` and activates only on a matching
+    // trigger. This is the fix for "agents get hired immediately and too
+    // casually". The UI can still manually trigger a first run via /:id/run.
     return res.json({
       ok: true,
       agent_id: result.agentId,
       status: result.status,
+      lifecycle_state: result.lifecycle_state,
       readiness: result.readiness,
-      initial_run_queued: initialRunQueued,
-      message: result.status === 'active'
-        ? `${template_id} hired and running its first analysis now.`
-        : `${template_id} hired. Waiting for: ${result.readiness.missing_required.join(', ') || 'data'}.`,
+      initial_run_queued: false,
+      message: result.lifecycle_state === 'standby'
+        ? `${template_id} hired and placed on standby. It will activate when a relevant trigger occurs.`
+        : `${template_id} hired. Waiting for: ${result.readiness.missing_required.join(', ') || 'data'} before it can activate.`,
     });
   } catch (err) {
     console.error('[agents] hire error:', err);
     return res.status(500).json({ error: (err as Error).message || 'Failed to hire agent.' });
+  }
+});
+
+// ─── Proposed agents (ProposedAgentCard) ────────────────────────────────────
+//
+// A SUGGESTED agent is NOT auto-hired. Hiring recommendations live as
+// 'hire_agent' tasks in status 'proposed'. This endpoint surfaces them with
+// the context the card needs: why it's needed, the gap it fills, what it can
+// access/do, risk level, and the scope it would be granted.
+
+router.get('/proposals', (req: Request, res: Response) => {
+  try {
+    const businessId = (req.query.business_id as string | undefined) ?? null;
+    if (!businessId) return res.status(400).json({ error: 'business_id is required.' });
+
+    const rows = db.prepare(`
+      SELECT id, title, description, action_payload, confidence, priority, estimated_impact, created_at
+        FROM tasks
+       WHERE business_id = ? AND action_type = 'hire_agent' AND status = 'proposed'
+       ORDER BY created_at DESC
+    `).all(businessId) as Array<{ id: string; title: string; description: string | null; action_payload: string; confidence: number | null; priority: string | null; estimated_impact: string | null; created_at: string }>;
+
+    const proposals = rows.map((r) => {
+      let templateId: string | undefined;
+      try { templateId = (JSON.parse(r.action_payload) as { template_id?: string }).template_id; } catch { /* ignore */ }
+      const spec = templateId ? ROLE_SPECS[templateId] : undefined;
+      // Risk derives from whether the role can own any dangerous action types.
+      const risk = spec?.task_types.some((t) => ['github_pr', 'server_file_write', 'server_file_rollback', 'shopify_theme_edit', 'shopify_product_create'].includes(t))
+        ? 'high'
+        : (spec?.task_types.length ?? 0) > 0 ? 'medium' : 'low';
+      return {
+        task_id: r.id,
+        template_id: templateId ?? null,
+        title: r.title,
+        why_needed: r.description,
+        gap_filled: spec?.purpose ?? null,
+        role: spec?.role ?? null,
+        can_access: spec?.data_sources ?? [],
+        can_do: spec?.task_types ?? [],
+        kb_scope: spec?.kb_scope ?? [],
+        risk_level: risk,
+        confidence: r.confidence,
+        priority: r.priority,
+        estimated_impact: r.estimated_impact,
+        requires_approval: spec?.requires_approval ?? true,
+        created_at: r.created_at,
+      };
+    });
+
+    res.json({ business_id: businessId, proposals });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message || 'Failed to list proposals.' });
+  }
+});
+
+// Approve a proposal → approves the hire_agent task, which the executor turns
+// into an install (landing the agent in standby, NOT auto-running it).
+router.post('/proposals/:taskId/approve', async (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const session = req.session as unknown as Record<string, unknown>;
+    const user = session?.user as Record<string, unknown> | undefined;
+    const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
+
+    const { approveTask } = await import('../tasks/task-queue.js');
+    const { executeTask } = await import('../tasks/executor.js');
+    const approved = approveTask(taskId, actor);
+    if (!approved) return res.status(404).json({ error: 'Proposal not found.' });
+
+    // Execute the hire immediately (install → standby). Fire-and-forget so we
+    // don't hold the response; the agent will appear in the roster on standby.
+    executeTask(taskId).catch((err: Error) => console.warn('[agents] hire execution failed:', err.message));
+    res.json({ ok: true, task_id: taskId, message: 'Proposal approved. Agent will be hired and placed on standby.' });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message || 'Failed to approve proposal.' });
+  }
+});
+
+// Reject a proposal → rejects the hire_agent task.
+router.post('/proposals/:taskId/reject', async (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const { reason } = req.body as { reason?: string };
+    const session = req.session as unknown as Record<string, unknown>;
+    const user = session?.user as Record<string, unknown> | undefined;
+    const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
+
+    const { rejectTask } = await import('../tasks/task-queue.js');
+    const rejected = rejectTask(taskId, actor, reason ?? 'Rejected by operator.');
+    if (!rejected) return res.status(404).json({ error: 'Proposal not found.' });
+    res.json({ ok: true, task_id: taskId, message: 'Proposal rejected.' });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message || 'Failed to reject proposal.' });
   }
 });
 
@@ -442,7 +530,24 @@ router.post('/:id/run', async (req: Request, res: Response) => {
     const { business_id, trigger_id } = req.body as { business_id?: string; trigger_id?: string };
     if (!business_id) return res.status(400).json({ error: 'business_id is required.' });
 
-    const runPromise = runAgent(agent.id as string, business_id, 'manual', trigger_id ?? null);
+    // Manual runs go through the activation service so they are recorded and
+    // lifecycle-tracked like any other activation. A human explicitly choosing
+    // the agent bypasses scope matching by design, but still records an
+    // activation row + transitions.
+    const session = req.session as unknown as Record<string, unknown>;
+    const user = session?.user as Record<string, unknown> | undefined;
+    const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
+    const { runWithActivation } = await import('../agents/agentActivationService.js');
+    const runPromise = runWithActivation({
+      agentId: agent.id as string,
+      businessId: business_id,
+      channel: 'manual',
+      trigger: 'manual',
+      triggerRef: trigger_id ?? null,
+      matchedAreas: [],
+      selectionReason: `Manually triggered by ${actor}.`,
+      evidence: [{ type: 'manual', actor }],
+    });
     res.status(202).json({ ok: true, message: 'Agent run triggered.', agent_id: agent.id });
     runPromise.catch((err: Error) => console.error(`[agents] Run error for ${agent.id as string}:`, err));
   } catch (err) {

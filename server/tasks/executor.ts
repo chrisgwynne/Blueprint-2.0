@@ -1109,25 +1109,19 @@ async function executeHireAgent(task: Task): Promise<ExecuteResult> {
   const { installAgent } = await import('../agents/installer.js') as typeof AgentInstaller;
   const result = installAgent(templateId, task.business_id, 'human');
 
-  // Fire-and-forget first run if ready — gives the "wow" moment post-approval.
-  if (result.status === 'active') {
-    (async () => {
-      try {
-        const { runAgent } = await import('../agents/agent-runner.js') as typeof AgentRunner;
-        await runAgent(templateId, task.business_id, 'post_hire_initial_run', task.id);
-      } catch (err) {
-        console.warn(`[hire_agent] post-hire run of ${templateId} failed:`, (err as Error).message);
-      }
-    })();
-  }
-
+  // CRITICAL (lifecycle redesign): hiring does NOT auto-activate work. The
+  // agent lands in `standby` and will run only when a matching trigger
+  // (signal/schedule/manual/workflow/escalation) activates it. We deliberately
+  // do NOT fire a post-hire run here anymore — that was the "casual immediate
+  // hiring" the redesign removes.
   return {
-    outcome: result.status === 'active'
-      ? `Hired ${templateId}. Running initial analysis now.`
-      : `Hired ${templateId}. Waiting for: ${(result.readiness.missing_required || []).join(', ') || 'required connectors'} before first run.`,
+    outcome: result.lifecycle_state === 'standby'
+      ? `Hired ${templateId}. It is now on standby and will activate when a relevant trigger occurs.`
+      : `Hired ${templateId}. Waiting for: ${(result.readiness.missing_required || []).join(', ') || 'required connectors'} before it can activate.`,
     outcome_data: {
       agent_id: templateId,
       status: result.status,
+      lifecycle_state: result.lifecycle_state,
       readiness: result.readiness,
     },
   };

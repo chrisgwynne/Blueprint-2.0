@@ -6,6 +6,9 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import cron from 'node-cron';
+import { matchAgent, recordActivation, MAX_ACTIVE_AGENTS, countBusyAgents, isScopeInFlight, deriveRequirements } from './agentMatcher.js';
+import { evaluateActivation } from './agentActivationRules.js';
+import { getAgentScope, getLifecycleState, isInCooldown, BUSY_STATES, LIVE_STATES, type AgentLifecycleState } from './agentLifecycle.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -57,34 +60,111 @@ interface BusinessRow {
   name: string;
 }
 
+interface SignalMatch {
+  agent: AgentRow;
+  signal: SignalRow;
+  matchedAreas: string[];
+  reason: string;
+  confidence: number;
+  alternatives: Array<{ agent_id: string; reason: string }>;
+}
+
 /**
- * Match open signals to agents that have those signal_triggers configured.
+ * Deterministically route open signals to the single best-match agent using
+ * the scope-aware matcher + activation rules, instead of waking every agent
+ * whose signal_triggers list happens to include the rule_id.
+ *
+ * A signal routes to an agent ONLY when:
+ *   - the signal's derived knowledge areas intersect the agent's kb_scope, AND
+ *   - the activation gate allows it (not in cooldown, not busy, not a duplicate
+ *     of an in-flight scope, within the max-active cap).
+ *
+ * This is the fix for "agents activate merely because some signal exists".
  */
 function matchSignalsToAgents(
   agents: AgentRow[],
   signals: SignalRow[],
-  profileMap: Map<string, AgentProfile>
-): Array<{ agent: AgentRow; signal: SignalRow }> {
-  const matches: Array<{ agent: AgentRow; signal: SignalRow }> = [];
-  const seen = new Set<string>(); // Prevent same agent running twice for same signal type
+  _profileMap: Map<string, AgentProfile>
+): SignalMatch[] {
+  const matches: SignalMatch[] = [];
+  const seenAgents = new Set<string>(); // one signal-driven run per agent per cycle
+  const liveAgentIds = new Set(
+    agents
+      .filter((a) => {
+        const state = getLifecycleState(a.id);
+        return state ? (LIVE_STATES as readonly string[]).includes(state) : a.status === 'active';
+      })
+      .map((a) => a.id)
+  );
+
+  let activeBudget = Math.max(0, MAX_ACTIVE_AGENTS - countBusyAgents());
 
   for (const signal of signals) {
-    for (const agent of agents) {
-      const profile = profileMap.get(agent.id);
-      if (!profile) continue;
+    if (activeBudget <= 0) break; // max-active-agents cap
+    const businessId = signal.business_id;
 
-      const triggers = profile.signal_triggers ?? [];
-      if (!triggers.includes(signal.rule_id)) continue;
+    // Resolve the connector type behind the signal so areas derive cleanly.
+    const sigExtra = signal as { connector_type?: string | null; connector_id?: string | null; type?: string | null; severity?: string | null };
+    const connectorType: string | null = sigExtra.connector_type
+      ?? resolveConnectorType(sigExtra.connector_id ?? null);
 
-      const key = `${agent.id}:${signal.rule_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+    const match = matchAgent(
+      { rule_id: signal.rule_id, connector_type: connectorType, type: sigExtra.type ?? null, severity: sigExtra.severity ?? null },
+      businessId
+    );
+    const best = match.best;
+    if (!best) continue;                       // no owner → leave for a human
+    if (match.should_be_manual) continue;      // matcher says route to a human
+    if (seenAgents.has(best.agent_id)) continue;
+    if (!liveAgentIds.has(best.agent_id)) continue;
 
-      matches.push({ agent, signal });
+    const agent = agents.find((a) => a.id === best.agent_id);
+    if (!agent) continue;
+
+    // Activation gate — the central allow/deny with explainable reasons.
+    const scope = getAgentScope(best.agent_id);
+    const state = getLifecycleState(best.agent_id);
+    const decision = evaluateActivation({
+      agentId: best.agent_id,
+      channel: 'signal',
+      agentScope: scope.kb_scope,
+      agentDataSources: scope.data_sources_allowed,
+      triggerAreas: match.requirements.areas,
+      triggerConnectorType: connectorType,
+      inCooldown: isInCooldown(best.agent_id),
+      busy: state ? (BUSY_STATES as readonly string[]).includes(state) : false,
+      duplicateScopeInFlight: isScopeInFlight(match.requirements, businessId, best.agent_id),
+      isLive: state ? (LIVE_STATES as readonly string[]).includes(state) : agent.status === 'active',
+    });
+    if (!decision.allowed) {
+      console.log(`[conductor] Skipping '${best.agent_id}' for signal '${signal.rule_id}': ${decision.reason}`);
+      continue;
     }
+
+    seenAgents.add(best.agent_id);
+    activeBudget -= 1;
+    matches.push({
+      agent,
+      signal,
+      matchedAreas: decision.matchedAreas,
+      reason: match.assignment_reason,
+      confidence: Math.min(1, 0.5 + decision.matchedAreas.length * 0.15),
+      alternatives: match.backup ? [{ agent_id: match.backup.agent_id, reason: match.backup.reason }] : [],
+    });
   }
 
   return matches;
+}
+
+/** Resolve a connector's type from its id (best-effort). */
+function resolveConnectorType(connectorId: string | null): string | null {
+  if (!connectorId) return null;
+  try {
+    const row = db.prepare('SELECT type FROM connectors WHERE id = ?').get(connectorId) as { type: string } | null;
+    return row?.type ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -176,25 +256,44 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
     }
   }
 
-  // 3. Get open signals
+  // 3. Get open signals (with the connector type so we can derive knowledge
+  //    areas for scope-based routing).
   const openSignals = db.prepare(`
-    SELECT * FROM signals
-    WHERE business_id = ? AND status IN ('open', 'acknowledged')
-    ORDER BY created_at DESC LIMIT 50
+    SELECT s.*, c.type AS connector_type
+    FROM signals s
+    LEFT JOIN connectors c ON c.id = s.connector_id
+    WHERE s.business_id = ? AND s.status IN ('open', 'acknowledged')
+    ORDER BY s.created_at DESC LIMIT 50
   `).all(businessId) as SignalRow[];
 
-  // 4. Match signals to agents
+  // 4. Match signals to agents (deterministic, scope-aware, activation-gated)
   const signalMatches = matchSignalsToAgents(agents, openSignals, profileMap);
 
   const runs: ConductorRun[] = [];
   const errors: ConductorRun[] = [];
 
-  // 5. Run signal-triggered agents
-  for (const { agent, signal } of signalMatches) {
+  // 5. Run signal-triggered agents. Each run is preceded by a recorded
+  //    activation (trigger source, matched areas, selection reason,
+  //    alternatives, confidence, evidence) and bracketed by lifecycle
+  //    transitions standby → triggered → working → (verified|standby|blocked).
+  for (const m of signalMatches) {
+    const { agent, signal } = m;
+    const { runWithActivation } = await import('./agentActivationService.js');
     try {
-      console.log(`[conductor] Running agent '${agent.id}' for signal '${signal.rule_id}'`);
-      const result = await runAgent(agent.id, businessId, 'signal', signal.id);
-      runs.push({ agentId: agent.id, trigger: 'signal', signalId: signal.id, ...result });
+      console.log(`[conductor] Activating '${agent.id}' for signal '${signal.rule_id}' — ${m.reason}`);
+      const result = await runWithActivation({
+        agentId: agent.id,
+        businessId,
+        channel: 'signal',
+        trigger: 'signal',
+        triggerRef: signal.id,
+        matchedAreas: m.matchedAreas,
+        selectionReason: m.reason,
+        alternatives: m.alternatives,
+        confidence: m.confidence,
+        evidence: [{ type: 'signal', id: signal.id, rule_id: signal.rule_id, severity: signal.severity }],
+      });
+      runs.push({ agentId: agent.id, trigger: 'signal', signalId: signal.id, ...(result as Record<string, unknown>) });
     } catch (err) {
       console.error(`[conductor] Agent '${agent.id}' failed for signal '${signal.id}':`, (err as Error).message);
       errors.push({ agentId: agent.id, trigger: 'signal', signalId: signal.id, error: (err as Error).message });

@@ -149,4 +149,153 @@ router.get('/', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Structured lifecycle roster (sidebar redesign) ─────────────────────────
+//
+// Returns the full structured lifecycle view the new AgentSidebar consumes:
+// every agent's lifecycle_state, role, purpose, scope, current task, trigger
+// reason, confidence, reliability, cooldown, and a compact recent-activity
+// timeline. Drives the grouped roster (Working / Standby / Triggered / Blocked
+// / Awaiting approval / Recently completed) with no fabricated data.
+
+const BUSY_STATES = ['triggered', 'assigned', 'working', 'awaiting_approval'];
+
+function parseJsonArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) return raw.filter((x): x is string => typeof x === 'string');
+  if (typeof raw === 'string') {
+    try { const p: unknown = JSON.parse(raw); return Array.isArray(p) ? p.filter((x): x is string => typeof x === 'string') : []; }
+    catch { return []; }
+  }
+  return [];
+}
+
+interface AgentRosterRow {
+  id: string; name: string | null; status: string | null;
+  lifecycle_state: string | null; role: string | null; purpose: string | null;
+  last_activation_reason: string | null; confidence: number | null;
+  requires_approval: number | null; success_count: number | null;
+  failure_count: number | null; cooldown_until: string | null;
+  kb_scope: unknown; tools_allowed: unknown; data_sources_allowed: unknown;
+  task_types_allowed: unknown; current_task_id: string | null; last_run: string | null;
+}
+
+router.get('/roster', async (req: Request, res: Response) => {
+  try {
+    const businessId = (req.query.business_id as string | undefined) ?? null;
+    const all = db.prepare('SELECT * FROM agents ORDER BY name ASC').all() as AgentRosterRow[];
+    const agents = all.filter((a) => agentIsInstalled(a.id));
+
+    let getPollInterval: ((id: string) => number) | null = null;
+    try {
+      const mod = await import('../agents/poll-intervals.js') as unknown as { getPollInterval: (id: string) => number };
+      getPollInterval = mod.getPollInterval;
+    } catch { /* optional */ }
+
+    const out = agents.map((a) => {
+      const lifecycle = a.lifecycle_state
+        ?? (a.status === 'pending' ? 'candidate' : a.status === 'retired' ? 'archived' : 'standby');
+
+      // Current task title (if assigned).
+      let currentTask: { id: string; title: string; status: string } | null = null;
+      if (a.current_task_id) {
+        const t = db.prepare('SELECT id, title, status FROM tasks WHERE id = ?').get(a.current_task_id) as { id: string; title: string; status: string } | undefined;
+        if (t) currentTask = t;
+      }
+      if (!currentTask) {
+        const t = db.prepare(`
+          SELECT id, title, status FROM tasks
+           WHERE assigned_to = ? AND status IN ('approved', 'executing')
+           ORDER BY updated_at DESC LIMIT 1
+        `).get(a.id) as { id: string; title: string; status: string } | undefined;
+        if (t) currentTask = t;
+      }
+
+      // Most recent activation (trigger reason, matched areas, confidence).
+      const activation = db.prepare(`
+        SELECT trigger_source, selection_reason, matched_areas, confidence, created_at, evidence
+          FROM agent_activations WHERE agent_id = ? ORDER BY created_at DESC LIMIT 1
+      `).get(a.id) as { trigger_source: string; selection_reason: string | null; matched_areas: string; confidence: number | null; created_at: string; evidence: string } | undefined;
+
+      // Last completed run + last error.
+      const lastRun = db.prepare(`
+        SELECT status, started_at, completed_at, trigger, error, tasks_proposed
+          FROM agent_runs WHERE agent_id = ? AND status != 'skipped'
+          ORDER BY started_at DESC LIMIT 1
+      `).get(a.id) as { status: string; started_at: string; completed_at: string | null; trigger: string | null; error: string | null; tasks_proposed: number | null } | undefined;
+
+      // Evidence count from the latest activation.
+      let evidenceCount = 0;
+      if (activation?.evidence) {
+        try { const e: unknown = JSON.parse(activation.evidence); if (Array.isArray(e)) evidenceCount = e.length; } catch { /* ignore */ }
+      }
+
+      const s = a.success_count ?? 0;
+      const f = a.failure_count ?? 0;
+      const total = s + f;
+      const pollIntervalMin = getPollInterval ? getPollInterval(a.id) : 60;
+
+      return {
+        id: a.id,
+        name: a.name ?? a.id,
+        avatar: AVATARS[a.id] ?? '🤖',
+        lifecycle_state: lifecycle,
+        role: a.role,
+        purpose: a.purpose,
+        current_task: currentTask,
+        trigger_reason: a.last_activation_reason ?? activation?.selection_reason ?? null,
+        trigger_source: activation?.trigger_source ?? null,
+        matched_areas: activation ? parseJsonArray(activation.matched_areas) : [],
+        confidence: a.confidence ?? activation?.confidence ?? null,
+        requires_approval: (a.requires_approval ?? 1) === 1,
+        kb_scope: parseJsonArray(a.kb_scope),
+        tools_allowed: parseJsonArray(a.tools_allowed),
+        data_sources_allowed: parseJsonArray(a.data_sources_allowed),
+        task_types_allowed: parseJsonArray(a.task_types_allowed),
+        evidence_count: evidenceCount,
+        last_run_at: lastRun?.started_at ?? a.last_run ?? null,
+        last_run_status: lastRun?.status ?? null,
+        last_action: lastRun ? `${lastRun.trigger ?? 'run'} → ${lastRun.status}${(lastRun.tasks_proposed ?? 0) > 0 ? ` (${lastRun.tasks_proposed} tasks)` : ''}` : null,
+        last_error: lastRun?.status === 'failed' ? (lastRun.error ?? null) : null,
+        cooldown_until: a.cooldown_until ?? null,
+        next_check_minutes: pollIntervalMin,
+        success_count: s,
+        failure_count: f,
+        success_rate: total > 0 ? Math.round((s / total) * 100) / 100 : null,
+        busy: BUSY_STATES.includes(lifecycle),
+      };
+    });
+
+    res.json({ business_id: businessId, agents: out });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// Per-agent activity timeline (activations + lifecycle events + runs), newest
+// first. Powers the AgentTimeline + AgentDetailDrawer.
+router.get('/:id/timeline', (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.id);
+    const limit = Math.min(Number(req.query.limit ?? 30), 100);
+
+    const activations = db.prepare(`
+      SELECT id, trigger_source, selection_reason, matched_areas, confidence, task_id, evidence, run_id, created_at
+        FROM agent_activations WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?
+    `).all(agentId, limit) as Array<Record<string, unknown>>;
+
+    const lifecycleEvents = db.prepare(`
+      SELECT id, from_state, to_state, actor, reason, created_at
+        FROM agent_lifecycle_events WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?
+    `).all(agentId, limit) as Array<Record<string, unknown>>;
+
+    const runs = db.prepare(`
+      SELECT id, trigger, trigger_type, status, started_at, completed_at, tasks_proposed, signals_detected, cost_usd, error
+        FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT ?
+    `).all(agentId, limit) as Array<Record<string, unknown>>;
+
+    res.json({ agent_id: agentId, activations, lifecycle_events: lifecycleEvents, runs });
+  } catch (err) {
+    res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 export default router;
