@@ -15,7 +15,8 @@
     "build": "bun run --cwd client build",
     "start": "bun run --cwd server start",
     "db:init": "bun run --cwd server db:init",
-    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck"
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd client typecheck",
+    "test": "bun run --cwd server test"
   },
   "devDependencies": {
     "typescript": "^6.0.2"

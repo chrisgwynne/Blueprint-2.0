@@ -63,3 +63,9 @@ temp/
 # Test artifacts
 coverage/
 .nyc_output/
+
+# Claude Code isolated worktrees (harness artifact)
+.claude/
+
+# Stray SQLite artifacts (e.g. a literal ":memory:" file from a test run)
+:memory:*

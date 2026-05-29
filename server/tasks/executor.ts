@@ -31,6 +31,7 @@ import type * as AgentRunner from '../agents/agent-runner.js';
 import type * as SelfHealer from '../agents/self-healer.js';
 import type * as ServerConnection from '../connectors/server-access/connection.js';
 import type * as AgentSearch from '../agents/tools/search.js';
+import type * as ToolLoop from '../agents/tool-loop.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -92,6 +93,7 @@ const EXECUTABLE_ACTION_TYPES = new Set<string>([
   'github_issue',
   'github_pr',
   'investigation',
+  'deep_investigation',
   'content_draft',
   'meta_update',
   'shopify_product_create',
@@ -473,6 +475,89 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
       measurement_plan: (findings.measurement_plan as unknown) ?? null,
       spawned_tasks: followOns.length,
       spawned_task_ids: followOns.map(t => t.id),
+    },
+  };
+}
+
+/**
+ * Deep investigation via the bounded agent tool-loop.
+ *
+ * Unlike executeInvestigation (single LLM call over pre-gathered context), this
+ * lets the agent iteratively call READ-ONLY tools to gather its own evidence,
+ * then produces an evidence-backed findings report. It is purely diagnostic:
+ * it files a KB report and does NOT spawn write follow-on tasks. Runs only on an
+ * already-approved task (executeTask enforces status==='approved').
+ */
+async function executeDeepInvestigation(task: Task): Promise<ExecuteResult> {
+  const { runToolLoop } = await import('../agents/tool-loop.js') as typeof ToolLoop;
+  const { resolveProfileLLM } = await import('../lib/llm-providers.js') as typeof LlmProviders;
+  const { recordAgentActivity } = await import('../agents/activity.js') as typeof AgentActivity;
+
+  // Build the objective from the task + its linked signal. This is the
+  // operator's own context (not untrusted tool output), so it's included
+  // directly; all TOOL output the loop gathers is sanitised inside the loop.
+  let objective = `Investigate and diagnose the root cause of the following.\n\nTitle: ${task.title}\n`;
+  if (task.description) objective += `Details: ${task.description}\n`;
+  if (task.signal_id) {
+    const sig = db.prepare(
+      'SELECT severity, title, description, data FROM signals WHERE id = ?'
+    ).get(task.signal_id) as { severity?: string; title?: string; description?: string; data?: string } | undefined;
+    if (sig) {
+      objective += `\nLinked signal: [${sig.severity ?? '?'}] ${sig.title ?? ''}\n${sig.description ?? ''}\n`;
+      if (sig.data) objective += `Signal data: ${String(sig.data).slice(0, 800)}\n`;
+    }
+  }
+  objective += '\nUse the read-only tools to gather evidence, then finish with a findings object.';
+
+  const { providerId, model } = resolveProfileLLM({});
+  const startedAt = new Date().toISOString();
+
+  const result = await runToolLoop(
+    {
+      businessId: task.business_id,
+      objective,
+      providerId,
+      model,
+      taskId: task.id,
+      agentId: 'conductor:deep-investigation',
+      maxIterations: 8,
+      costCeilingUsd: 0.5, // upper guard; the iteration cap is the primary stop
+    },
+    { recordEvent: createTaskEvent },
+  );
+
+  recordAgentActivity({
+    agentId: 'conductor', businessId: task.business_id, trigger: 'deep_investigation',
+    status: result.findings ? 'complete' : 'failed',
+    reasoning: `Deep investigation: ${task.title.slice(0, 80)} (${result.iterations} iters, ${result.toolCalls} tools, ${result.stoppedReason})`,
+    cost_usd: result.costUsd, startedAt,
+  });
+
+  const findings = result.findings;
+  if (!findings) {
+    throw new Error(`Deep investigation produced no findings (stopped: ${result.stoppedReason}, ${result.iterations} iterations).`);
+  }
+
+  // File the evidence-backed report to the KB (reuses the investigation writer).
+  await fileInvestigationToKB(task, findings);
+
+  const summary = (findings.summary as string | undefined)
+    ?? `Investigation complete. Primary cause: ${(findings.primary_cause as string | undefined) ?? 'unknown'}.`;
+  return {
+    outcome: `${summary.slice(0, 200)} [${result.toolCalls} tool calls, ${result.stoppedReason}]`,
+    outcome_data: {
+      type: 'deep_investigation',
+      primary_cause: (findings.primary_cause as string | undefined) ?? null,
+      primary_confidence: (findings.confidence as number | undefined) ?? null,
+      supporting_evidence: (findings.evidence as unknown[]) ?? [],
+      alternative_causes: (findings.alternatives as unknown[]) ?? [],
+      recommendation: (findings.recommendation as string | undefined) ?? null,
+      plain_english: (findings.explanation as string | undefined) ?? null,
+      summary: (findings.summary as string | undefined) ?? null,
+      tool_calls: result.toolCalls,
+      iterations: result.iterations,
+      stopped_reason: result.stoppedReason,
+      cost_usd: result.costUsd,
     },
   };
 }
@@ -1101,6 +1186,7 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
       case 'github_issue':             result = await executeGithubIssue(task); break;
       case 'github_pr':                result = await executeGithubPR(task);    break;
       case 'investigation':            result = await executeInvestigation(task);  break;
+      case 'deep_investigation':       result = await executeDeepInvestigation(task); break;
       case 'content_draft':            result = await executeContentDraft(task);  break;
       case 'meta_update':              result = await executeMetaUpdate(task);    break;
       case 'shopify_product_create':   result = await executeShopifyProductCreate(task); break;

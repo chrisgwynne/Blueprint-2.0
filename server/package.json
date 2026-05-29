@@ -6,7 +6,8 @@
     "dev": "bun --watch index.ts",
     "start": "bun index.ts",
     "db:init": "bun db/init.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.27.0",

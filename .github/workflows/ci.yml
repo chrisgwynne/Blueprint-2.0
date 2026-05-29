@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
   pull_request:
-    branches: [main]
+    branches: [main, master]
 
 jobs:
   build:
@@ -17,18 +17,24 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Install server dependencies
-        run: cd server && bun install
+      - name: Install dependencies
+        run: bun install
 
-      - name: Install client dependencies
-        run: cd client && bun install
+      - name: Typecheck (server + client)
+        run: bun run typecheck
+
+      - name: Server tests
+        run: bun run test
+        env:
+          DATABASE_PATH: ":memory:"
 
       - name: Build client
-        run: cd client && bun run build
+        run: bun run build
 
       - name: Check for secrets in code
         run: |
-          if grep -r "sk-ant-api" . --include="*.js" --include="*.jsx" \
+          if grep -rE "sk-ant-api[0-9a-zA-Z_-]+" . \
+             --include="*.js" --include="*.jsx" --include="*.ts" --include="*.tsx" \
              --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git; then
             echo "ERROR: Real API key found in code"
             exit 1

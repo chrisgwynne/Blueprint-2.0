@@ -1,0 +1,3 @@
+[test]
+# Run a preload that guarantees tests never touch the real database.
+preload = ["./test-setup.ts"]
