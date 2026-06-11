@@ -9,11 +9,12 @@ function getRule(id: string): SignalRule {
 }
 
 describe('signal rules — defensive behaviour', () => {
-  test('no rule raises a false alarm when there is no data yet', () => {
-    // The signal engine catches rules that throw on missing data, so a throw
-    // is tolerated — but a rule that *triggers* on empty input would create
-    // false alarms (e.g. "balance low: £0.00") the moment a connector syncs
-    // with no data. That must never happen.
+  test('no rule throws or raises a false alarm when there is no data yet', () => {
+    // The signal engine normalises null → undefined before calling evaluate()
+    // (so rules' `= {}` parameter defaults apply). Under that convention every
+    // rule must (a) not throw and (b) not trigger on empty input — a rule
+    // that triggers on missing data creates false alarms (e.g. "balance low:
+    // £0.00") the moment a connector syncs with no data.
     for (const rule of rules) {
       for (const [current, previous] of [
         [undefined, undefined],
@@ -22,9 +23,9 @@ describe('signal rules — defensive behaviour', () => {
       ] as const) {
         let result;
         try {
-          result = rule.evaluate(current, previous);
-        } catch {
-          continue; // engine skips throwing rules
+          result = rule.evaluate(current ?? undefined, previous ?? undefined);
+        } catch (err) {
+          throw new Error(`Rule '${rule.id}' threw on empty input ${JSON.stringify(current)}: ${(err as Error).message}`);
         }
         if (result.triggered) {
           throw new Error(`Rule '${rule.id}' triggered on empty input ${JSON.stringify(current)}: "${result.title}"`);

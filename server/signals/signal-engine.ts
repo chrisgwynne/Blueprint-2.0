@@ -79,7 +79,9 @@ export async function runSignalEngine(
   for (const rule of applicableRules) {
     let result: RuleResult;
     try {
-      result = rule.evaluate(currentData, previousData);
+      // Normalise null → undefined so rules' `= {}` parameter defaults kick
+      // in. Many rules access fields directly and would throw on null.
+      result = rule.evaluate(currentData ?? undefined, previousData ?? undefined);
     } catch (err) {
       console.error(`[signal-engine] Rule '${rule.id}' threw during evaluate():`, (err as Error).message);
       continue;

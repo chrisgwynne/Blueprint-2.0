@@ -29,6 +29,29 @@ function shopifyFetch(
   return fetch(url, options);
 }
 
+/**
+ * shopifyFetch with 429 backoff. Shopify's REST API allows ~2 req/s; large
+ * stores paginating at 250 items/page will hit the limit mid-loop, which
+ * previously failed the whole sync. Honours Retry-After when present.
+ */
+async function shopifyFetchRetry(
+  credentials: Creds,
+  path: string,
+  label: string,
+): Promise<Awaited<ReturnType<typeof shopifyFetch>>> {
+  const maxRetries = 4;
+  for (let attempt = 0; ; attempt++) {
+    const res = await shopifyFetch(credentials, path);
+    if (res.status !== 429 || attempt >= maxRetries) return res;
+    const retryAfterSec = Number(res.headers.get('retry-after'));
+    const delayMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+      ? Math.min(retryAfterSec, 60) * 1000
+      : 1000 * Math.pow(2, attempt);
+    console.warn(`[shopify] Rate limited on ${label}. Retry ${attempt + 1}/${maxRetries} in ${delayMs}ms`);
+    await new Promise(r => setTimeout(r, delayMs));
+  }
+}
+
 function dateString(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
@@ -93,7 +116,7 @@ async function fetchOrders(credentials: Creds, daysAgo = 120): Promise<ShopifyOr
   let url: string | null = `/orders.json?status=any&processed_at_min=${encodeURIComponent(since)}&limit=250&fields=id,name,created_at,processed_at,total_price,subtotal_price,total_tax,financial_status,fulfillment_status,line_items,customer,source_name,cancel_reason,email`;
 
   while (url) {
-    const res = await shopifyFetch(credentials, url);
+    const res = await shopifyFetchRetry(credentials, url, 'orders');
     if (!res.ok) {
       const err = await res.text();
       throw new Error(`Shopify orders error ${res.status}: ${err.substring(0, 300)}`);
@@ -118,8 +141,13 @@ async function fetchProducts(credentials: Creds): Promise<ShopifyProduct[]> {
   let url: string | null = `/products.json?status=active&limit=250&fields=id,title,handle,status,variants,images,product_type,tags,created_at,updated_at`;
 
   while (url) {
-    const res = await shopifyFetch(credentials, url);
-    if (!res.ok) break;
+    const res = await shopifyFetchRetry(credentials, url, 'products');
+    if (!res.ok) {
+      // A mid-pagination failure must not silently truncate the catalogue —
+      // downstream product/inventory metrics would be wrong.
+      const err = await res.text();
+      throw new Error(`Shopify products error ${res.status}: ${err.substring(0, 300)}`);
+    }
     const data = await res.json() as { products?: ShopifyProduct[] };
     products.push(...(data.products ?? []));
 
@@ -135,8 +163,11 @@ async function fetchProducts(credentials: Creds): Promise<ShopifyProduct[]> {
  * Fetch customers (most recent 250 for overview).
  */
 async function fetchCustomers(credentials: Creds): Promise<ShopifyCustomer[]> {
-  const res = await shopifyFetch(credentials, `/customers.json?limit=250&fields=id,email,first_name,last_name,orders_count,total_spent,created_at,tags`);
-  if (!res.ok) return [];
+  const res = await shopifyFetchRetry(credentials, `/customers.json?limit=250&fields=id,email,first_name,last_name,orders_count,total_spent,created_at,tags`, 'customers');
+  if (!res.ok) {
+    console.warn(`[shopify] customers fetch failed (${res.status}) — customer metrics will be empty this sync.`);
+    return [];
+  }
   const data = await res.json() as { customers?: ShopifyCustomer[] };
   return data.customers ?? [];
 }
@@ -460,7 +491,10 @@ const connector = {
 
   async fetchCollections(credentials: Creds): Promise<unknown[]> {
     const res = await shopifyFetch(credentials, '/custom_collections.json?limit=50');
-    if (!res.ok) return [];
+    if (!res.ok) {
+      console.warn(`[shopify] collections fetch failed (${res.status}) — returning empty list.`);
+      return [];
+    }
     const data = await res.json() as { custom_collections?: unknown[] };
     return data.custom_collections ?? [];
   },

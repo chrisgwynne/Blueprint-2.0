@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-// @ts-ignore — bcryptjs types are present but excluded by tsconfig "types":["bun-types"]
 import bcrypt from 'bcryptjs';
 
 import { isAuthenticated } from '../middleware/auth.js';
@@ -49,7 +48,7 @@ async function getPasswordHash(): Promise<string> {
   if (!rawPassword) {
     throw new Error('ADMIN_PASSWORD environment variable is not set.');
   }
-  const hash = await (bcrypt as any).hash(rawPassword, 12) as string;
+  const hash = await bcrypt.hash(rawPassword, 12);
   passwordHash = hash;
   return hash;
 }
