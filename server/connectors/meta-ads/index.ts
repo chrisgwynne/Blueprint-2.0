@@ -73,6 +73,27 @@ async function withRetry(
 }
 
 /**
+ * Fetch every page of a Graph API list endpoint by following `paging.next`
+ * cursors. Returns the merged rows in the same `{ data: [...] }` shape the
+ * single-page calls produced, so existing consumers keep working. Capped at
+ * `maxPages` to bound runtime on very large ad accounts.
+ */
+async function fetchAllPages(firstUrl: string, maxPages = 10): Promise<{ data: unknown[] }> {
+  const rows: unknown[] = [];
+  let url: string | undefined = firstUrl;
+  for (let page = 0; page < maxPages && url; page++) {
+    const res = await withRetry(() => fetch(url!) as Promise<FetchLike>);
+    const json = await res.json() as { data?: unknown[]; paging?: { next?: string } };
+    rows.push(...(json.data ?? []));
+    url = json.paging?.next;
+  }
+  if (url) {
+    console.warn(`[meta-ads] Pagination capped at ${maxPages} pages — some rows were not fetched.`);
+  }
+  return { data: rows };
+}
+
+/**
  * Get number (safe parse, falls back to 0 for null/undefined/non-numeric).
  */
 function num(v: unknown): number {
@@ -171,8 +192,9 @@ async function fetchInsights(credentials: Creds, config: Record<string, unknown>
   })) as Promise<FetchLike>);
   const account = await accountRes.json();
 
-  // 2) Campaign-level insights (last 30 days)
-  const campaignsRes = await withRetry(() => fetch(`${GRAPH_BASE}/${accountId}/insights?` + new URLSearchParams({
+  // 2) Campaign-level insights (last 30 days) — paginated so accounts with
+  // many campaigns aren't silently truncated.
+  const campaigns = await fetchAllPages(`${GRAPH_BASE}/${accountId}/insights?` + new URLSearchParams({
     fields: [
       'campaign_name', 'campaign_id', 'objective',
       'impressions', 'reach', 'clicks', 'spend',
@@ -181,10 +203,9 @@ async function fetchInsights(credentials: Creds, config: Record<string, unknown>
     ].join(','),
     level: 'campaign',
     date_preset: 'last_30d',
-    limit: '20',
+    limit: '50',
     access_token: creds.access_token!,
-  })) as Promise<FetchLike>);
-  const campaigns = await campaignsRes.json();
+  }));
 
   // 3) Previous period (31-60 days ago) for comparison
   const prevRes = await withRetry(() => fetch(`${GRAPH_BASE}/${accountId}/insights?` + new URLSearchParams({
@@ -205,13 +226,12 @@ async function fetchCampaigns(credentials: Creds, config: Record<string, unknown
   const accountId = (config.adAccountId as string | undefined) || credentials.ad_account_id;
   if (!accountId) throw new Error('Meta Ads: adAccountId is required.');
 
-  const res = await withRetry(() => fetch(`${GRAPH_BASE}/${accountId}/campaigns?` + new URLSearchParams({
+  return fetchAllPages(`${GRAPH_BASE}/${accountId}/campaigns?` + new URLSearchParams({
     fields: 'id,name,status,objective,daily_budget,lifetime_budget,start_time,stop_time',
     effective_status: JSON.stringify(['ACTIVE', 'PAUSED']),
     limit: '50',
     access_token: creds.access_token!,
-  })) as Promise<FetchLike>);
-  return res.json();
+  }));
 }
 
 async function fetchAdSets(credentials: Creds, config: Record<string, unknown>): Promise<unknown> {
@@ -219,13 +239,12 @@ async function fetchAdSets(credentials: Creds, config: Record<string, unknown>):
   const accountId = (config.adAccountId as string | undefined) || credentials.ad_account_id;
   if (!accountId) throw new Error('Meta Ads: adAccountId is required.');
 
-  const res = await withRetry(() => fetch(`${GRAPH_BASE}/${accountId}/adsets?` + new URLSearchParams({
+  return fetchAllPages(`${GRAPH_BASE}/${accountId}/adsets?` + new URLSearchParams({
     fields: 'id,name,campaign_id,status,daily_budget,targeting,billing_event,optimization_goal',
     effective_status: JSON.stringify(['ACTIVE', 'PAUSED']),
     limit: '50',
     access_token: creds.access_token!,
-  })) as Promise<FetchLike>);
-  return res.json();
+  }));
 }
 
 // ─── Connector interface ─────────────────────────────────────────────────────

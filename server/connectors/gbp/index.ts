@@ -142,18 +142,29 @@ const connector = {
 
     // Run all reads in parallel — each catches its own errors so one failure
     // doesn't sink the whole sync (legacy API endpoints can be flaky).
+    // Failed sections are logged and reported in `partial_failures` so the
+    // sync layer and dashboard can tell "no reviews" apart from "reviews
+    // fetch failed".
+    const partialFailures: Array<{ section: string; error: string }> = [];
+    const fallback = <T>(section: string, value: T) => (err: unknown): T => {
+      const message = err instanceof Error ? err.message : String(err);
+      partialFailures.push({ section, error: message.substring(0, 300) });
+      console.warn(`[gbp] ${section} fetch failed for ${fullLocationName}: ${message.substring(0, 300)}`);
+      return value;
+    };
+
     const [location, reviews, insights, posts, photos, qa] = await Promise.all([
       // Location details
       gbpFetch(
         `${BUSINESS_INFO}/locations/${cleanLocId}?readMask=${encodeURIComponent('name,title,phoneNumbers,categories,storefrontAddress,websiteUri,regularHours,businessStatus,profile,metadata')}`,
         fresh
-      ).catch(() => null),
+      ).catch(fallback('location', null)),
 
       // Reviews (legacy v4)
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/reviews?pageSize=50`,
         fresh
-      ).catch(() => ({ reviews: [], averageRating: 0, totalReviewCount: 0 })),
+      ).catch(fallback('reviews', { reviews: [], averageRating: 0, totalReviewCount: 0 })),
 
       // Insights (legacy v4 reportInsights — POST)
       (async () => {
@@ -187,8 +198,8 @@ const connector = {
             { label: 'GBP insights' }
           );
           return res.json() as Promise<Record<string, unknown>>;
-        } catch {
-          return { locationMetrics: [] };
+        } catch (err) {
+          return fallback('insights', { locationMetrics: [] })(err);
         }
       })(),
 
@@ -196,19 +207,19 @@ const connector = {
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/localPosts?pageSize=20`,
         fresh
-      ).catch(() => ({ localPosts: [] })),
+      ).catch(fallback('posts', { localPosts: [] })),
 
       // Photos / media
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/media?pageSize=50`,
         fresh
-      ).catch(() => ({ mediaItems: [] })),
+      ).catch(fallback('photos', { mediaItems: [] })),
 
       // Q&A
       gbpFetch(
         `${LEGACY}/locations/${cleanLocId}/questions?pageSize=20&answersPerQuestion=5`,
         fresh
-      ).catch(() => ({ questions: [] })),
+      ).catch(fallback('qa', { questions: [] })),
     ]);
 
     const reviewsData = reviews as Record<string, unknown>;
@@ -224,6 +235,7 @@ const connector = {
       posts: postsData?.localPosts ?? [],
       photos: photosData?.mediaItems ?? [],
       qa: qaData?.questions ?? [],
+      partial_failures: partialFailures,
       fetchedAt: new Date().toISOString(),
     };
   },

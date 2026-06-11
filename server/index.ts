@@ -122,7 +122,11 @@ app.use(express.urlencoded({ extended: true }));
 // Sessions
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) {
-  console.error('[startup] CRITICAL: SESSION_SECRET environment variable is not set!');
+  if (process.env.NODE_ENV === 'production') {
+    console.error('[startup] FATAL: SESSION_SECRET must be set in production. Refusing to start with a guessable session secret.');
+    process.exit(1);
+  }
+  console.error('[startup] CRITICAL: SESSION_SECRET environment variable is not set! Using an insecure dev-only fallback.');
 }
 
 app.use(session({
@@ -487,6 +491,9 @@ const mountRoutes = async () => {
 // ─── Startup ─────────────────────────────────────────────────────────────────
 
 async function start(): Promise<void> {
+  // Declared before the shutdown handlers below so a signal arriving during
+  // startup doesn't hit a temporal-dead-zone ReferenceError.
+  let server: ReturnType<typeof app.listen> | undefined;
   try {
     // Ensure data directory exists
     mkdirSync(resolve(__dirname, '../data'), { recursive: true });
@@ -570,7 +577,7 @@ async function start(): Promise<void> {
     }
 
     // Start server
-    const server = app.listen(PORT, () => {
+    server = app.listen(PORT, () => {
       console.log(`[startup] Blueprint server running on http://localhost:${PORT}`);
       console.log(`[startup] Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`[startup] API health: http://localhost:${PORT}/api/health`);

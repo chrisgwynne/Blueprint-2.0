@@ -70,7 +70,9 @@ function fmtRel(iso: string | undefined | null) {
 
 function daysUntil(iso: string | undefined | null) {
   if (!iso) return null
-  return Math.ceil((new Date(iso).getTime() - new Date().getTime()) / 86400000)
+  const d = parseTimestamp(iso)
+  if (!d) return null
+  return Math.ceil((d.getTime() - Date.now()) / 86400000)
 }
 
 function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: string; onRefresh: () => void }) {

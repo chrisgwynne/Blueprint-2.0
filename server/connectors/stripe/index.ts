@@ -26,8 +26,9 @@ interface StripeSubscription {
 
 function getClient(credentials: Creds): Stripe {
   if (!credentials?.apiKey) throw new Error('Stripe API key is required.');
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return new Stripe(credentials.apiKey, { apiVersion: '2024-06-20' as any });
+  // No apiVersion override: the SDK pins the API version it was built and
+  // typed against, which is safer than forcing an older version with a cast.
+  return new Stripe(credentials.apiKey);
 }
 
 function calculateMRR(subscriptions: StripeSubscription[]): number {

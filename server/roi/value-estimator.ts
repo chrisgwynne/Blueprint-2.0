@@ -143,15 +143,34 @@ function getAOV(businessId: string): number | null {
  * Business's baseline conversion rate as a decimal (0.025 = 2.5%).
  * Tries shopify first, then ga4.
  */
+/**
+ * Normalise a stored conversion-rate baseline to a decimal.
+ * Baselines have no unit metadata, so this is a heuristic: e-commerce
+ * conversion rates virtually never exceed 20% as a decimal, so anything
+ * above 0.2 is assumed to be a percentage (e.g. 2.5 → 0.025). Values that
+ * remain implausible after conversion are rejected rather than fed into
+ * revenue estimates.
+ */
+function normaliseConversionRate(raw: number): number | null {
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const decimal = raw > 0.2 ? raw / 100 : raw;
+  if (decimal > 0.5) {
+    console.warn(`[value-estimator] Implausible conversion rate baseline ${raw} — ignoring.`);
+    return null;
+  }
+  return decimal;
+}
+
 function getConversionRate(businessId: string): number | null {
   const shop = getBaseline(businessId, 'shopify.conversion_rate');
   if (shop && Number.isFinite(shop.baseline_value)) {
-    // Store as decimal — if baseline looks like a % (>1), divide by 100.
-    return (shop.baseline_value as number) > 1 ? (shop.baseline_value as number) / 100 : (shop.baseline_value as number);
+    const rate = normaliseConversionRate(shop.baseline_value as number);
+    if (rate !== null) return rate;
   }
   const ga4 = getBaseline(businessId, 'ga4.conversion_rate');
   if (ga4 && Number.isFinite(ga4.baseline_value)) {
-    return (ga4.baseline_value as number) > 1 ? (ga4.baseline_value as number) / 100 : (ga4.baseline_value as number);
+    const rate = normaliseConversionRate(ga4.baseline_value as number);
+    if (rate !== null) return rate;
   }
   return null;
 }
