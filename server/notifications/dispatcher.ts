@@ -67,9 +67,18 @@ export async function dispatch(notification: Notification): Promise<DispatchResu
       }
 
       case 'email': {
-        // Email adapter — not yet implemented
-        console.warn('[dispatcher] Email channel not yet implemented.');
-        result = { ok: false, error: 'Email channel not implemented.' };
+        const { sendEmail, getEmailRecipient } = await import('./email.js');
+        const to = getEmailRecipient();
+        if (!to) {
+          result = { ok: false, error: 'Email recipient not configured (Settings → Notifications).' };
+          break;
+        }
+        const sent = await sendEmail({
+          to,
+          subject: `[${notification.severity}] ${notification.title}`,
+          text: notification.body ?? notification.title,
+        });
+        result = { ok: sent.ok };
         break;
       }
 

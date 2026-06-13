@@ -1,4 +1,3 @@
-// @ts-nocheck — complex connector data visualization; connector shapes are too varied to type explicitly
 import React, { useState, useEffect, useCallback } from 'react'
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { formatDistanceToNow, format, parseISO } from 'date-fns'
@@ -77,7 +76,7 @@ const RANGE_LABELS  = { today: 'Today', yesterday: 'Yesterday', '7d': '7D', '14d
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function getRangeBounds(range) {
+function getRangeBounds(range: any) {
   const now = new Date()
   if (range === 'today') {
     const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -91,18 +90,18 @@ function getRangeBounds(range) {
   return { start: new Date(now.getTime() - days * 86400000), end: now }
 }
 
-function getPrevBounds(range) {
+function getPrevBounds(range: any) {
   const { start, end } = getRangeBounds(range)
   const duration = end.getTime() - start.getTime()
   return { start: new Date(start.getTime() - duration), end: start }
 }
 
-function pctChange(current, previous) {
+function pctChange(current: any, previous: any) {
   if (!previous || previous === 0) return null
   return ((current - previous) / previous) * 100
 }
 
-function TrendBadge({ current, previous, invertPolarity = false, suffix = '' }) {
+function TrendBadge({ current, previous, invertPolarity = false, suffix = '' }: any) {
   const pct = pctChange(current, previous)
   if (pct === null) return null
   const good = invertPolarity ? pct < 0 : pct > 0
@@ -119,7 +118,7 @@ function TrendBadge({ current, previous, invertPolarity = false, suffix = '' }) 
   )
 }
 
-function MetricCard({ label, value, previous, format: fmt = 'number', invertPolarity = false, accent }) {
+function MetricCard({ label, value, previous, format: fmt = 'number', invertPolarity = false, accent }: any) {
   const display = fmt === 'currency' ? `£${Number(value || 0).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
     : fmt === 'pct' ? `${(value || 0).toFixed(1)}%`
     : fmt === 'duration' ? `${Math.floor((value || 0) / 60)}m ${Math.round((value || 0) % 60)}s`
@@ -142,12 +141,12 @@ function MetricCard({ label, value, previous, format: fmt = 'number', invertPola
   )
 }
 
-function CustomTooltip({ active, payload, label }) {
+function CustomTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null
   return (
     <div style={{ ...chartDefaults.tooltip.contentStyle, padding: '8px 12px' }}>
       <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 4 }}>{label}</div>
-      {payload.map((p, i) => (
+      {payload.map((p: any, i: any) => (
         <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: p.color || 'var(--bp-text)' }}>
           {p.name}: {typeof p.value === 'number' ? p.value.toLocaleString() : p.value}
         </div>
@@ -158,7 +157,7 @@ function CustomTooltip({ active, payload, label }) {
 
 // ─── Raw Data Tab ─────────────────────────────────────────────────────────────
 
-function RawDataTab({ data }) {
+function RawDataTab({ data }: any) {
   const [copied, setCopied] = useState(false)
   const json = JSON.stringify(data, null, 2)
   function copy() {
@@ -184,14 +183,14 @@ function RawDataTab({ data }) {
 
 // ─── GSC Tabs ────────────────────────────────────────────────────────────────
 
-function GSCOverview({ metrics }) {
+function GSCOverview({ metrics }: any) {
   const { latest, series, summary } = metrics
   const clicks = latest['clicks'] ?? 0
   const impressions = latest['impressions'] ?? 0
   const ctr = latest['ctr'] ?? 0
   const position = latest['position'] ?? 0
 
-  const clicksSeries = (series['clicks'] || []).map(m => ({
+  const clicksSeries = (series['clicks'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     clicks: m.metric_value,
   }))
@@ -229,7 +228,7 @@ function GSCOverview({ metrics }) {
   )
 }
 
-function GSCKeywords({ metrics }) {
+function GSCKeywords({ metrics }: any) {
   // GSC connector writes 'gsc.keywords' with data = top 100 keyword objects.
   // Server alias exposes both 'keywords' (scalar count) and 'keywords_data'
   // (the array). Accept either for backwards compat.
@@ -245,12 +244,12 @@ function GSCKeywords({ metrics }) {
   }
 
   // Opportunity finder: high impressions (>100), low CTR (<3%), position 11-20
-  const avgCTR = keywords.reduce((s, k) => s + (k.ctr || 0), 0) / (keywords.length || 1)
-  const opportunities = keywords.filter(k =>
+  const avgCTR = keywords.reduce((s: any, k: any) => s + (k.ctr || 0), 0) / (keywords.length || 1)
+  const opportunities = keywords.filter((k: any) =>
     (k.impressions || 0) > 100 &&
     (k.ctr || 0) < Math.max(avgCTR, 0.03) &&
     (k.position || 99) >= 8 && (k.position || 99) <= 25
-  ).sort((a, b) => (b.impressions || 0) - (a.impressions || 0)).slice(0, 8)
+  ).sort((a: any, b: any) => (b.impressions || 0) - (a.impressions || 0)).slice(0, 8)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -267,7 +266,7 @@ function GSCKeywords({ metrics }) {
             </span>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {opportunities.map((kw, i) => {
+            {opportunities.map((kw: any, i: any) => {
               const kw_text = kw.keys?.[0] || kw.query || kw.keyword
               const ctrPct = ((kw.ctr || 0) * 100).toFixed(1)
               const pos = (kw.position || 0).toFixed(1)
@@ -309,7 +308,7 @@ function GSCKeywords({ metrics }) {
             </tr>
           </thead>
           <tbody>
-            {keywords.slice(0, 50).map((kw, i) => (
+            {keywords.slice(0, 50).map((kw: any, i: any) => (
               <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                 <td style={{ padding: '9px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>{kw.keys?.[0] || kw.query || kw.keyword}</td>
                 <td style={{ padding: '9px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>{(kw.clicks || 0).toLocaleString()}</td>
@@ -332,7 +331,7 @@ function GSCKeywords({ metrics }) {
   )
 }
 
-function GSCPages({ metrics }) {
+function GSCPages({ metrics }: any) {
   // GSC doesn't emit a separate top_pages metric — derive from the same
   // keyword-level data, grouping by page URL.
   const rawKeywords = metrics.latest['keywords_data']
@@ -358,7 +357,7 @@ function GSCPages({ metrics }) {
     clicks: p.clicks,
     impressions: p.impressions,
     ctr: p.impressions > 0 ? p.clicks / p.impressions : 0,
-    position: p.positions.length > 0 ? p.positions.reduce((a, b) => a + b, 0) / p.positions.length : 0,
+    position: p.positions.length > 0 ? p.positions.reduce((a: any, b: any) => a + b, 0) / p.positions.length : 0,
     queries: p.queries,
   })).sort((a, b) => b.clicks - a.clicks)
 
@@ -377,7 +376,7 @@ function GSCPages({ metrics }) {
           </tr>
         </thead>
         <tbody>
-          {pages.slice(0, 50).map((p, i) => (
+          {pages.slice(0, 50).map((p: any, i) => (
             <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
               <td style={{ padding: '9px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text)', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {p.keys?.[0] || p.page || p.url}
@@ -396,7 +395,7 @@ function GSCPages({ metrics }) {
 
 // ─── GA4 Tabs ─────────────────────────────────────────────────────────────────
 
-function GA4Overview({ metrics }) {
+function GA4Overview({ metrics }: any) {
   const { latest, series, summary } = metrics
   const sessions = latest['sessions'] ?? 0
   const users = latest['users'] ?? 0
@@ -405,7 +404,7 @@ function GA4Overview({ metrics }) {
   const pageviews = latest['pageviews'] ?? 0
   const newUsers = latest['new_users'] ?? 0
 
-  const sessionsSeries = (series['sessions'] || []).map(m => ({
+  const sessionsSeries = (series['sessions'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     sessions: m.metric_value,
   }))
@@ -445,9 +444,9 @@ function GA4Overview({ metrics }) {
   )
 }
 
-function GA4Traffic({ metrics }) {
+function GA4Traffic({ metrics }: any) {
   const { series } = metrics
-  const sessionsSeries = (series['sessions'] || []).map(m => ({
+  const sessionsSeries = (series['sessions'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     sessions: m.metric_value,
   }))
@@ -487,7 +486,7 @@ function GA4Traffic({ metrics }) {
               </tr>
             </thead>
             <tbody>
-              {sources.map((s, i) => (
+              {sources.map((s: any, i: any) => (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ padding: '8px 0', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>{s.source || s.channel || s.medium}</td>
                   <td style={{ padding: '8px 0', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>{(s.sessions || 0).toLocaleString()}</td>
@@ -505,12 +504,12 @@ function GA4Traffic({ metrics }) {
 
 // ─── PageSpeed Tabs ───────────────────────────────────────────────────────────
 
-function PSOverview({ metrics }) {
+function PSOverview({ metrics }: any) {
   const { latest } = metrics
   // Defensive scalar coercion: an alias may resolve to an object (the
   // sibling metric_data) when something upstream is wrong. Strip to a
   // number so we never end up multiplying an object → NaN.
-  const num = (v) => {
+  const num = (v: any) => {
     if (typeof v === 'number' && Number.isFinite(v)) return v
     if (v && typeof v === 'object') {
       // pagespeed connector stores the entire scores object as data
@@ -533,12 +532,12 @@ function PSOverview({ metrics }) {
 
   // Normalize 0-1 scores to 0-100 (the connector now writes 0-100 already
   // but this stays correct for either scale).
-  const norm = (v) => v <= 1 ? Math.round(v * 100) : Math.round(v)
+  const norm = (v: any) => v <= 1 ? Math.round(v * 100) : Math.round(v)
 
   const cwvItems = [
-    { label: 'LCP', value: mobile.lcp, unit: 'ms', threshold: 2500, invert: true, format: (v) => `${v}ms`, good: v => v < 2500, warn: v => v < 4000 },
-    { label: 'CLS', value: mobile.cls, unit: '', threshold: 0.1, invert: true, format: (v) => v?.toFixed(3), good: v => v < 0.1, warn: v => v < 0.25 },
-    { label: 'FCP', value: mobile.fcp, unit: 'ms', invert: true, format: (v) => `${v}ms`, good: v => v < 1800, warn: v => v < 3000 },
+    { label: 'LCP', value: mobile.lcp, unit: 'ms', threshold: 2500, invert: true, format: (v: any) => `${v}ms`, good: (v: any) => v < 2500, warn: (v: any) => v < 4000 },
+    { label: 'CLS', value: mobile.cls, unit: '', threshold: 0.1, invert: true, format: (v: any) => v?.toFixed(3), good: (v: any) => v < 0.1, warn: (v: any) => v < 0.25 },
+    { label: 'FCP', value: mobile.fcp, unit: 'ms', invert: true, format: (v: any) => `${v}ms`, good: (v: any) => v < 1800, warn: (v: any) => v < 3000 },
   ]
 
   return (
@@ -548,16 +547,16 @@ function PSOverview({ metrics }) {
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16 }}>Mobile Scores</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
           <div style={{ textAlign: 'center' }}>
-            <Gauge value={norm(mobile.performance)} max={100} label="Performance" size={100} goodThreshold={90} warnThreshold={50} />
+            <Gauge value={norm(mobile.performance)} max={100} label="Performance" goodThreshold={90} needsWorkThreshold={50} />
           </div>
           <div style={{ textAlign: 'center' }}>
-            <Gauge value={norm(mobile.accessibility)} max={100} label="Accessibility" size={100} goodThreshold={90} warnThreshold={50} />
+            <Gauge value={norm(mobile.accessibility)} max={100} label="Accessibility" goodThreshold={90} needsWorkThreshold={50} />
           </div>
           <div style={{ textAlign: 'center' }}>
-            <Gauge value={norm(mobile.bestPractices)} max={100} label="Best Practices" size={100} goodThreshold={90} warnThreshold={50} />
+            <Gauge value={norm(mobile.bestPractices)} max={100} label="Best Practices" goodThreshold={90} needsWorkThreshold={50} />
           </div>
           <div style={{ textAlign: 'center' }}>
-            <Gauge value={norm(mobile.seo)} max={100} label="SEO" size={100} goodThreshold={90} warnThreshold={50} />
+            <Gauge value={norm(mobile.seo)} max={100} label="SEO" goodThreshold={90} needsWorkThreshold={50} />
           </div>
         </div>
       </div>
@@ -593,9 +592,9 @@ function PSOverview({ metrics }) {
 
 // ─── PageSpeed Desktop Tab ────────────────────────────────────────────────────
 
-function PSDesktop({ metrics }) {
+function PSDesktop({ metrics }: any) {
   const { latest } = metrics
-  const norm = (v) => v <= 1 ? Math.round(v * 100) : Math.round(v)
+  const norm = (v: any) => v <= 1 ? Math.round(v * 100) : Math.round(v)
   const desktop = {
     performance:   norm(latest['performance_desktop'] ?? 0),
     accessibility: norm(latest['accessibility_desktop'] ?? 0),
@@ -606,19 +605,19 @@ function PSDesktop({ metrics }) {
     fcp:           latest['fcp_desktop'] ?? 0,
   }
   const cwvItems = [
-    { label: 'LCP', value: desktop.lcp, format: (v) => `${v}ms`, good: v => v < 2500, warn: v => v < 4000 },
-    { label: 'CLS', value: desktop.cls, format: (v) => v?.toFixed(3), good: v => v < 0.1, warn: v => v < 0.25 },
-    { label: 'FCP', value: desktop.fcp, format: (v) => `${v}ms`, good: v => v < 1800, warn: v => v < 3000 },
+    { label: 'LCP', value: desktop.lcp, format: (v: any) => `${v}ms`, good: (v: any) => v < 2500, warn: (v: any) => v < 4000 },
+    { label: 'CLS', value: desktop.cls, format: (v: any) => v?.toFixed(3), good: (v: any) => v < 0.1, warn: (v: any) => v < 0.25 },
+    { label: 'FCP', value: desktop.fcp, format: (v: any) => `${v}ms`, good: (v: any) => v < 1800, warn: (v: any) => v < 3000 },
   ]
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div className="bp-card" style={{ padding: '20px' }}>
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 16 }}>Desktop Scores</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
-          <div style={{ textAlign: 'center' }}><Gauge value={desktop.performance} max={100} label="Performance" size={100} goodThreshold={90} warnThreshold={50} /></div>
-          <div style={{ textAlign: 'center' }}><Gauge value={desktop.accessibility} max={100} label="Accessibility" size={100} goodThreshold={90} warnThreshold={50} /></div>
-          <div style={{ textAlign: 'center' }}><Gauge value={desktop.bestPractices} max={100} label="Best Practices" size={100} goodThreshold={90} warnThreshold={50} /></div>
-          <div style={{ textAlign: 'center' }}><Gauge value={desktop.seo} max={100} label="SEO" size={100} goodThreshold={90} warnThreshold={50} /></div>
+          <div style={{ textAlign: 'center' }}><Gauge value={desktop.performance} max={100} label="Performance" goodThreshold={90} needsWorkThreshold={50} /></div>
+          <div style={{ textAlign: 'center' }}><Gauge value={desktop.accessibility} max={100} label="Accessibility" goodThreshold={90} needsWorkThreshold={50} /></div>
+          <div style={{ textAlign: 'center' }}><Gauge value={desktop.bestPractices} max={100} label="Best Practices" goodThreshold={90} needsWorkThreshold={50} /></div>
+          <div style={{ textAlign: 'center' }}><Gauge value={desktop.seo} max={100} label="SEO" goodThreshold={90} needsWorkThreshold={50} /></div>
         </div>
       </div>
       <div className="bp-card" style={{ padding: '16px 18px' }}>
@@ -645,17 +644,17 @@ function PSDesktop({ metrics }) {
 
 // ─── PageSpeed History Tab ────────────────────────────────────────────────────
 
-function PSHistory({ metrics }) {
+function PSHistory({ metrics }: any) {
   const { series } = metrics
-  const mobileSeries = (series['performance_mobile'] || []).map(m => ({
+  const mobileSeries = (series['performance_mobile'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     mobile: typeof m.metric_value === 'number' ? (m.metric_value <= 1 ? Math.round(m.metric_value * 100) : Math.round(m.metric_value)) : 0,
   }))
-  const desktopSeries = (series['performance_desktop'] || []).map(m => ({
+  const desktopSeries = (series['performance_desktop'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     desktop: typeof m.metric_value === 'number' ? (m.metric_value <= 1 ? Math.round(m.metric_value * 100) : Math.round(m.metric_value)) : 0,
   }))
-  const merged = mobileSeries.map((m, i) => ({ ...m, desktop: desktopSeries[i]?.desktop }))
+  const merged = mobileSeries.map((m: any, i: any) => ({ ...m, desktop: desktopSeries[i]?.desktop }))
   if (merged.length < 2) return <EmptyState message="Score history builds up after multiple syncs." />
   return (
     <div className="bp-card" style={{ padding: '16px 18px' }}>
@@ -676,7 +675,7 @@ function PSHistory({ metrics }) {
 
 // ─── PageSpeed Opportunities Tab ──────────────────────────────────────────────
 
-function PSOpportunities({ metrics, connector }) {
+function PSOpportunities({ metrics, connector }: any) {
   const addNotification = useStore((s) => s.addNotification)
   const opportunities = (() => {
     // Aliases now expose opportunities_mobile_data + opportunities_desktop_data;
@@ -688,9 +687,9 @@ function PSOpportunities({ metrics, connector }) {
     if (!raw) return []
     try { return typeof raw === 'string' ? JSON.parse(raw) : raw } catch { return [] }
   })()
-  const [creating, setCreating] = React.useState({})
+  const [creating, setCreating] = React.useState<Record<string, boolean>>({})
 
-  async function handleCreateTask(opp) {
+  async function handleCreateTask(opp: any) {
     setCreating(p => ({ ...p, [opp.id]: true }))
     try {
       await createTask({
@@ -704,7 +703,7 @@ function PSOpportunities({ metrics, connector }) {
       })
       addNotification({ type: 'success', title: 'Task created', message: `"Fix: ${opp.title}" added to Dev queue` })
     } catch (err) {
-      addNotification({ type: 'error', message: err.message })
+      addNotification({ type: 'error', message: (err as any).message })
     } finally {
       setCreating(p => ({ ...p, [opp.id]: false }))
     }
@@ -713,7 +712,7 @@ function PSOpportunities({ metrics, connector }) {
   if (!opportunities.length) return <EmptyState message="Run a sync to pull PageSpeed opportunities. Ensure your PageSpeed connector is configured." />
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {opportunities.map((opp, i) => {
+      {opportunities.map((opp: any, i: any) => {
         const score = opp.score ?? 1
         const scoreColor = score < 0.5 ? 'var(--bp-red)' : score < 0.9 ? 'var(--bp-amber)' : 'var(--bp-green)'
         return (
@@ -752,7 +751,7 @@ function PSOpportunities({ metrics, connector }) {
 
 // ─── Stripe Overview ──────────────────────────────────────────────────────────
 
-function BrevoOverview({ metrics, summary }) {
+function BrevoOverview({ metrics, summary }: any) {
   const { latest } = metrics
   const totalContacts = latest['total_contacts'] ?? 0
   const campaigns30d = latest['campaigns_sent_30d'] ?? 0
@@ -817,7 +816,7 @@ function BrevoOverview({ metrics, summary }) {
   )
 }
 
-function BrevoContacts({ metrics }) {
+function BrevoContacts({ metrics }: any) {
   const { latest } = metrics
   const totalContacts = latest['total_contacts'] ?? 0
   const lists = Array.isArray(latest['lists_data']) ? latest['lists_data'] : []
@@ -864,7 +863,7 @@ function BrevoContacts({ metrics }) {
   )
 }
 
-function BrevoTransactional({ metrics, summary }) {
+function BrevoTransactional({ metrics, summary }: any) {
   const { latest } = metrics
   const delivered = latest['transactional_delivered_7d'] ?? null
   const bounceRate = latest['transactional_bounce_rate_7d'] ?? null
@@ -890,13 +889,13 @@ function BrevoTransactional({ metrics, summary }) {
   )
 }
 
-function StripeOverview({ metrics }) {
+function StripeOverview({ metrics }: any) {
   const { latest, series } = metrics
   const mrr = latest['mrr'] ?? 0
   const arr = latest['arr'] ?? mrr * 12
   const activeCustomers = latest['active_customers'] ?? latest['active_subscriptions'] ?? 0
   const churnRate = latest['churn_rate'] ?? 0
-  const revSeries = (series['revenue'] || []).map(m => ({
+  const revSeries = (series['revenue'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     revenue: m.metric_value,
   }))
@@ -934,13 +933,13 @@ function StripeOverview({ metrics }) {
 
 // ─── GitHub Overview ──────────────────────────────────────────────────────────
 
-function GitHubOverview({ metrics }) {
+function GitHubOverview({ metrics }: any) {
   const { latest, series } = metrics
   const openPRs = latest['open_prs'] ?? latest['pull_requests_open'] ?? 0
   const mergedPRs = latest['merged_prs_7d'] ?? latest['merged_prs'] ?? 0
   const openIssues = latest['open_issues'] ?? 0
   const commits = latest['commits_7d'] ?? latest['commits'] ?? 0
-  const commitSeries = (series['commits_7d'] || series['commits'] || []).map(m => ({
+  const commitSeries = (series['commits_7d'] || series['commits'] || []).map((m: any) => ({
     date: format(parseISO(m.recorded_at), 'MMM d'),
     commits: m.metric_value,
   }))
@@ -983,7 +982,7 @@ function GitHubOverview({ metrics }) {
               </tr>
             </thead>
             <tbody>
-              {prs.slice(0, 10).map((pr, i) => (
+              {prs.slice(0, 10).map((pr: any, i: any) => (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ padding: '9px 14px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pr.title}</td>
                   <td style={{ padding: '9px 14px' }}>
@@ -1003,12 +1002,12 @@ function GitHubOverview({ metrics }) {
 
 // ─── Shopify Overview ─────────────────────────────────────────────────────────
 
-function ShopifyOverview({ metrics, range }) {
+function ShopifyOverview({ metrics, range }: any) {
   const { latest } = metrics
   const { start, end } = getRangeBounds(range || '30d')
   const prev = getPrevBounds(range || '30d')
   // Use local date strings to avoid UTC shift (e.g. BST midnight → previous UTC day)
-  const toLocalStr = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  const toLocalStr = (d: any) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
   const startStr    = toLocalStr(start)
   const endStr      = toLocalStr(end)
   const prevStartStr = toLocalStr(prev.start)
@@ -1057,13 +1056,14 @@ function ShopifyOverview({ metrics, range }) {
     const d = new Date(o.created_at)
     return d >= start && d <= end
   })
-  const productMap = {}
+  const productMap: Record<string, { title: string; quantity: number; revenue: number }> = {}
   for (const o of rangeOrders) {
     for (const item of (o.items || [])) {
       if (!item.title) continue
       if (!productMap[item.title]) productMap[item.title] = { title: item.title, quantity: 0, revenue: 0 }
-      productMap[item.title].quantity += item.quantity || 0
-      productMap[item.title].revenue += (item.price || 0) * (item.quantity || 0)
+      const pm = productMap[item.title]!
+      pm.quantity += item.quantity || 0
+      pm.revenue += (item.price || 0) * (item.quantity || 0)
     }
   }
   const topProducts = Object.values(productMap).sort((a, b) => b.revenue - a.revenue).slice(0, 10)
@@ -1105,7 +1105,7 @@ function ShopifyOverview({ metrics, range }) {
       {topProducts.length > 0 && (
         <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
           <div style={{ padding: '12px 18px', borderBottom: '1px solid var(--bp-border)', fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-            Top Products — {RANGE_LABELS[range] || range}
+            Top Products — {(RANGE_LABELS as any)[range] || range}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -1116,7 +1116,7 @@ function ShopifyOverview({ metrics, range }) {
               </tr>
             </thead>
             <tbody>
-              {topProducts.slice(0, 10).map((p, i) => (
+              {topProducts.slice(0, 10).map((p: any, i) => (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ padding: '9px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)', maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.title || p.name}</td>
                   <td style={{ padding: '9px 16px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>{(p.units || p.quantity || 0).toLocaleString()}</td>
@@ -1133,7 +1133,7 @@ function ShopifyOverview({ metrics, range }) {
 
 // ─── Shopify Orders Tab ───────────────────────────────────────────────────────
 
-function ShopifyOrders({ metrics, range }) {
+function ShopifyOrders({ metrics, range }: any) {
   const { start, end } = getRangeBounds(range || '30d')
   const allOrders = Array.isArray(metrics.latest['recent_orders_data'])
     ? metrics.latest['recent_orders_data']
@@ -1141,7 +1141,7 @@ function ShopifyOrders({ metrics, range }) {
       ? (typeof metrics.latest['recent_orders_data'] === 'string' ? JSON.parse(metrics.latest['recent_orders_data']) : metrics.latest['recent_orders_data'])
       : []
 
-  const orders = allOrders.filter(o => {
+  const orders = allOrders.filter((o: any) => {
     if (!o.created_at) return true
     const d = new Date(o.created_at)
     return d >= start && d <= end
@@ -1163,7 +1163,7 @@ function ShopifyOrders({ metrics, range }) {
     pending:     { bg: 'var(--bp-text-3)', text: '#fff' },
   }
 
-  const counts = orders.reduce((acc, o) => {
+  const counts = orders.reduce((acc: any, o: any) => {
     const s = (o.fulfillment_status || o.status || 'pending').toLowerCase()
     acc[s] = (acc[s] || 0) + 1
     return acc
@@ -1174,7 +1174,7 @@ function ShopifyOrders({ metrics, range }) {
       {/* Summary pills */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         {Object.entries(counts).map(([status, count]) => {
-          const c = statusColors[status] || { bg: 'var(--bp-text-3)', text: '#fff' }
+          const c = (statusColors as any)[status] || { bg: 'var(--bp-text-3)', text: '#fff' }
           return (
             <span key={status} style={{
               display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -1184,7 +1184,7 @@ function ShopifyOrders({ metrics, range }) {
               textTransform: 'capitalize',
             }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.bg, display: 'inline-block' }} />
-              {status}: {count}
+              {status}: {count as any}
             </span>
           )
         })}
@@ -1201,9 +1201,9 @@ function ShopifyOrders({ metrics, range }) {
             </tr>
           </thead>
           <tbody>
-            {orders.map((o, i) => {
+            {orders.map((o: any, i: any) => {
               const rawStatus = (o.fulfillment_status || o.status || 'pending').toLowerCase()
-              const c = statusColors[rawStatus] || { bg: 'var(--bp-text-3)', text: '#fff' }
+              const c = (statusColors as any)[rawStatus] || { bg: 'var(--bp-text-3)', text: '#fff' }
               const dateStr = o.created_at ? (() => { try { return format(parseISO(o.created_at), 'MMM d, yyyy') } catch { return o.created_at } })() : '—'
               const customerName = typeof o.customer === 'string' ? (o.customer || '—') : (o.customer_name || o.email || '—')
               const itemCount = o.item_count || o.items_count || (o.line_items ? o.line_items.length : 0)
@@ -1237,7 +1237,7 @@ function ShopifyOrders({ metrics, range }) {
 
 // ─── Shopify Products Tab ─────────────────────────────────────────────────────
 
-function ShopifyProducts({ metrics }) {
+function ShopifyProducts({ metrics }: any) {
   const [view, setView] = useState('table')
   const products = metrics.latest['products_data']
     ? (typeof metrics.latest['products_data'] === 'string'
@@ -1284,7 +1284,7 @@ function ShopifyProducts({ metrics }) {
               </tr>
             </thead>
             <tbody>
-              {products.slice(0, 200).map((p, i) => {
+              {products.slice(0, 200).map((p: any, i: any) => {
                 const isActive = (p.status || 'active').toLowerCase() === 'active'
                 const priceDisplay = p.price ? `£${Number(p.price).toFixed(2)}` : '—'
                 const invDisplay = p.inventory === null || p.inventory === undefined
@@ -1309,7 +1309,7 @@ function ShopifyProducts({ metrics }) {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 }}>
-          {products.slice(0, 100).map((p, i) => {
+          {products.slice(0, 100).map((p: any, i: any) => {
             const isActive = (p.status || 'active').toLowerCase() === 'active'
             const priceDisplay = p.price ? `£${Number(p.price).toFixed(2)}` : '—'
             const inv = p.inventory
@@ -1340,7 +1340,7 @@ function ShopifyProducts({ metrics }) {
 
 // ─── Shopify Customers Tab ────────────────────────────────────────────────────
 
-function ShopifyCustomers({ metrics, range }) {
+function ShopifyCustomers({ metrics, range }: any) {
   const { start } = getRangeBounds(range || '30d')
 
   const allRows = Array.isArray(metrics.latest['customers_data'])
@@ -1351,7 +1351,7 @@ function ShopifyCustomers({ metrics, range }) {
 
   const totalCustomers = metrics.latest['customers'] ?? 0
   // New customers = joined within the selected range
-  const newInPeriod = allRows.filter(c => c.created_at && new Date(c.created_at) >= start).length
+  const newInPeriod = allRows.filter((c: any) => c.created_at && new Date(c.created_at) >= start).length
 
   const rows = allRows
 
@@ -1364,8 +1364,8 @@ function ShopifyCustomers({ metrics, range }) {
       {/* Summary metrics */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         <MetricCard label="Total Customers" value={totalCustomers} accent="var(--bp-purple)" />
-        <MetricCard label={`New in ${RANGE_LABELS[range] || range}`} value={newInPeriod} accent="var(--bp-green)" />
-        <MetricCard label="Avg Spend" value={rows.length ? rows.reduce((s, c) => s + (c.total_spent || 0), 0) / rows.length : 0} format="currency" accent="var(--bp-cyan)" />
+        <MetricCard label={`New in ${(RANGE_LABELS as any)[range] || range}`} value={newInPeriod} accent="var(--bp-green)" />
+        <MetricCard label="Avg Spend" value={rows.length ? rows.reduce((s: any, c: any) => s + (c.total_spent || 0), 0) / rows.length : 0} format="currency" accent="var(--bp-cyan)" />
       </div>
 
       {/* Customers table */}
@@ -1379,7 +1379,7 @@ function ShopifyCustomers({ metrics, range }) {
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, 100).map((c, i) => {
+            {rows.slice(0, 100).map((c: any, i: any) => {
               const name = c.name || `${c.first_name || ''} ${c.last_name || ''}`.trim() || '—'
               const isNew = c.created_at && new Date(c.created_at) >= start
               const lastOrder = c.last_order_date || c.updated_at
@@ -1406,7 +1406,7 @@ function ShopifyCustomers({ metrics, range }) {
 
 // ─── Shopify Inventory Tab ────────────────────────────────────────────────────
 
-function ShopifyInventory({ metrics }) {
+function ShopifyInventory({ metrics }: any) {
   const inventoryData = metrics.latest['inventory_data']
     ? (typeof metrics.latest['inventory_data'] === 'string'
         ? JSON.parse(metrics.latest['inventory_data'])
@@ -1419,12 +1419,12 @@ function ShopifyInventory({ metrics }) {
     return <EmptyState message="Inventory data will appear here after sync." />
   }
 
-  const getQty = (r) => parseInt(r.inventory ?? r.available ?? r.quantity ?? r.inventory_quantity ?? 0)
+  const getQty = (r: any) => parseInt(r.inventory ?? r.available ?? r.quantity ?? r.inventory_quantity ?? 0)
 
-  const lowStock = rows.filter(r => getQty(r) < 10)
-    .sort((a, b) => getQty(a) - getQty(b))
+  const lowStock = rows.filter((r: any) => getQty(r) < 10)
+    .sort((a: any, b: any) => getQty(a) - getQty(b))
 
-  const getStatus = (qty) => {
+  const getStatus = (qty: any) => {
     if (qty <= 0)  return { label: 'Out of Stock', color: 'var(--bp-red)' }
     if (qty < 5)   return { label: 'Critical',     color: 'var(--bp-red)' }
     if (qty < 10)  return { label: 'Low Stock',    color: 'var(--bp-amber)' }
@@ -1440,7 +1440,7 @@ function ShopifyInventory({ metrics }) {
             Low Stock Alerts ({lowStock.length})
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 10 }}>
-            {lowStock.slice(0, 12).map((item, i) => {
+            {lowStock.slice(0, 12).map((item: any, i: any) => {
               const qty = getQty(item)
               const status = getStatus(qty)
               return (
@@ -1482,7 +1482,7 @@ function ShopifyInventory({ metrics }) {
             </tr>
           </thead>
           <tbody>
-            {rows.slice(0, 200).map((item, i) => {
+            {rows.slice(0, 200).map((item: any, i: any) => {
               const qty = getQty(item)
               const status = getStatus(qty)
               return (
@@ -1520,7 +1520,7 @@ function ShopifyInventory({ metrics }) {
 
 // ─── GA4 Pages Tab ────────────────────────────────────────────────────────────
 
-function GA4Pages({ metrics }) {
+function GA4Pages({ metrics }: any) {
   const raw = metrics.latest['top_pages_data']
     ?? metrics.latest['pages_data']
     ?? (Array.isArray(metrics.latest['top_pages']) ? metrics.latest['top_pages'] : null)
@@ -1587,7 +1587,7 @@ const CHANNEL_COLORS = {
   'Unassigned':     '#666',
 }
 
-function GA4Acquisition({ metrics }) {
+function GA4Acquisition({ metrics }: any) {
   const raw = metrics.latest['traffic_sources_data']
     ?? metrics.latest['acquisition_data']
     ?? (Array.isArray(metrics.latest['traffic_sources']) ? metrics.latest['traffic_sources'] : null)
@@ -1632,7 +1632,7 @@ function GA4Acquisition({ metrics }) {
             <Tooltip content={<CustomTooltip />} />
             <Bar dataKey="sessions" name="Sessions" radius={[0, 2, 2, 0]}>
               {chartData.map((entry, index) => (
-                <Cell key={index} fill={CHANNEL_COLORS[entry.name] || CHART_COLORS.blue} />
+                <Cell key={index} fill={(CHANNEL_COLORS as any)[entry.name] || CHART_COLORS.blue} />
               ))}
             </Bar>
           </BarChart>
@@ -1656,7 +1656,7 @@ function GA4Acquisition({ metrics }) {
               const users = c.users || 0
               const share = totalSessions > 0 ? (sessions / totalSessions) * 100 : 0
               const bounceRate = c.bounceRate || c.bounce_rate || 0
-              const dotColor = CHANNEL_COLORS[channelName] || CHART_COLORS.blue
+              const dotColor = (CHANNEL_COLORS as any)[channelName] || CHART_COLORS.blue
               return (
                 <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
                   <td style={{ padding: '9px 16px' }}>
@@ -1690,7 +1690,7 @@ function GA4Acquisition({ metrics }) {
 
 // ─── Empty State ──────────────────────────────────────────────────────────────
 
-function EmptyState({ message = 'No data available yet. Run a sync to pull data.' }) {
+function EmptyState({ message = 'No data available yet. Run a sync to pull data.' }: any) {
   return (
     <div style={{
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -1705,25 +1705,25 @@ function EmptyState({ message = 'No data available yet. Run a sync to pull data.
 
 // ─── Meta Ads tabs ────────────────────────────────────────────────────────────
 
-function metaNum(metrics, name) {
-  const row = metrics?.find(m => m.metric_name === name)
+function metaNum(metrics: any, name: any) {
+  const row = metrics?.find((m: any) => m.metric_name === name)
   return row?.metric_value != null ? Number(row.metric_value) : 0
 }
-function metaData(metrics, name) {
-  const row = metrics?.find(m => m.metric_name === name)
+function metaData(metrics: any, name: any) {
+  const row = metrics?.find((m: any) => m.metric_name === name)
   if (!row?.metric_data) return null
   try { return typeof row.metric_data === 'string' ? JSON.parse(row.metric_data) : row.metric_data }
   catch { return null }
 }
-function fmtCurrency(n, ccy = '£') {
+function fmtCurrency(n: any, ccy: any = '£') {
   const num = Number(n) || 0
   return `${ccy}${num.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
-function fmtInt(n) {
+function fmtInt(n: any) {
   return Math.round(Number(n) || 0).toLocaleString('en-GB')
 }
 
-function MetaAdsOverview({ metrics }) {
+function MetaAdsOverview({ metrics }: any) {
   const spend      = metaNum(metrics, 'meta-ads.spend_30d')
   const revenue    = metaNum(metrics, 'meta-ads.revenue_30d')
   const roas       = metaNum(metrics, 'meta-ads.roas')
@@ -1790,7 +1790,7 @@ function MetaAdsOverview({ metrics }) {
   )
 }
 
-function MetaAdsCampaigns({ metrics }) {
+function MetaAdsCampaigns({ metrics }: any) {
   const campaigns = metaData(metrics, 'meta-ads.campaigns_data') ?? []
   if (campaigns.length === 0) return <EmptyState message="No campaign data available yet. Sync the connector to pull the last 30 days of performance." />
   const sorted = [...campaigns].sort((a, b) => (b.spend ?? 0) - (a.spend ?? 0))
@@ -1829,7 +1829,7 @@ function MetaAdsCampaigns({ metrics }) {
 
 // ─── Tab content router ───────────────────────────────────────────────────────
 
-function renderTab(connector, tab, data, range) {
+function renderTab(connector: any, tab: any, data: any, range: any) {
   const { type } = connector
   const { metrics, summary } = data
 
@@ -1929,7 +1929,7 @@ function renderTab(connector, tab, data, range) {
 
 // Small table cell helpers used across the new connector tabs. Kept local
 // to this file; consistent with existing inline-styled tables elsewhere.
-function Th({ children, align = 'left' }) {
+function Th({ children, align = 'left' }: any) {
   return (
     <th style={{
       textAlign: align, padding: '10px 12px', fontWeight: 600,
@@ -1940,7 +1940,7 @@ function Th({ children, align = 'left' }) {
     </th>
   )
 }
-function Td({ children, align = 'left', style }) {
+function Td({ children, align = 'left', style }: any) {
   return (
     <td style={{
       textAlign: align, padding: '9px 12px', color: 'var(--bp-text-2)',
@@ -1951,19 +1951,19 @@ function Td({ children, align = 'left', style }) {
   )
 }
 
-function num(v, fallback = 0) {
+function num(v: any, fallback: any = 0) {
   if (v === null || v === undefined) return fallback
   const n = typeof v === 'number' ? v : parseFloat(v)
   return Number.isFinite(n) ? n : fallback
 }
 
-function latestValue(metrics, key) {
+function latestValue(metrics: any, key: any) {
   return num(metrics?.latest?.[key] ?? null)
 }
 
-function latestData(metrics, key) {
+function latestData(metrics: any, key: any) {
   const m = metrics?.series?.[key] ?? []
-  const withData = m.find(r => r.metric_data)
+  const withData = m.find((r: any) => r.metric_data)
   if (!withData) return null
   try {
     return typeof withData.metric_data === 'string'
@@ -1972,7 +1972,7 @@ function latestData(metrics, key) {
   } catch { return null }
 }
 
-function KlaviyoOverview({ metrics }) {
+function KlaviyoOverview({ metrics }: any) {
   const attributed = latestValue(metrics, 'klaviyo.total_attributed_revenue_30d')
   const perEmail = latestValue(metrics, 'klaviyo.revenue_per_email_sent')
   const subs = latestValue(metrics, 'klaviyo.total_subscribers')
@@ -2019,7 +2019,7 @@ function KlaviyoOverview({ metrics }) {
   )
 }
 
-function KlaviyoCampaigns({ metrics }) {
+function KlaviyoCampaigns({ metrics }: any) {
   const rows = latestData(metrics, 'klaviyo.campaigns_data') ?? []
   if (!rows.length) return <EmptyState message="No campaigns in the last 30 days." />
   const sorted = [...rows].sort((a, b) => (b.revenue || 0) - (a.revenue || 0))
@@ -2044,7 +2044,7 @@ function KlaviyoCampaigns({ metrics }) {
   )
 }
 
-function KlaviyoFlows({ metrics }) {
+function KlaviyoFlows({ metrics }: any) {
   const rows = latestData(metrics, 'klaviyo.flows_data') ?? []
   if (!rows.length) return <EmptyState message="No live flows detected." />
   return (
@@ -2053,7 +2053,7 @@ function KlaviyoFlows({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
           <Th>Flow</Th><Th>Class</Th><Th>Status</Th><Th align="right">Recipients</Th><Th align="right">Revenue (30d)</Th><Th align="right">£ / Recipient</Th>
         </tr></thead>
-        <tbody>{rows.map((f, i) => (
+        <tbody>{rows.map((f: any, i: any) => (
           <tr key={f.id || i} style={{ borderBottom: '1px solid var(--bp-border)', background: f.class === 'abandoned_cart' && (f.revenue || 0) > 0 ? 'rgba(0,201,167,0.05)' : 'transparent' }}>
             <Td><strong>{f.name}</strong></Td>
             <Td>{f.class || '—'}</Td>
@@ -2068,14 +2068,14 @@ function KlaviyoFlows({ metrics }) {
   )
 }
 
-function KlaviyoLists({ metrics }) {
+function KlaviyoLists({ metrics }: any) {
   const rows = latestData(metrics, 'klaviyo.lists_data') ?? []
   if (!rows.length) return <EmptyState message="No lists found." />
   return (
     <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}><Th>List</Th><Th align="right">Subscribers</Th><Th>Opt-in</Th><Th>Created</Th></tr></thead>
-        <tbody>{rows.map((l, i) => (
+        <tbody>{rows.map((l: any, i: any) => (
           <tr key={l.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
             <Td><strong>{l.name}</strong></Td>
             <Td align="right">{(l.profile_count || 0).toLocaleString()}</Td>
@@ -2088,7 +2088,7 @@ function KlaviyoLists({ metrics }) {
   )
 }
 
-function SemrushOverview({ metrics }) {
+function SemrushOverview({ metrics }: any) {
   const rank = latestValue(metrics, 'semrush.domain_rank')
   const keywords = latestValue(metrics, 'semrush.organic_keywords_total')
   const traffic = latestValue(metrics, 'semrush.organic_traffic_estimate')
@@ -2136,7 +2136,7 @@ function SemrushOverview({ metrics }) {
   )
 }
 
-function SemrushKeywords({ metrics }) {
+function SemrushKeywords({ metrics }: any) {
   const rows = latestData(metrics, 'semrush.top_keywords_data') ?? []
   if (!rows.length) return <EmptyState message="No keyword data yet. Sync the connector." />
   return (
@@ -2145,7 +2145,7 @@ function SemrushKeywords({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
           <Th>Keyword</Th><Th align="right">Pos</Th><Th align="right">Δ</Th><Th align="right">Volume</Th><Th align="right">Traffic</Th><Th>URL</Th>
         </tr></thead>
-        <tbody>{rows.map((k, i) => {
+        <tbody>{rows.map((k: any, i: any) => {
           const diff = Number(k.position_difference) || 0
           const diffColor = diff < 0 ? 'var(--bp-green)' : diff > 0 ? 'var(--bp-red)' : 'var(--bp-text-3)'
           return (
@@ -2164,7 +2164,7 @@ function SemrushKeywords({ metrics }) {
   )
 }
 
-function SemrushCompetitors({ metrics }) {
+function SemrushCompetitors({ metrics }: any) {
   const rows = latestData(metrics, 'semrush.competitors_data') ?? []
   if (!rows.length) return <EmptyState message="No competitor data yet." />
   return (
@@ -2173,7 +2173,7 @@ function SemrushCompetitors({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
           <Th>Domain</Th><Th align="right">Shared Keywords</Th><Th align="right">Their Keywords</Th><Th align="right">Their Traffic</Th>
         </tr></thead>
-        <tbody>{rows.map((c, i) => (
+        <tbody>{rows.map((c: any, i: any) => (
           <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
             <Td><strong>{c.domain}</strong></Td>
             <Td align="right">{(Number(c.shared_keywords) || 0).toLocaleString()}</Td>
@@ -2186,7 +2186,7 @@ function SemrushCompetitors({ metrics }) {
   )
 }
 
-function SemrushOpportunities({ metrics }) {
+function SemrushOpportunities({ metrics }: any) {
   const rows = latestData(metrics, 'semrush.opportunities_data') ?? []
   if (!rows.length) return <EmptyState message="No page-2 opportunities — either no data yet or all keywords already on page 1." />
   return (
@@ -2199,7 +2199,7 @@ function SemrushOpportunities({ metrics }) {
           <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
             <Th>Keyword</Th><Th align="right">Position</Th><Th align="right">Search Volume</Th><Th>Current URL</Th>
           </tr></thead>
-          <tbody>{rows.map((k, i) => (
+          <tbody>{rows.map((k: any, i: any) => (
             <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
               <Td><strong>{k.keyword}</strong></Td>
               <Td align="right">{Math.round(Number(k.position) || 0)}</Td>
@@ -2213,7 +2213,7 @@ function SemrushOpportunities({ metrics }) {
   )
 }
 
-function SocialOverview({ metrics }) {
+function SocialOverview({ metrics }: any) {
   const fbFollowers = latestValue(metrics, 'fb.page_followers')
   const fbReach = latestValue(metrics, 'fb.page_reach_30d')
   const fbEngRate = latestValue(metrics, 'fb.page_engagement_rate') * 100
@@ -2247,12 +2247,12 @@ function SocialOverview({ metrics }) {
   )
 }
 
-function SocialPosts({ metrics }) {
+function SocialPosts({ metrics }: any) {
   const fb = latestData(metrics, 'fb.recent_posts_data') ?? []
   const ig = latestData(metrics, 'ig.recent_posts_data') ?? []
   const combined = [
-    ...fb.map(p => ({ platform: 'facebook', text: p.message, reach: p.reach, engagement: p.engaged_users, date: p.created_time, url: p.permalink_url })),
-    ...ig.map(p => ({ platform: 'instagram', text: p.caption, reach: p.reach, engagement: (p.likes || 0) + (p.comments || 0) + (p.saved || 0), date: p.timestamp, url: p.permalink })),
+    ...fb.map((p: any) => ({ platform: 'facebook', text: p.message, reach: p.reach, engagement: p.engaged_users, date: p.created_time, url: p.permalink_url })),
+    ...ig.map((p: any) => ({ platform: 'instagram', text: p.caption, reach: p.reach, engagement: (p.likes || 0) + (p.comments || 0) + (p.saved || 0), date: p.timestamp, url: p.permalink })),
   ].sort((a, b) => (b.reach || 0) - (a.reach || 0))
   if (!combined.length) return <EmptyState message="No posts synced yet." />
   return (
@@ -2279,7 +2279,7 @@ function SocialPosts({ metrics }) {
   )
 }
 
-function BufferOverview({ metrics }) {
+function BufferOverview({ metrics }: any) {
   const profiles = latestValue(metrics, 'buffer.profiles_connected')
   const published = latestValue(metrics, 'buffer.posts_published_30d')
   const pending = latestValue(metrics, 'buffer.posts_scheduled_pending')
@@ -2303,14 +2303,14 @@ function BufferOverview({ metrics }) {
   )
 }
 
-function BufferQueue({ metrics }) {
+function BufferQueue({ metrics }: any) {
   const rows = latestData(metrics, 'buffer.scheduled_queue') ?? []
   if (!rows.length) return <EmptyState message="No posts scheduled." />
   return (
     <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}><Th>Platform</Th><Th>Scheduled</Th><Th>Post</Th></tr></thead>
-        <tbody>{rows.map((u, i) => (
+        <tbody>{rows.map((u: any, i: any) => (
           <tr key={u.id || i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
             <Td>{u.service}</Td>
             <Td>{u.scheduled_at_iso ? format(parseISO(u.scheduled_at_iso), 'MMM d HH:mm') : '—'}</Td>
@@ -2322,7 +2322,7 @@ function BufferQueue({ metrics }) {
   )
 }
 
-function BufferRecentPosts({ metrics }) {
+function BufferRecentPosts({ metrics }: any) {
   const rows = latestData(metrics, 'buffer.recent_posts_data') ?? []
   if (!rows.length) return <EmptyState message="No recent posts." />
   const sorted = [...rows].sort((a, b) => (b.engagement || 0) - (a.engagement || 0))
@@ -2349,7 +2349,7 @@ function BufferRecentPosts({ metrics }) {
 
 // ─── Wix tabs ───────────────────────────────────────────────────────────────
 
-function WixOverview({ metrics }) {
+function WixOverview({ metrics }: any) {
   const totalPages = latestValue(metrics, 'wix.total_pages')
   const posts = latestValue(metrics, 'wix.blog_posts_total')
   const score = latestValue(metrics, 'wix.seo_score')
@@ -2387,7 +2387,7 @@ function WixOverview({ metrics }) {
   )
 }
 
-function WixPages({ metrics }) {
+function WixPages({ metrics }: any) {
   const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
   if (!audit.length) return <EmptyState message="No pages synced yet." />
   return (
@@ -2396,7 +2396,7 @@ function WixPages({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
           <Th>Page</Th><Th>URL</Th><Th>SEO Title</Th><Th>Meta Desc</Th><Th>Indexed</Th><Th align="right">Score</Th>
         </tr></thead>
-        <tbody>{audit.map((p, i) => (
+        <tbody>{audit.map((p: any, i: any) => (
           <tr key={p.pageId || i} style={{ borderBottom: '1px solid var(--bp-border)',
             background: p.score < 60 ? 'rgba(255,82,82,0.05)' : 'transparent' }}>
             <Td><strong>{p.pageTitle}</strong></Td>
@@ -2412,7 +2412,7 @@ function WixPages({ metrics }) {
   )
 }
 
-function WixBlog({ metrics }) {
+function WixBlog({ metrics }: any) {
   const posts = latestData(metrics, 'wix.posts_data') ?? []
   if (!posts.length) return <EmptyState message="No blog posts found." />
   return (
@@ -2421,7 +2421,7 @@ function WixBlog({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)' }}>
           <Th>Title</Th><Th>Published</Th><Th>Status</Th><Th>SEO</Th>
         </tr></thead>
-        <tbody>{posts.map((p, i) => {
+        <tbody>{posts.map((p: any, i: any) => {
           const seo = p.seo ?? {}
           const hasSeo = !!(seo.title && seo.description)
           return (
@@ -2438,7 +2438,7 @@ function WixBlog({ metrics }) {
   )
 }
 
-function WixSeoAudit({ metrics }) {
+function WixSeoAudit({ metrics }: any) {
   const audit = latestData(metrics, 'wix.seo_audit_data') ?? []
   if (!audit.length) return <EmptyState message="No SEO audit data yet." />
   const worst = [...audit].sort((a, b) => a.score - b.score)
@@ -2461,7 +2461,7 @@ function WixSeoAudit({ metrics }) {
           </div>
           {p.issues.length > 0 ? (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', fontFamily: 'var(--bp-font-mono)', fontSize: 9 }}>
-              {p.issues.map((issue, j) => (
+              {p.issues.map((issue: any, j: any) => (
                 <span key={j} style={{
                   padding: '2px 6px', borderRadius: 3,
                   background: 'rgba(245,158,11,0.15)', color: 'var(--bp-amber)',
@@ -2481,7 +2481,7 @@ function WixSeoAudit({ metrics }) {
 
 // ─── Server-access tabs ─────────────────────────────────────────────────────
 
-function ServerAccessOverview({ connector, metrics }) {
+function ServerAccessOverview({ connector, metrics }: any) {
   const phpErrors = latestValue(metrics, 'server.php_errors_24h')
   const fatalErrors = latestValue(metrics, 'server.php_fatal_errors_24h')
   const disk = latestValue(metrics, 'server.disk_usage_pct')
@@ -2520,10 +2520,10 @@ function ServerAccessOverview({ connector, metrics }) {
   )
 }
 
-function ServerAccessFileExplorer({ metrics }) {
+function ServerAccessFileExplorer({ metrics }: any) {
   const files = latestData(metrics, 'server.site_structure') ?? []
   if (!files.length) return <EmptyState message="No files indexed yet. Trigger a sync." />
-  const grouped = {}
+  const grouped: Record<string, any[]> = {}
   for (const f of files) {
     const parts = f.path.split('/')
     const dir = parts.slice(0, -1).join('/')
@@ -2538,8 +2538,8 @@ function ServerAccessFileExplorer({ metrics }) {
         </tr></thead>
         <tbody>{Object.entries(grouped).map(([dir, groupFiles]) => (
           <React.Fragment key={dir}>
-            <tr><Td colSpan="3" style={{ background: 'var(--bp-surface-2)', fontWeight: 700, color: 'var(--bp-text-3)' }}>{dir || '/'}</Td></tr>
-            {groupFiles.map((f, i) => (
+            <tr><td colSpan={3} style={{ background: 'var(--bp-surface-2)', fontWeight: 700, color: 'var(--bp-text-3)', padding: '9px 12px' }}>{dir || '/'}</td></tr>
+            {groupFiles.map((f: any, i: any) => (
               <tr key={f.path} style={{ borderBottom: '1px solid var(--bp-border)' }}>
                 <Td style={{ paddingLeft: 28 }}>{f.name}</Td>
                 <Td align="right">{(f.size / 1024).toFixed(1)} KB</Td>
@@ -2553,7 +2553,7 @@ function ServerAccessFileExplorer({ metrics }) {
   )
 }
 
-function ServerAccessErrorLog({ metrics }) {
+function ServerAccessErrorLog({ metrics }: any) {
   const entries = latestData(metrics, 'server.recent_errors') ?? []
   if (!entries.length) return <EmptyState message="No server errors found (or error log not accessible)." />
   const TYPE_COLORS = {
@@ -2568,9 +2568,9 @@ function ServerAccessErrorLog({ metrics }) {
         <thead><tr style={{ background: 'var(--bp-surface-2)', position: 'sticky', top: 0 }}>
           <Th>Type</Th><Th>Timestamp</Th><Th>Message</Th>
         </tr></thead>
-        <tbody>{entries.map((e, i) => (
+        <tbody>{entries.map((e: any, i: any) => (
           <tr key={i} style={{ borderBottom: '1px solid var(--bp-border)' }}>
-            <Td><span style={{ color: TYPE_COLORS[e.type] || 'var(--bp-text-3)', fontWeight: 600, textTransform: 'uppercase' }}>{e.type}</span></Td>
+            <Td><span style={{ color: (TYPE_COLORS as any)[e.type] || 'var(--bp-text-3)', fontWeight: 600, textTransform: 'uppercase' }}>{e.type}</span></Td>
             <Td>{e.timestamp || '—'}</Td>
             <Td style={{ maxWidth: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.line}</Td>
           </tr>
@@ -2580,11 +2580,11 @@ function ServerAccessErrorLog({ metrics }) {
   )
 }
 
-function ServerAccessChanges({ connector }) {
+function ServerAccessChanges({ connector }: any) {
   // Lists every file_write Blueprint has performed via this connector.
   // Each row shows the resulting backup id so the user can trigger a
   // rollback task.
-  const [changes, setChanges] = useState([])
+  const [changes, setChanges] = useState<any[]>([])
   useEffect(() => {
     if (!connector?.id) return
     fetch(`/api/connectors/${connector.id}/file-changes`, { credentials: 'include' })
@@ -2612,7 +2612,7 @@ function ServerAccessChanges({ connector }) {
   )
 }
 
-function ServerAccessBackups({ connector }) {
+function ServerAccessBackups({ connector }: any) {
   return <ServerAccessChanges connector={connector} />
 }
 
@@ -2626,21 +2626,21 @@ function ConnectorDataPage() {
 
   const range = searchParams.get('range') || 'today'
   const [activeTab, setActiveTab] = useState(null)
-  const [data, setData] = useState(null)
+  const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
 
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await getConnectorData(connectorId, { range })
+      const result = await getConnectorData(connectorId!, { range })
       setData(result)
       if (!activeTab) {
-        const tabs = CONNECTOR_TABS[result?.connector?.type] || CONNECTOR_TABS.default
+        const tabs = (CONNECTOR_TABS as any)[result?.connector?.type] || CONNECTOR_TABS.default
         setActiveTab(tabs[0])
       }
     } catch (err) {
-      addNotification({ type: 'error', message: 'Failed to load connector data: ' + err.message })
+      addNotification({ type: 'error', message: 'Failed to load connector data: ' + (err as any).message })
     } finally { setLoading(false) }
   }, [connectorId, range])
 
@@ -2649,15 +2649,15 @@ function ConnectorDataPage() {
   async function handleSync() {
     setSyncing(true)
     try {
-      await syncConnector(connectorId)
+      await syncConnector(connectorId!)
       addNotification({ type: 'success', message: 'Sync started' })
       setTimeout(fetchData, 3000)
     } catch (err) {
-      addNotification({ type: 'error', message: err.message })
+      addNotification({ type: 'error', message: (err as any).message })
     } finally { setSyncing(false) }
   }
 
-  function setRange(r) {
+  function setRange(r: any) {
     setSearchParams({ range: r }, { replace: true })
   }
 
@@ -2693,9 +2693,9 @@ function ConnectorDataPage() {
   }
 
   const { connector } = data
-  const meta = CONNECTOR_META[connector.type] || CONNECTOR_META.default
+  const meta = (CONNECTOR_META as any)[connector.type] || CONNECTOR_META.default
   const Icon = meta.icon
-  const tabs = CONNECTOR_TABS[connector.type] || CONNECTOR_TABS.default
+  const tabs = (CONNECTOR_TABS as any)[connector.type] || CONNECTOR_TABS.default
   const currentTab = activeTab || tabs[0]
 
   const statusDotClass = connector.status === 'connected' ? 'pulse-dot-green'
@@ -2758,7 +2758,7 @@ function ConnectorDataPage() {
                   transition: 'all 120ms ease',
                 }}
               >
-                {RANGE_LABELS[r] || r}
+                {(RANGE_LABELS as any)[r] || r}
               </button>
             ))}
           </div>
@@ -2780,7 +2780,7 @@ function ConnectorDataPage() {
         display: 'flex', gap: 0, marginBottom: 20,
         borderBottom: '1px solid var(--bp-border)',
       }}>
-        {tabs.map((tab) => (
+        {tabs.map((tab: any) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}

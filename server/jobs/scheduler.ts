@@ -380,6 +380,42 @@ export function startScheduler(): void {
     }
   });
 
+  // Every day at 04:30: prune old metric snapshots. The metrics table is an
+  // append-only time series (every sync writes named metrics + a full raw
+  // blob) and grows without bound otherwise. Named metrics are kept longer
+  // than the heavy `*_sync` raw blobs. Retention is configurable via the
+  // settings keys metrics_retention_days / sync_blob_retention_days.
+  cron.schedule('30 4 * * *', () => {
+    try {
+      const getSetting = (key: string, fallback: number): number => {
+        try {
+          const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+          const n = row ? Number(JSON.parse(row.value)) : NaN;
+          return Number.isFinite(n) && n > 0 ? n : fallback;
+        } catch { return fallback; }
+      };
+      const metricDays = getSetting('metrics_retention_days', 365);
+      const blobDays = getSetting('sync_blob_retention_days', 60);
+
+      const blobs = db.prepare(`
+        DELETE FROM metrics
+        WHERE metric_name LIKE '%\\_sync' ESCAPE '\\'
+          AND recorded_at < datetime('now', '-' || ? || ' days')
+      `).run(blobDays);
+      const named = db.prepare(`
+        DELETE FROM metrics
+        WHERE metric_name NOT LIKE '%\\_sync' ESCAPE '\\'
+          AND recorded_at < datetime('now', '-' || ? || ' days')
+      `).run(metricDays);
+
+      if ((blobs.changes ?? 0) > 0 || (named.changes ?? 0) > 0) {
+        console.log(`[scheduler] Metrics retention: pruned ${blobs.changes} sync blobs (>${blobDays}d) and ${named.changes} named metrics (>${metricDays}d).`);
+      }
+    } catch (err) {
+      console.error('[scheduler] Metrics retention pruning failed:', err);
+    }
+  });
+
   // Every 5 minutes: process timed approvals
   cron.schedule('*/5 * * * *', async () => {
     try {

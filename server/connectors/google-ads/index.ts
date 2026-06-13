@@ -136,6 +136,19 @@ const connector = {
     const fresh = await ensureFreshToken(credentials);
     const managerAccountId = (params?.managerAccountId as string | undefined) || credentials?.managerAccountId;
 
+    // Previous comparison window: the 30 days immediately before the
+    // LAST_30_DAYS window used for the current totals.
+    const isoDay = (daysAgo: number) =>
+      new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+    const prevStart = isoDay(60);
+    const prevEnd = isoDay(31);
+
+    const logSwallow = (label: string) => (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[google-ads] ${label} query failed for customer ${customerId}: ${message.substring(0, 300)}`);
+      return { results: [] };
+    };
+
     // Run all GAQL queries in parallel
     const [accountTotals, accountTotalsPrev, campaigns, keywords] = await Promise.all([
       gaqlQuery(
@@ -146,16 +159,16 @@ const connector = {
          FROM customer
          WHERE segments.date DURING LAST_30_DAYS`,
         fresh, customerId, managerAccountId
-      ).catch(() => ({ results: [] })),
+      ).catch(logSwallow('account totals')),
       gaqlQuery(
         `SELECT
            metrics.clicks, metrics.impressions, metrics.cost_micros,
            metrics.conversions, metrics.conversions_value,
            metrics.average_cpc, metrics.ctr
          FROM customer
-         WHERE segments.date BETWEEN '2025-03-01' AND '2025-03-31'`,
+         WHERE segments.date BETWEEN '${prevStart}' AND '${prevEnd}'`,
         fresh, customerId, managerAccountId
-      ).catch(() => ({ results: [] })),
+      ).catch(logSwallow('previous-period totals')),
       gaqlQuery(
         `SELECT
            campaign.id, campaign.name, campaign.status,
@@ -170,7 +183,7 @@ const connector = {
          ORDER BY metrics.cost_micros DESC
          LIMIT 20`,
         fresh, customerId, managerAccountId
-      ).catch(() => ({ results: [] })),
+      ).catch(logSwallow('campaigns')),
       gaqlQuery(
         `SELECT
            ad_group_criterion.keyword.text,
@@ -182,7 +195,7 @@ const connector = {
          ORDER BY metrics.cost_micros DESC
          LIMIT 50`,
         fresh, customerId, managerAccountId
-      ).catch(() => ({ results: [] })),
+      ).catch(logSwallow('keywords')),
     ]);
 
     function aggregateMetrics(results: Record<string, unknown>): Record<string, number> {

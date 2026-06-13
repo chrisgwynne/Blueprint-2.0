@@ -1,6 +1,3 @@
-// @ts-nocheck — rules are data-driven config; each evaluate() body
-// accesses connector-specific shapes that are too varied to type explicitly.
-// The exported interfaces (RuleResult, SignalRule) remain usable by callers.
 /* eslint-disable */
 /**
  * Signal rules.
@@ -199,7 +196,7 @@ export const rules: SignalRule[] = [
     severity: 'alert',
     name: 'LCP Failing Core Web Vitals',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const lcp = current?.cwv?.lcp ?? null;
       const strategy = current?.strategy ?? 'mobile';
 
@@ -277,7 +274,7 @@ export const rules: SignalRule[] = [
     severity: 'info',
     name: 'Low CTR on High-Impression Keywords',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       if (!Array.isArray(current)) {
         return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       }
@@ -318,7 +315,7 @@ export const rules: SignalRule[] = [
     severity: 'alert',
     name: 'CLS Failing Core Web Vitals',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const cls = current?.cwv?.cls ?? null;
       if (cls === null) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       const triggered = cls > 0.1;
@@ -340,7 +337,7 @@ export const rules: SignalRule[] = [
     severity: 'warning',
     name: 'FID/TBT Failing Core Web Vitals',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const fid = current?.cwv?.fid ?? current?.cwv?.tbt ?? null;
       if (fid === null) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       const triggered = fid > 100;
@@ -362,7 +359,7 @@ export const rules: SignalRule[] = [
     severity: 'alert',
     name: 'Mobile Performance Score Below 50',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const score = current?.scores?.performance ?? null;
       if (score === null) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       const triggered = score < 50;
@@ -384,11 +381,11 @@ export const rules: SignalRule[] = [
     severity: 'info',
     name: 'PageSpeed Opportunities Detected',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const opportunities = current?.opportunities ?? [];
-      const highValue = opportunities.filter(o => (o.savingsMs ?? 0) > 500);
+      const highValue = opportunities.filter((o: any) => (o.savingsMs ?? 0) > 500);
       const triggered = highValue.length > 0;
-      const totalSavings = highValue.reduce((sum, o) => sum + (o.savingsMs ?? 0), 0);
+      const totalSavings = highValue.reduce((sum: any, o: any) => sum + (o.savingsMs ?? 0), 0);
       return {
         triggered,
         confidence: triggered ? Math.min(0.9, 0.5 + highValue.length * 0.1) : 0,
@@ -457,9 +454,9 @@ export const rules: SignalRule[] = [
     name: 'Organic Traffic Drop',
 
     evaluate(current: any, previous: any): RuleResult {
-      const getOrganic = (data) => {
+      const getOrganic = (data: any) => {
         if (!Array.isArray(data?.sources)) return null;
-        const org = data.sources.find(s =>
+        const org = data.sources.find((s: any) =>
           s.channel?.toLowerCase().includes('organic') || s.channel?.toLowerCase().includes('search')
         );
         return org?.sessions ?? null;
@@ -492,12 +489,12 @@ export const rules: SignalRule[] = [
       if (!current?.current || !previous?.current) {
         return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       }
-      const prevMap = new Map((previous.current ?? []).map(r => [r.query, r]));
+      const prevMap = new Map<string, any>((previous.current ?? []).map((r: any) => [r.query, r]));
       const top10 = [...prevMap.values()]
-        .sort((a, b) => b.impressions - a.impressions)
+        .sort((a: any, b: any) => b.impressions - a.impressions)
         .slice(0, 10)
-        .map(r => r.query);
-      const currMap = new Map((current.current ?? []).map(r => [r.query, r]));
+        .map((r: any) => r.query);
+      const currMap = new Map<string, any>((current.current ?? []).map((r: any) => [r.query, r]));
       const dropped = [];
       for (const query of top10) {
         const prev = prevMap.get(query);
@@ -640,11 +637,11 @@ export const rules: SignalRule[] = [
     severity: 'alert',
     name: 'No Shopify Orders Today',
 
-    evaluate(current, _previous) {
+    evaluate(current: any, _previous?: any): RuleResult {
       const daily = current?.current?.dailySales ?? [];
       if (daily.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       const today = new Date().toISOString().substring(0, 10);
-      const todayEntry = daily.find(d => d.date === today);
+      const todayEntry = daily.find((d: any) => d.date === today);
       const triggered = !todayEntry || todayEntry.amount === 0;
       return {
         triggered,
@@ -666,9 +663,9 @@ export const rules: SignalRule[] = [
     name: 'Monitor Down',
     evaluate(current: any): RuleResult {
       const monitors = current?.monitors ?? [];
-      const down = monitors.filter(m => m?.status === 9);
+      const down = monitors.filter((m: any) => m?.status === 9);
       if (down.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const names = down.map(m => m.friendly_name).filter(Boolean);
+      const names = down.map((m: any) => m.friendly_name).filter(Boolean);
       return {
         triggered: true,
         confidence: 1.0,
@@ -687,9 +684,9 @@ export const rules: SignalRule[] = [
     name: 'Monitor Seems Down',
     evaluate(current: any): RuleResult {
       const monitors = current?.monitors ?? [];
-      const seems = monitors.filter(m => m?.status === 8);
+      const seems = monitors.filter((m: any) => m?.status === 8);
       if (seems.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const names = seems.map(m => m.friendly_name).filter(Boolean);
+      const names = seems.map((m: any) => m.friendly_name).filter(Boolean);
       return {
         triggered: true,
         confidence: 0.85,
@@ -710,18 +707,18 @@ export const rules: SignalRule[] = [
       const monitors = current?.monitors ?? [];
       if (monitors.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       const below = monitors
-        .map(m => {
-          const ratio = parseFloat(String(m.custom_uptime_ratio ?? '').split('-').pop());
+        .map((m: any) => {
+          const ratio = parseFloat(String(m.custom_uptime_ratio ?? '').split('-').pop() ?? '');
           return isNaN(ratio) ? null : { name: m.friendly_name, ratio };
         })
-        .filter(x => x && x.ratio < 99.5);
+        .filter((x: any) => x && x.ratio < 99.5);
       if (below.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 0.95,
         data: { monitors: below },
         title: `${below.length} monitor${below.length > 1 ? 's' : ''} below 99.5% uptime (30-day)`,
-        description: below.map(b => `${b.name}: ${b.ratio}%`).join(', '),
+        description: below.map((b: any) => `${b.name}: ${b.ratio}%`).join(', '),
       };
     },
   },
@@ -736,7 +733,7 @@ export const rules: SignalRule[] = [
       const currMons = current?.monitors ?? [];
       const prevMons = previous?.monitors ?? [];
       if (currMons.length === 0 || prevMons.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const prevById = new Map(prevMons.map(m => [m.id, m]));
+      const prevById = new Map<any, any>(prevMons.map((m: any) => [m.id, m]));
       const spiked = [];
       for (const m of currMons) {
         const curr = m.response_times?.[0]?.value ?? 0;
@@ -766,14 +763,14 @@ export const rules: SignalRule[] = [
     name: 'High-Priority Tasks Overdue',
     evaluate(current: any): RuleResult {
       const overdue = current?.overdue_tasks ?? [];
-      const p1 = overdue.filter(t => t.priority === 4);
+      const p1 = overdue.filter((t: any) => t.priority === 4);
       if (p1.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 1.0,
-        data: { count: p1.length, tasks: p1.slice(0, 10).map(t => t.content) },
+        data: { count: p1.length, tasks: p1.slice(0, 10).map((t: any) => t.content) },
         title: `${p1.length} priority-1 task${p1.length > 1 ? 's are' : ' is'} overdue`,
-        description: p1.slice(0, 5).map(t => `• ${t.content}`).join('\n'),
+        description: p1.slice(0, 5).map((t: any) => `• ${t.content}`).join('\n'),
       };
     },
   },
@@ -890,8 +887,9 @@ export const rules: SignalRule[] = [
     severity: 'warning',
     name: 'Low Stannp Balance',
     evaluate(current: any): RuleResult {
-      const balance = current?.account_balance ?? 0;
-      if (balance >= 50) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const balance = current?.account_balance;
+      // No balance data at all (fresh/empty sync) is not the same as £0.
+      if (typeof balance !== 'number' || balance >= 50) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 1.0,
@@ -909,14 +907,14 @@ export const rules: SignalRule[] = [
     severity: 'alert',
     name: 'Stannp Campaign Failed',
     evaluate(current: any): RuleResult {
-      const failed = (current?.campaigns ?? []).filter(c => c.status === 'failed');
+      const failed = (current?.campaigns ?? []).filter((c: any) => c.status === 'failed');
       if (failed.length === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 1.0,
-        data: { count: failed.length, campaigns: failed.map(c => c.name) },
+        data: { count: failed.length, campaigns: failed.map((c: any) => c.name) },
         title: `${failed.length} Stannp campaign${failed.length > 1 ? 's' : ''} failed`,
-        description: failed.map(c => `${c.name} (#${c.id})`).join(', '),
+        description: failed.map((c: any) => `${c.name} (#${c.id})`).join(', '),
       };
     },
   },
@@ -1217,8 +1215,9 @@ export const rules: SignalRule[] = [
     severity: 'info',
     name: 'No Recent GBP Posts',
     evaluate(current: any): RuleResult {
-      const days = current?.days_since_post ?? 999;
-      if (days <= 14) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      const days = current?.days_since_post;
+      // Missing data (fresh/empty sync) must not read as "999 days since post".
+      if (typeof days !== 'number' || days <= 14) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 0.9,
@@ -1400,13 +1399,13 @@ export const rules: SignalRule[] = [
     evaluate(current: any): RuleResult {
       const count = current?.blueprint_prs_open ?? 0;
       if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const titles = (current?.blueprint_prs_data ?? []).map(p => p.title);
+      const titles = (current?.blueprint_prs_data ?? []).map((p: any) => p.title);
       return {
         triggered: true,
         confidence: 1.0,
         data: { count, titles },
         title: `${count} Blueprint-created PR${count > 1 ? 's' : ''} awaiting review`,
-        description: titles.slice(0, 5).map(t => `• ${t}`).join('\n'),
+        description: titles.slice(0, 5).map((t: any) => `• ${t}`).join('\n'),
       };
     },
   },
@@ -1687,12 +1686,12 @@ export const rules: SignalRule[] = [
     name: 'Low Quality Score Keywords',
     evaluate(current: any): RuleResult {
       const keywords = current?.keywords_data ?? [];
-      const lowQS = keywords.filter(k => (k.quality_score ?? 10) < 5 && (k.cost_micros ?? 0) > 1_000_000);
+      const lowQS = keywords.filter((k: any) => (k.quality_score ?? 10) < 5 && (k.cost_micros ?? 0) > 1_000_000);
       if (lowQS.length <= 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
       return {
         triggered: true,
         confidence: 0.8,
-        data: { count: lowQS.length, keywords: lowQS.slice(0, 10).map(k => k.text) },
+        data: { count: lowQS.length, keywords: lowQS.slice(0, 10).map((k: any) => k.text) },
         title: `${lowQS.length} keywords with quality score below 5`,
         description: 'Low quality scores increase costs. Improve landing page relevance and ad copy.',
       };
@@ -1709,7 +1708,7 @@ export const rules: SignalRule[] = [
     type: 'klaviyo_open_rate_drop',
     severity: 'warning',
     name: 'Klaviyo Open Rate Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current.campaign_open_rate ?? 0);
       const prev = Number(previous.campaign_open_rate ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -1776,7 +1775,7 @@ export const rules: SignalRule[] = [
     type: 'klaviyo_revenue_drop',
     severity: 'alert',
     name: 'Klaviyo Attributed Revenue Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current.total_attributed_revenue_30d ?? 0);
       const prev = Number(previous.total_attributed_revenue_30d ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -1867,7 +1866,7 @@ export const rules: SignalRule[] = [
     type: 'semrush_traffic_value_drop',
     severity: 'warning',
     name: 'SEMrush Organic Traffic Value Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current.organic_cost_estimate ?? 0);
       const prev = Number(previous.organic_cost_estimate ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -1891,7 +1890,7 @@ export const rules: SignalRule[] = [
     type: 'semrush_competitor_surge',
     severity: 'info',
     name: 'SEMrush Competitor Surge',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const currCompetitors = Array.isArray(current.competitors_data) ? current.competitors_data : [];
       const prevCompetitors = Array.isArray(previous.competitors_data) ? previous.competitors_data : [];
       if (currCompetitors.length === 0 || prevCompetitors.length === 0) {
@@ -1900,9 +1899,9 @@ export const rules: SignalRule[] = [
       const ourTraffic = Number(current.organic_traffic_estimate ?? 0);
       const ourPrevTraffic = Number(previous.organic_traffic_estimate ?? 0);
       const ourChange = ourPrevTraffic > 0 ? (ourTraffic - ourPrevTraffic) / ourPrevTraffic : 0;
-      const prevMap = new Map(prevCompetitors.map((c) => [c.domain, c]));
+      const prevMap = new Map<string, any>(prevCompetitors.map((c: any) => [c.domain, c]));
       const surging = currCompetitors
-        .map((c) => {
+        .map((c: any) => {
           const p = prevMap.get(c.domain);
           if (!p || !(p.organic_traffic > 0)) return null;
           const change = (c.organic_traffic - p.organic_traffic) / p.organic_traffic;
@@ -1930,14 +1929,14 @@ export const rules: SignalRule[] = [
     name: 'SEMrush Page-2 Keyword Opportunity',
     evaluate(current: any = {}): RuleResult {
       const ops = Array.isArray(current.opportunities_data) ? current.opportunities_data : [];
-      const high = ops.filter((k) => Number(k.search_volume) >= 500);
+      const high = ops.filter((k: any) => Number(k.search_volume) >= 500);
       const triggered = high.length > 0;
       return {
         triggered,
         confidence: triggered ? Math.min(0.85, 0.5 + high.length * 0.05) : 0,
         data: {
           total: high.length,
-          keywords: high.slice(0, 10).map((k) => ({
+          keywords: high.slice(0, 10).map((k: any) => ({
             keyword: k.keyword,
             position: k.position,
             volume: k.search_volume,
@@ -1958,7 +1957,7 @@ export const rules: SignalRule[] = [
     type: 'semrush_backlink_growth',
     severity: 'info',
     name: 'SEMrush Backlink Growth',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current.referring_domains ?? 0);
       const prev = Number(previous.referring_domains ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -1982,7 +1981,7 @@ export const rules: SignalRule[] = [
     type: 'semrush_traffic_milestone',
     severity: 'info',
     name: 'SEMrush Traffic Milestone',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current.organic_traffic_estimate ?? 0);
       const prev = Number(previous.organic_traffic_estimate ?? 0);
       const milestones = [1000, 5000, 10000, 25000, 50000, 100000];
@@ -2008,7 +2007,7 @@ export const rules: SignalRule[] = [
     type: 'fb_reach_drop',
     severity: 'warning',
     name: 'Facebook Reach Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current['fb.page_reach_30d'] ?? current.fb_page_reach_30d ?? 0);
       const prev = Number(previous['fb.page_reach_30d'] ?? previous.fb_page_reach_30d ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -2032,7 +2031,7 @@ export const rules: SignalRule[] = [
     type: 'ig_follower_loss',
     severity: 'warning',
     name: 'Instagram Follower Loss',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current['ig.followers'] ?? current.ig_followers ?? 0);
       const prev = Number(previous['ig.followers'] ?? previous.ig_followers ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -2056,7 +2055,7 @@ export const rules: SignalRule[] = [
     type: 'ig_engagement_drop',
     severity: 'info',
     name: 'Instagram Engagement Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current['ig.avg_post_engagement_rate'] ?? current.ig_avg_post_engagement_rate ?? 0);
       const prev = Number(previous['ig.avg_post_engagement_rate'] ?? previous.ig_avg_post_engagement_rate ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -2081,8 +2080,14 @@ export const rules: SignalRule[] = [
     severity: 'info',
     name: 'Social Posting Gap',
     evaluate(current: any = {}): RuleResult {
-      const fbPosts = Number(current['fb.posts_published_30d'] ?? current.fb_posts_published_30d ?? 0);
-      const igPosts = Number(current['ig.posts_published_30d'] ?? current.ig_posts_published_30d ?? 0);
+      const fbRaw = current?.['fb.posts_published_30d'] ?? current?.fb_posts_published_30d;
+      const igRaw = current?.['ig.posts_published_30d'] ?? current?.ig_posts_published_30d;
+      // No posting data at all (fresh/empty sync) is not a posting gap.
+      if (fbRaw === undefined && igRaw === undefined) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const fbPosts = Number(fbRaw ?? 0);
+      const igPosts = Number(igRaw ?? 0);
       const total = fbPosts + igPosts;
       const triggered = total < 4;
       return {
@@ -2130,15 +2135,15 @@ export const rules: SignalRule[] = [
         ? current['fb.recent_posts_data']
         : Array.isArray(current.fb_recent_posts_data) ? current.fb_recent_posts_data : [];
       if (posts.length < 3) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const avg = posts.reduce((s, p) => s + (p.reach || 0), 0) / posts.length;
+      const avg = posts.reduce((s: any, p: any) => s + (p.reach || 0), 0) / posts.length;
       if (avg <= 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const winners = posts.filter((p) => (p.reach || 0) >= avg * 3);
+      const winners = posts.filter((p: any) => (p.reach || 0) >= avg * 3);
       const triggered = winners.length > 0;
       return {
         triggered,
         confidence: triggered ? 0.75 : 0,
         data: {
-          winners: winners.slice(0, 3).map((p) => ({
+          winners: winners.slice(0, 3).map((p: any) => ({
             message: (p.message || '').slice(0, 150),
             reach: p.reach,
             url: p.permalink_url,
@@ -2162,7 +2167,12 @@ export const rules: SignalRule[] = [
     severity: 'info',
     name: 'Buffer Queue Empty',
     evaluate(current: any = {}): RuleResult {
-      const pending = Number(current['buffer.posts_scheduled_pending'] ?? current.buffer_posts_scheduled_pending ?? 0);
+      const pendingRaw = current?.['buffer.posts_scheduled_pending'] ?? current?.buffer_posts_scheduled_pending;
+      // No queue data at all (fresh/empty sync) is not an empty queue.
+      if (pendingRaw === undefined) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const pending = Number(pendingRaw);
       const triggered = pending === 0;
       return {
         triggered,
@@ -2183,7 +2193,12 @@ export const rules: SignalRule[] = [
     severity: 'warning',
     name: 'Buffer Posting Gap',
     evaluate(current: any = {}): RuleResult {
-      const freq = Number(current['buffer.posting_frequency_7d'] ?? current.buffer_posting_frequency_7d ?? 0);
+      const freqRaw = current?.['buffer.posting_frequency_7d'] ?? current?.buffer_posting_frequency_7d;
+      // No posting data at all (fresh/empty sync) is not a posting gap.
+      if (freqRaw === undefined) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const freq = Number(freqRaw);
       const triggered = freq < 1;
       return {
         triggered,
@@ -2203,7 +2218,7 @@ export const rules: SignalRule[] = [
     type: 'buffer_low_engagement',
     severity: 'info',
     name: 'Buffer Engagement Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current['buffer.avg_post_engagement_30d'] ?? current.buffer_avg_post_engagement_30d ?? 0);
       const prev = Number(previous['buffer.avg_post_engagement_30d'] ?? previous.buffer_avg_post_engagement_30d ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -2341,7 +2356,7 @@ export const rules: SignalRule[] = [
     type: 'wix_seo_score_drop',
     severity: 'warning',
     name: 'Wix SEO Score Drop',
-    evaluate(current = {}, previous = {}) {
+    evaluate(current: any = {}, previous: any = {}): RuleResult {
       const curr = Number(current['wix.seo_score'] ?? 0);
       const prev = Number(previous['wix.seo_score'] ?? 0);
       if (!(prev > 0)) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
@@ -2473,7 +2488,7 @@ export const rules: SignalRule[] = [
 
 function _num(v: unknown): number {
   if (v === null || v === undefined || v === '') return 0;
-  const n = typeof v === 'number' ? v : parseFloat(v);
+  const n = typeof v === 'number' ? v : parseFloat(v as string);
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -2506,7 +2521,7 @@ export function flattenMeta(payload: unknown): { roas: number; cpm: number; cpc:
   }
 
   const raw = payload as Record<string, unknown>;
-  const current = (raw.account as Record<string, unknown> | undefined)?.data?.[0] as Record<string, unknown> ?? {};
+  const current = ((raw.account as Record<string, unknown> | undefined)?.data as any[])?.[0] as Record<string, unknown> ?? {};
   const spend = _num(current.spend);
   const revenue = _getAction(current.action_values, 'purchase');
   return {
@@ -2522,7 +2537,7 @@ export function flattenMeta(payload: unknown): { roas: number; cpm: number; cpc:
 export function flattenMetaPrev(payload: unknown): { roas: number; cpm: number; cpc: number; ctr: number; spend_30d: number; frequency: number } | null {
   if (!payload || typeof payload !== 'object') return null;
   const rawP = payload as Record<string, unknown>;
-  const prev = (rawP.previous as Record<string, unknown> | undefined)?.data?.[0] as Record<string, unknown> | undefined;
+  const prev = ((rawP.previous as Record<string, unknown> | undefined)?.data as any[])?.[0] as Record<string, unknown> | undefined;
   if (!prev) return null;
   const spend = _num(prev.spend);
   const revenue = _getAction(prev.action_values, 'purchase');

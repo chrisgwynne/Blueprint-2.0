@@ -167,7 +167,7 @@ const connector = {
     return `${AUTH_BASE}?${params.toString()}`;
   },
 
-  async exchangeCode(_code?: string): Promise<never> {
+  async exchangeCode(code: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: string; scope?: string }> {
     const clientId = process.env.TODOIST_CLIENT_ID;
     const clientSecret = process.env.TODOIST_CLIENT_SECRET;
     const redirectUri = process.env.TODOIST_REDIRECT_URI || 'http://localhost:4000/api/oauth/todoist/callback';
@@ -180,22 +180,24 @@ const connector = {
       body: new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        code: _code ?? '',
+        code,
         redirect_uri: redirectUri,
       }),
     });
     const tokens = await res.json() as TodoistTokenResponse;
-    return {
-      accessToken: tokens.access_token,
-      refreshToken: null, // Todoist tokens don't expire
-      expiresAt: null,
-      scope: tokens.token_type ? SCOPES : null,
-    } as never;
+    if (!tokens.access_token) {
+      throw new Error('Todoist code exchange returned no access_token.');
+    }
+    // Todoist tokens don't expire — no refreshToken/expiresAt.
+    return { accessToken: tokens.access_token, scope: SCOPES };
   },
 
-  async refreshToken(_credentials?: Creds): Promise<never> {
-    // Todoist tokens never expire — return as-is.
-    return _credentials as never;
+  async refreshToken(credentials: Creds): Promise<{ accessToken: string; expiresAt?: string }> {
+    // Todoist tokens never expire — return the existing token unchanged.
+    if (!credentials?.accessToken) {
+      throw new Error('Todoist access token missing — re-authorise the connector.');
+    }
+    return { accessToken: credentials.accessToken };
   },
 };
 
