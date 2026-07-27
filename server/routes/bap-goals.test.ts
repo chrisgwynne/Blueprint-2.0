@@ -271,6 +271,13 @@ describe('Phase 3: goal engine FKs — owner/confidence/priority/depends_on', ()
     expect(status).toBe(400);
   });
 
+  test('rejects a confidence value outside 0-1', async () => {
+    const { status } = await post(`/api/bap/v1/businesses/${BIZ_A}/goals`, {
+      title: 'Bad confidence', confidence: 70,
+    }, { 'BAP-Key': keyFull, 'Idempotency-Key': generateId() });
+    expect(status).toBe(400);
+  });
+
   test('PATCH updates owner/confidence/priority and replaces depends_on', async () => {
     const depGoalId = insertGoal({ title: 'New dependency target' });
     const goalId = insertGoal({ title: 'Patchable goal' });

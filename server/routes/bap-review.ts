@@ -37,6 +37,12 @@ const router = Router();
  */
 export const FULL_EXPLANATION_LIMIT = 5;
 
+/** Single fix point for the human-readable explanation-depth caveat, shared by the BAP and session-authenticated routers. */
+export function explanationDepthLabel(recommendationCount: number): string {
+  if (recommendationCount === 0) return 'no recommendations to explain';
+  return `full for the top ${Math.min(FULL_EXPLANATION_LIMIT, recommendationCount)}, partial (no KB search) for the rest`;
+}
+
 export async function explainRecommendation(businessId: string, rec: RankedRecommendation, allRecs: RankedRecommendation[], full: boolean): Promise<Record<string, unknown>> {
   const alternatives = allRecs
     .filter((r) => r.id !== rec.id && r.goal_id && r.goal_id === rec.goal_id)
@@ -106,7 +112,7 @@ router.get('/businesses/:businessId/recommendations', requirePermission('recomme
     return res.json({
       recommendations: explained,
       excluded,
-      explanation_depth: `full for the top ${Math.min(FULL_EXPLANATION_LIMIT, recommendations.length)}, partial (no KB search) for the rest`,
+      explanation_depth: explanationDepthLabel(recommendations.length),
       total: explained.length,
     });
   } catch (err) {

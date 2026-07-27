@@ -11,7 +11,7 @@ import db, { generateId } from '../db/db.js';
 import { generateApiKey, hashApiKey, keyPrefix, bapAuth } from '../bap/auth.ts';
 import { bapRequestContext } from '../bap/route-helpers.ts';
 import { bapRateLimit } from '../bap/rate-limiter.ts';
-import bapReviewRouter from './bap-review.ts';
+import bapReviewRouter, { explanationDepthLabel } from './bap-review.ts';
 
 const BIZ_A = 'biz_bap_rev_a';
 const BIZ_B = 'biz_bap_rev_b';
@@ -126,6 +126,16 @@ describe('GET /businesses/:id/recommendations', () => {
   test('limit caps the number of returned recommendations', async () => {
     const { body } = await get(`/api/bap/v1/businesses/${BIZ_A}/recommendations?limit=1`, { 'BAP-Key': keyRead });
     expect(body.recommendations.length).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('explanationDepthLabel', () => {
+  test('does not render "top 0" when there are no recommendations to explain', () => {
+    expect(explanationDepthLabel(0)).toBe('no recommendations to explain');
+  });
+
+  test('caps at FULL_EXPLANATION_LIMIT for a large recommendation count', () => {
+    expect(explanationDepthLabel(50)).toBe('full for the top 5, partial (no KB search) for the rest');
   });
 });
 

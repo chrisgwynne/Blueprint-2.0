@@ -144,7 +144,7 @@ Rewritten (same public signature, new internals): `calibration.ts` — see
 
 ## 5. Test results
 
-**462 tests across 46 files, 446 passing.** The 16 failures are the
+**465 tests across 46 files, 449 passing.** The 16 failures are the
 codebase's pre-existing, documented cross-file DB pollution flakiness
 (`server/agents/agentLifecycle.test.ts`, `server/jobs/scheduler-lock.test.ts`,
 `server/tasks/execution-jobs.test.ts`'s `claimNextJob`) — these fail only
@@ -153,7 +153,7 @@ when the *full* suite runs together in the shared in-memory test DB, pass
 (confirmed via `git stash` in earlier phases, pattern-matched again here).
 Not a regression; not chased, per that established precedent.
 
-Phase 3-specific coverage: **13 new test files, ~114 new test cases**,
+Phase 3-specific coverage: **13 new test files, ~117 new test cases**,
 covering every new brain module (`decision-memory`, `constraint-engine`,
 `recommendation-engine`, `knowledge-graph`, `cross-business-patterns`,
 plus the deterministic slice of `conflict-engine` and the full rewrite of
@@ -162,13 +162,27 @@ plus the deterministic slice of `conflict-engine` and the full rewrite of
 `bap-review`) — permissions (missing scope → 403), cross-tenant isolation,
 pagination, idempotency, filter correctness, 404s for unknown IDs, and
 concurrent-read safety, matching the exact conventions Phase 2 established.
-`bap-goals.test.ts` was extended with 14 more tests covering the new
+`bap-goals.test.ts` was extended with 15 more tests covering the new
 owner/confidence/priority/dependency fields and the timeline/assessment/
 strategies/plan endpoints.
 
 `typecheck` is clean for both `server` and `client`. `bun run build`
 (the Vite production build) succeeds with the 5 new dashboard pages as
 separate lazy-loaded chunks.
+
+**Live UI smoke test:** a real dev server (server + Vite), a real login, a
+real business/goal, and headless-Chromium walkthroughs of all 8
+new/extended dashboard pages (Goals, Conflicts, Retrospectives,
+Opportunities, Decisions, Recommendations, Calibration, Relationship
+Graph) — no React error boundaries, no blank pages, no console/page
+errors, across two full passes. This pass caught two real gaps, both fixed
+before this report: (1) the recommendations endpoint's `explanation_depth`
+copy read "full for the top 0…" when there were zero recommendations —
+fixed with a shared `explanationDepthLabel()` helper used by both the BAP
+and session routers; (2) `goals.confidence` had no server-side `0–1` bounds
+check despite the dashboard form enforcing it client-side — fixed on both
+the BAP (`bap-goals.ts`) and session (`goals.ts`) create/update paths, with
+regression tests added.
 
 **Testing methodology, honestly stated:** LLM-backed detectors/reasoners
 (the two new conflict detectors, goal-reasoner's strategy generation) are

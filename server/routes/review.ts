@@ -11,7 +11,7 @@ import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { getRankedRecommendations } from '../brain/recommendation-engine.js';
 import { listCrossBusinessPatterns } from '../brain/cross-business-patterns.js';
-import { explainRecommendation, FULL_EXPLANATION_LIMIT } from './bap-review.js';
+import { explainRecommendation, FULL_EXPLANATION_LIMIT, explanationDepthLabel } from './bap-review.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -27,7 +27,7 @@ router.get('/:businessId/recommendations', async (req: Request, res: Response) =
     res.json({
       recommendations: explained,
       excluded,
-      explanation_depth: `full for the top ${Math.min(FULL_EXPLANATION_LIMIT, recommendations.length)}, partial (no KB search) for the rest`,
+      explanation_depth: explanationDepthLabel(recommendations.length),
       total: explained.length,
     });
   } catch (err) {

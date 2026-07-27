@@ -120,6 +120,9 @@ router.post('/:businessId', (req: Request, res: Response) => {
     if (priority !== undefined && !['p1', 'p2', 'p3'].includes(String(priority))) {
       return res.status(400).json({ error: 'priority must be one of: p1, p2, p3' });
     }
+    if (confidence !== undefined && confidence !== null && (typeof confidence !== 'number' || confidence < 0 || confidence > 1)) {
+      return res.status(400).json({ error: 'confidence must be a number between 0 and 1' });
+    }
 
     // Auto-fill baseline from latest metric if metric_name set and not provided
     let baseline = providedBaseline;
@@ -218,6 +221,9 @@ router.put('/:businessId/:id', (req: Request, res: Response) => {
       'owner', 'confidence', 'priority'];
     if (req.body.priority !== undefined && !['p1', 'p2', 'p3'].includes(String(req.body.priority))) {
       return res.status(400).json({ error: 'priority must be one of: p1, p2, p3' });
+    }
+    if (req.body.confidence !== undefined && req.body.confidence !== null && (typeof req.body.confidence !== 'number' || req.body.confidence < 0 || req.body.confidence > 1)) {
+      return res.status(400).json({ error: 'confidence must be a number between 0 and 1' });
     }
     const updates: string[] = [];
     const values: any[] = [];

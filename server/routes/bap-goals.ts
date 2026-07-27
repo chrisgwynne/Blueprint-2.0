@@ -178,6 +178,9 @@ router.post('/businesses/:businessId/goals', requirePermission('goals:propose'),
     if (priority !== undefined && !['p1', 'p2', 'p3'].includes(String(priority))) {
       return sendError(req, res, 400, 'validation_error', 'priority must be one of: p1, p2, p3.');
     }
+    if (confidence !== undefined && confidence !== null && (typeof confidence !== 'number' || confidence < 0 || confidence > 1)) {
+      return sendError(req, res, 400, 'validation_error', 'confidence must be a number between 0 and 1.');
+    }
 
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
 
@@ -345,6 +348,9 @@ router.patch('/goals/:goalId', requirePermission('goals:update'), async (req: Re
     }
     if (body.priority !== undefined && !GOAL_VALID_PRIORITIES.has(String(body.priority))) {
       return sendError(req, res, 400, 'validation_error', 'priority must be one of: p1, p2, p3.');
+    }
+    if (body.confidence !== undefined && body.confidence !== null && (typeof body.confidence !== 'number' || body.confidence < 0 || body.confidence > 1)) {
+      return sendError(req, res, 400, 'validation_error', 'confidence must be a number between 0 and 1.');
     }
 
     await withRequiredIdempotency(req, res, 'goals:update', async () => {
