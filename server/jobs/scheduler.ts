@@ -8,6 +8,8 @@ import type { ConnectorInterface } from '../connectors/connector.interface.js';
 import { withLeaderLock, tryAcquireOrRenewLeaderLock } from './scheduler-lock.js';
 import { runExecutionWorkerTick, recoverStuckJobs } from '../tasks/execution-worker.js';
 import { pruneExpiredIdempotencyKeys } from '../lib/idempotency.js';
+import { refreshConnectorConfidence } from '../connectors/confidence.js';
+import { writeWorldModelSnapshot } from '../world-model/world-model.js';
 
 let schedulerStarted = false;
 
@@ -142,6 +144,11 @@ export async function syncConnector(connector: Connector): Promise<{ ok: boolean
     `).run(connector.id);
 
     console.log(`[scheduler] Synced connector '${connector.name}' (${connector.type}). New signals: ${newSignals.length}`);
+
+    // World Model: connectors feed the World Model, not agents directly.
+    // Fire-and-forget — never let confidence/snapshot bookkeeping block sync.
+    try { refreshConnectorConfidence({ ...connector, status: 'connected', last_sync: new Date().toISOString(), last_error: null }); } catch {}
+    writeWorldModelSnapshot(connector.business_id, 'connector_sync');
 
     // BAP webhook: connector.sync.complete
     try {

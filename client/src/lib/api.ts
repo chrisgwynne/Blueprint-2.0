@@ -480,3 +480,13 @@ export const rebuildGraph = (businessId: string) => post(`/graph/${businessId}/r
 export const getRecommendations = (businessId: string, params?: Params) => get(`/review/${businessId}/recommendations`, params)
 export const getCalibration = (businessId: string, params?: Params) => get(`/review/${businessId}/calibration`, params)
 export const getCrossBusinessPatterns = (businessId: string) => get(`/review/${businessId}/patterns`)
+
+// ─── Autonomous Intelligence Foundation (Phase 2-INT) ──────────────────────
+export const getBusinessProfile = (businessId: string) => get(`/intelligence/business-profile/${businessId}`)
+export const updateBusinessProfile = (businessId: string, data: unknown) => patch(`/intelligence/business-profile/${businessId}`, data)
+export const getActionRegistry = () => get('/intelligence/action-registry')
+export const getConnectorConfidence = (businessId: string) => get(`/intelligence/connector-confidence/${businessId}`)
+export const getWorldModel = (businessId: string) => get(`/intelligence/world-model/${businessId}`)
+export const getWorldModelHistory = (businessId: string, params?: Params) => get(`/intelligence/world-model/${businessId}/history`, params)
+export const getSystemIssues = (businessId: string, params?: Params) => get(`/intelligence/system-issues/${businessId}`, params)
+export const updateSystemIssue = (issueId: string, status: string) => patch(`/intelligence/system-issues/issue/${issueId}`, { status })

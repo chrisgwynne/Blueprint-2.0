@@ -7,6 +7,7 @@
  */
 import db, { generateId } from '../db/db.js';
 import { createTaskEvent } from './task-events.js';
+import { getActionRegistryEntry } from './action-registry.js';
 
 type Verdict = 'improved' | 'worsened' | 'no_change' | 'inconclusive';
 
@@ -203,10 +204,47 @@ ${detail}
 }
 
 /**
+ * Does this action_type's registry entry ask for a check at `weekNumber`
+ * weeks after completion? Reads `action_registry.measurement_window_days`
+ * (Outcome Learning Engine field — e.g. the spec's SEO example of
+ * checking at 7/14/28 days). Missing action_type/registry entry falls
+ * back to the pre-existing 2-week/4-week schedule for backward
+ * compatibility with tasks created before the registry existed.
+ */
+function shouldCheckAtWeek(actionType: string | null, weekNumber: number): boolean {
+  if (!actionType) return weekNumber === 2 || weekNumber === 4;
+  const entry = getActionRegistryEntry(actionType);
+  const days = entry?.measurement_window_days?.length ? entry.measurement_window_days : [14, 28];
+  return days.some((d) => Math.max(1, Math.round(d / 7)) === weekNumber);
+}
+
+/**
  * Run all pending outcome checks. Called by scheduler weekly.
  */
 export function runOutcomeChecks(): number {
   let checked = 0;
+
+  // 1-week checks — new: the Outcome Learning Engine's per-action-type
+  // measurement_window_days (default [7,14,28] days) adds an early check
+  // that didn't exist before this table existed, matching the spec's own
+  // SEO example (measured at 7/14/28 days). handleNoChange() in
+  // task-intelligence.ts still only proposes a follow-up investigation
+  // once the 4-week check lands, so this never causes a premature one.
+  const oneWeek = db.prepare(`
+    SELECT t.id, t.action_type FROM tasks t
+    LEFT JOIN task_outcomes o ON o.task_id = t.id AND o.weeks_after = 1
+    WHERE t.status IN ('complete', 'verified')
+    AND t.target_metric IS NOT NULL
+    AND t.completed_at < datetime('now', '-7 days')
+    AND o.id IS NULL
+    LIMIT 20
+  `).all() as Array<{ id: string; action_type: string | null }>;
+
+  for (const t of oneWeek) {
+    if (!shouldCheckAtWeek(t.action_type, 1)) continue;
+    checkTaskOutcome(t.id, 1);
+    checked++;
+  }
 
   // 2-week checks
   const twoWeek = db.prepare(`

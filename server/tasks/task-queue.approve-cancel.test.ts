@@ -30,7 +30,7 @@ function proposeTask(): { id: string } {
     business_id: BIZ,
     title: 'Approve/cancel fixture task',
     proposed_by: 'test',
-    action_type: 'internal_note',
+    action_type: 'notification',
     action_payload: { note: 'x' },
     approval_mode: 'requires_approval',
   })!;

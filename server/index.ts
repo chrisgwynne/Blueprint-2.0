@@ -219,6 +219,9 @@ const mountRoutes = async () => {
   const { default: decisionsRoutes } = await import('./routes/decisions.js');
   const { default: graphRoutes } = await import('./routes/graph.js');
   const { default: reviewRoutes } = await import('./routes/review.js');
+  // Phase 2-INT — Autonomous Intelligence Foundation: Business Profile,
+  // Action Registry, Connector Confidence, World Model, System Issues.
+  const { default: intelligenceRoutes } = await import('./routes/intelligence.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -258,6 +261,7 @@ const mountRoutes = async () => {
   app.use('/api/decisions', decisionsRoutes);
   app.use('/api/graph', graphRoutes);
   app.use('/api/review', reviewRoutes);
+  app.use('/api/intelligence', intelligenceRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!(req.session as any)?.userId) return res.status(401).json({ error: 'Unauthorized' });

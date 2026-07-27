@@ -38,6 +38,15 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  // A test in this file drives a real approveTask() call through the
+  // Telegram callback handler, which enqueues a real execution_jobs row.
+  // claimNextJob()/findStuckJobs() elsewhere operate system-wide (oldest
+  // queued job, not scoped to a business) — an uncleaned row here is
+  // exactly the kind of leftover that makes an unrelated test file's
+  // job-queue tests order-dependently flaky. Clean up every task/job this
+  // file's beforeEach created, not just the fetch mock.
+  db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
 });
 
 function taskStatus(): string {

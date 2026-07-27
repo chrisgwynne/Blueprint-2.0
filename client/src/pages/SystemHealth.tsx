@@ -6,7 +6,7 @@ import {
   AlertTriangle, CheckCircle2, XCircle, Pause, Database,
   BookOpen, Clock, Zap, Wrench, ExternalLink,
 } from 'lucide-react'
-import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks, getAgentEfficiency } from '../lib/api.js'
+import { getSystemHealth, syncConnector, runAgent, getBrainStatus, getTasks, getAgentEfficiency, getConnectorConfidence, getWorldModel } from '../lib/api.js'
 import useStore from '../lib/store.js'
 
 const STATUS_COLORS: Record<string, { label: string; color: string; bg: string }> & { healthy: { label: string; color: string; bg: string } } = {
@@ -606,6 +606,114 @@ function SelfHealingSection() {
   )
 }
 
+const CONFIDENCE_STATUS: Record<string, { dot: string; color: string }> & { unknown: { dot: string; color: string } } = {
+  healthy:  { dot: '🟢', color: 'var(--bp-green)' },
+  warning:  { dot: '🟡', color: 'var(--bp-amber)' },
+  degraded: { dot: '🟠', color: 'var(--bp-amber)' },
+  broken:   { dot: '🔴', color: 'var(--bp-red)' },
+  unknown:  { dot: '⚪', color: 'var(--bp-text-3)' },
+}
+
+// ─── Connector Confidence & Identity Verification (Phase 2-INT) ─────────────
+function ConnectorConfidenceSection() {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [confidence, setConfidence] = useState<any[] | null>(null)
+
+  useEffect(() => {
+    if (!currentBusiness) return
+    getConnectorConfidence(currentBusiness.id)
+      .then((res: any) => setConfidence(res.connector_confidence))
+      .catch(() => setConfidence(null))
+  }, [currentBusiness])
+
+  if (!confidence || confidence.length === 0) return null
+
+  return (
+    <div className="bp-card" style={{ padding: 18 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        <thead>
+          <tr style={{ textAlign: 'left', color: 'var(--bp-text-3)', textTransform: 'uppercase', fontSize: 9, letterSpacing: '0.08em' }}>
+            <th style={{ padding: '4px 8px' }}>Connector</th>
+            <th style={{ padding: '4px 8px' }}>Overall</th>
+            <th style={{ padding: '4px 8px' }}>Business Identity</th>
+            <th style={{ padding: '4px 8px' }}>Website Verification</th>
+            <th style={{ padding: '4px 8px' }}>Freshness</th>
+            <th style={{ padding: '4px 8px' }}>Confidence</th>
+          </tr>
+        </thead>
+        <tbody>
+          {confidence.map((c: any) => {
+            const overall = CONFIDENCE_STATUS[c.overall_status] ?? CONFIDENCE_STATUS.unknown
+            return (
+              <tr key={c.id} style={{ borderTop: '1px solid var(--bp-border)' }}>
+                <td style={{ padding: '6px 8px', color: 'var(--bp-text-2)' }}>{c.connector_id.slice(0, 8)}</td>
+                <td style={{ padding: '6px 8px', color: overall.color }}>{overall.dot} {c.overall_status}</td>
+                <td style={{ padding: '6px 8px', color: (CONFIDENCE_STATUS[c.business_identity_status] ?? CONFIDENCE_STATUS.unknown).color }}>{c.business_identity_status}</td>
+                <td style={{ padding: '6px 8px', color: (CONFIDENCE_STATUS[c.website_verification_status] ?? CONFIDENCE_STATUS.unknown).color }}>{c.website_verification_status}</td>
+                <td style={{ padding: '6px 8px', color: (CONFIDENCE_STATUS[c.freshness_status] ?? CONFIDENCE_STATUS.unknown).color }}>{c.freshness_status}</td>
+                <td style={{ padding: '6px 8px', color: 'var(--bp-text-2)' }}>{Math.round((c.overall_confidence ?? 0) * 100)}%</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ─── World Model (Phase 2-INT) ──────────────────────────────────────────────
+function WorldModelSection() {
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [snapshot, setSnapshot] = useState<any>(null)
+
+  useEffect(() => {
+    if (!currentBusiness) return
+    getWorldModel(currentBusiness.id)
+      .then((res: any) => setSnapshot(res.world_model))
+      .catch(() => setSnapshot(null))
+  }, [currentBusiness])
+
+  if (!snapshot) return null
+  const s = snapshot.snapshot
+
+  const trendColor = (dir: string) => dir === 'improving' ? 'var(--bp-green)' : dir === 'declining' ? 'var(--bp-red)' : dir === 'stable' ? 'var(--bp-blue)' : 'var(--bp-text-3)'
+
+  return (
+    <div className="bp-card" style={{ padding: 18 }}>
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 12 }}>
+        Snapshot taken {fmtRel(snapshot.created_at)} · triggered by <span style={{ color: 'var(--bp-text-2)' }}>{snapshot.trigger_source}</span>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10, marginBottom: 14 }}>
+        {[
+          { label: 'Business Health', value: s.business_health.status },
+          { label: 'Revenue Trend', value: s.revenue_trend.direction },
+          { label: 'Traffic Trend', value: s.traffic_trend.direction },
+          { label: 'SEO Trend', value: s.seo_trend.direction },
+          { label: 'Marketing Trend', value: s.marketing_trend.direction },
+        ].map((c) => (
+          <div key={c.label} style={{ padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3 }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 14, fontWeight: 700, color: trendColor(c.value) }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+        {[
+          { label: 'Open Risks', value: s.open_risks.length },
+          { label: 'Open Opportunities', value: s.open_opportunities.length },
+          { label: 'Outstanding Investigations', value: s.outstanding_investigations },
+          { label: 'Low-Confidence Connectors', value: s.connector_confidence.low_confidence_count },
+        ].map((c) => (
+          <div key={c.label} style={{ padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3 }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.1em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>{c.label}</div>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontSize: 18, fontWeight: 700, color: 'var(--bp-blue)' }}>{c.value}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main page ────────────────────────────────────────────────────────────────
 export default function SystemHealth() {
   const [data, setData] = useState<any>(null)
@@ -704,6 +812,14 @@ export default function SystemHealth() {
 
       <Section title="Connectors">
         <ConnectorsTable connectors={data.connectors} onSync={handleSync} />
+      </Section>
+
+      <Section title="Connector Confidence & Identity Verification">
+        <ConnectorConfidenceSection />
+      </Section>
+
+      <Section title="World Model">
+        <WorldModelSection />
       </Section>
 
       <Section title="Agents">
