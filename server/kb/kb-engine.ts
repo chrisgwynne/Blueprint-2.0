@@ -19,9 +19,57 @@ import { resolve, join, relative, dirname, basename, sep, isAbsolute } from 'pat
 import {
   mkdirSync, existsSync, readdirSync, statSync, readFileSync,
   writeFileSync, unlinkSync, realpathSync,
+  openSync, writeSync, closeSync, constants as fsConstants,
 } from 'fs';
 import matter from 'gray-matter';
 import { scanForSensitiveData } from '../lib/content-sanitiser.js';
+
+// ─── Race-free leaf-level file I/O ───────────────────────────────────────────
+//
+// containPath() validates a path string-wise and, defensively, by resolving
+// symlinks on the deepest *existing* ancestor. But between that check and a
+// later plain writeFileSync()/readFileSync() call re-resolving the same path,
+// something could in principle swap the leaf component for a symlink pointing
+// outside the KB root (classic TOCTOU). These helpers close that specific
+// window using O_NOFOLLOW, an OS-level primitive that makes open(2) fail
+// atomically if the final path component is a symlink — there is no gap
+// between "check" and "use" because the check *is* the open. This does not
+// (and structurally cannot, via O_NOFOLLOW alone) protect against an
+// *intermediate* directory component being swapped to a symlink mid-request;
+// that narrower case is still covered by containPath()'s ancestor-directory
+// realpath check, just not race-free the same way. Reaching full immunity
+// there would require walking the path component-by-component with
+// openat-style relative opens, which Node's fs module doesn't expose —
+// judged disproportionate for this fix given the realistic threat model
+// (a single local server process, no untrusted concurrent filesystem writer).
+export function openNoFollow(path: string, flags: number, mode?: number): number {
+  try {
+    return mode === undefined ? openSync(path, flags) : openSync(path, flags, mode);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new KBPathError('Invalid KB path: refusing to follow a symlink at the target path.');
+    }
+    throw err;
+  }
+}
+
+export function writeFileNoFollowSync(path: string, content: string | Buffer): void {
+  const fd = openNoFollow(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644);
+  try {
+    writeSync(fd, Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readFileNoFollowSync(path: string): string {
+  const fd = openNoFollow(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
 
 // ─── Path containment guard ──────────────────────────────────────────────────
 //
@@ -408,7 +456,7 @@ export class KBEngine {
     if (!existsSync(full)) {
       throw new Error(`File not found: ${relativePath}`);
     }
-    const raw = readFileSync(full, 'utf8');
+    const raw = readFileNoFollowSync(full);
     let parsed: { content: string; data: Record<string, unknown> };
     try {
       parsed = matter(raw) as unknown as { content: string; data: Record<string, unknown> };
@@ -470,6 +518,15 @@ export class KBEngine {
       for (const entry of entries) {
         if (isHidden(entry.name)) continue;
         if (entry.name === '_archived') continue;
+        // Dirent.isDirectory()/isFile() follow symlinks — a symlinked
+        // directory or file planted inside the KB root (e.g. a stray
+        // entry in an imported Obsidian vault, or leftover from before
+        // this hardening) would otherwise be silently walked/read through
+        // by search()/getBacklinks()/lint()/getRecentlyModified(), none of
+        // which go through containPath() since they discover paths
+        // themselves rather than taking a caller-supplied path. Skip any
+        // symlink entirely rather than following it.
+        if (entry.isSymbolicLink()) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
@@ -586,11 +643,15 @@ export class KBEngine {
       });
     }
 
-    writeFileSync(full, fileContent, 'utf8');
+    // O_NOFOLLOW makes this atomic against a leaf-symlink swap — see the
+    // comment on writeFileNoFollowSync above.
+    writeFileNoFollowSync(full, fileContent);
 
-    // Post-write verification: confirm the file we just wrote actually
-    // landed inside the KB root. Guards against a TOCTOU symlink swap
-    // between the containPath() check above and this write.
+    // Belt-and-suspenders: confirm the file we just wrote actually landed
+    // inside the KB root. O_NOFOLLOW already makes this structurally
+    // unreachable for a leaf-symlink swap; kept as defense-in-depth for
+    // the narrower intermediate-directory-swap case containPath() can't
+    // fully close race-free (see containPath()'s docstring).
     const realWritten = realpathOrSelf(full);
     const realRoot = realpathOrSelf(resolve(this.root));
     if (realWritten !== realRoot && !realWritten.startsWith(realRoot + sep)) {
@@ -661,9 +722,9 @@ export class KBEngine {
     const archivedFull = containPath(this.root, archivedRel);
     mkdirSync(dirname(archivedFull), { recursive: true });
 
-    const content = readFileSync(full, 'utf8');
+    const content = readFileNoFollowSync(full);
     const banner = `> [!archived] Archived on ${new Date().toISOString()}\n\n`;
-    writeFileSync(archivedFull, banner + content, 'utf8');
+    writeFileNoFollowSync(archivedFull, banner + content);
     unlinkSync(full);
 
     try {
@@ -685,7 +746,7 @@ export class KBEngine {
     const relativePath = `raw/${safeName}`;
     const full = containPath(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, content);
+    writeFileNoFollowSync(full, content);
     await this._commit(`upload: ${relativePath}`, [relativePath]);
     return { path: relativePath };
   }
@@ -772,7 +833,7 @@ export class KBEngine {
     const content = await this.getFileAtCommit(relativePath, commitHash);
     const full = containPath(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, content, 'utf8');
+    writeFileNoFollowSync(full, content);
     await this._commit(`restore: ${relativePath} to ${commitHash.slice(0, 7)}`, [relativePath]);
     return { restored: true, commit: commitHash };
   }

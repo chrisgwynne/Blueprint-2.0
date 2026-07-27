@@ -700,6 +700,74 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 })();
 
+// ─── One-off data migration: strip legacy wildcard BAP grants ────────────────
+// POST /register used to be open and granted whatever permissions/
+// business_access a caller requested, including wildcards ('*:*',
+// 'resource:*', business_access:['*']). The fix (bap/auth.ts,
+// requireRegistrationAuth + filterGrantablePermissions/filterValidBusinessIds)
+// only closes that door for *future* registrations — any bap_agents row
+// created before the fix may still hold a wildcard grant from the old
+// behaviour, and would otherwise keep working indefinitely. This strips
+// wildcard entries (and only wildcard entries — concrete permissions like
+// 'signals:read' and concrete business IDs are left untouched) from every
+// existing row, once. Not implemented as an import from bap/auth.ts to
+// avoid a circular dependency (auth.ts imports db.ts); the "strip anything
+// containing '*'" rule is intentionally simpler than and independent of
+// that module's grantable-permission allow-list.
+(function stripLegacyWildcardBapGrants() {
+  try {
+    const marker = db.prepare(
+      "SELECT value FROM settings WHERE key = 'migration_bap_strip_wildcards_v1'"
+    ).get();
+    if (marker) return;
+
+    const agents = db.prepare('SELECT id, name, permissions, business_access FROM bap_agents').all() as
+      Array<{ id: string; name: string; permissions: string | null; business_access: string | null }>;
+
+    const affected: Array<{ id: string; name: string; before: { permissions: unknown[]; business_access: unknown[] }; after: { permissions: unknown[]; business_access: unknown[] } }> = [];
+
+    for (const agent of agents) {
+      let perms: unknown[] = [];
+      let access: unknown[] = [];
+      try { const p = JSON.parse(agent.permissions ?? '[]'); if (Array.isArray(p)) perms = p; } catch {}
+      try { const a = JSON.parse(agent.business_access ?? '[]'); if (Array.isArray(a)) access = a; } catch {}
+
+      const strippedPerms = perms.filter((p) => !(typeof p === 'string' && p.includes('*')));
+      const strippedAccess = access.filter((a) => a !== '*');
+
+      const permsChanged = strippedPerms.length !== perms.length;
+      const accessChanged = strippedAccess.length !== access.length;
+      if (!permsChanged && !accessChanged) continue;
+
+      db.prepare('UPDATE bap_agents SET permissions = ?, business_access = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+        .run(JSON.stringify(strippedPerms), JSON.stringify(strippedAccess), agent.id);
+
+      affected.push({
+        id: agent.id,
+        name: agent.name,
+        before: { permissions: perms, business_access: access },
+        after: { permissions: strippedPerms, business_access: strippedAccess },
+      });
+    }
+
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at)
+       VALUES ('migration_bap_strip_wildcards_v1', ?, CURRENT_TIMESTAMP)`
+    ).run(JSON.stringify({ ran_at: new Date().toISOString(), affected }));
+
+    if (affected.length > 0) {
+      console.error(
+        `[db] SECURITY MIGRATION: stripped wildcard BAP permissions/business_access from ${affected.length} ` +
+        `pre-existing agent(s) issued before the registration fix: ${affected.map((a) => `${a.name} (${a.id})`).join(', ')}. ` +
+        `These agents may now be under-permissioned for what they were actually doing — review them in ` +
+        `Settings → External Agents and re-grant specific (non-wildcard) permissions/business access as needed.`
+      );
+    }
+  } catch (err) {
+    console.warn('[db] BAP wildcard-grant migration skipped:', (err as Error).message);
+  }
+})();
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 export function generateId(): string {

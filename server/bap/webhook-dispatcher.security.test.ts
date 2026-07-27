@@ -119,4 +119,31 @@ describe('F-16/F-17 — webhook delivery is blocked for unsafe destinations', ()
     expect(delivery?.delivery_status).toBe('failed');
     expect(delivery?.response_body).toContain('Blocked');
   });
+
+  test('a webhook endpoint that responds with a redirect is not followed and is marked failed', async () => {
+    const key = generateApiKey();
+    const id = 'agt_wh_redirect';
+    db.prepare(`
+      INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, webhook_url, webhook_events, created_at)
+      VALUES (?, 'Redirect Target', ?, ?, 'active', '[]', ?, 'https://8.8.8.8/redirect-target', ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO UPDATE SET webhook_url = excluded.webhook_url
+    `).run(id, await hashApiKey(key), keyPrefix(key), JSON.stringify([BIZ_A]), JSON.stringify(['signal.created']));
+
+    let sawManualRedirect = false;
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.redirect === 'manual') sawManualRedirect = true;
+      // Simulate a 302 pointing at an internal address — must never be
+      // followed, regardless of where it points.
+      return new Response(null, { status: 302, headers: { Location: 'http://169.254.169.254/' } });
+    }) as unknown as typeof fetch;
+
+    dispatchWebhookEvent('signal.created', { signal_id: 'sig_redirect', business_id: BIZ_A });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(sawManualRedirect).toBe(true);
+    const delivery = db.prepare('SELECT delivery_status, response_code FROM bap_webhook_deliveries WHERE agent_id = ?').get(id) as
+      | { delivery_status: string; response_code: number | null }
+      | undefined;
+    expect(delivery?.delivery_status).toBe('failed');
+  });
 });

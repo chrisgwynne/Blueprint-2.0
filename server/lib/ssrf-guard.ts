@@ -9,8 +9,33 @@
  * could legitimately be anywhere on the public internet — so an allowlist
  * of known hosts doesn't apply. The defense here is instead a denylist of
  * private/internal/reserved address space, applied to the DNS-resolved
- * address (not just the hostname string) so it can't be bypassed by a
- * public hostname that resolves to an internal IP (DNS rebinding).
+ * address (not just the hostname string) so a hostname that resolves to
+ * an internal address is rejected too, not just a literal private IP.
+ *
+ * What this does and does not cover:
+ *   - Covers: a webhook_url that is, or resolves to, a private/loopback/
+ *     link-local/metadata/reserved address at validation time (set-time
+ *     in bap.ts) AND at every delivery attempt (webhook-dispatcher.ts
+ *     re-resolves and re-checks immediately before each send, not just
+ *     once at registration) — this is the exact class of attack used in
+ *     the original audit PoC (a static private/internal target).
+ *   - Does NOT fully cover classic DNS-rebinding, where an attacker
+ *     controls a near-zero-TTL DNS record and returns a *different*
+ *     address to this module's dns.lookup() than to the one fetch()
+ *     itself resolves microseconds later when it opens the connection.
+ *     Closing that gap completely requires resolving once and pinning
+ *     the HTTP client to that exact IP for the connection (while still
+ *     sending the original Host header / TLS SNI) — Bun's fetch does not
+ *     currently expose a supported hook for that (checked: no dispatcher/
+ *     custom-resolver option, only `unix` for Unix-socket targets). Doing
+ *     this properly would mean dropping to raw sockets (Bun.connect) and
+ *     implementing HTTP/TLS by hand for this one call site, which is a
+ *     disproportionate amount of new surface for a Phase 0 security PR.
+ *     The residual risk is intentionally accepted here and should be
+ *     revisited with connection-level IP pinning as a dedicated follow-up
+ *     if the threat model requires defending against an attacker who can
+ *     both control DNS for the target hostname AND win a sub-millisecond
+ *     race against this check.
  */
 import { promises as dns } from 'dns';
 import { isIP } from 'net';

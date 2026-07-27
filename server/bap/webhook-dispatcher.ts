@@ -145,14 +145,23 @@ async function attemptDelivery(
   while (attempt < maxAttempts) {
     attempt++;
     try {
+      // redirect: 'manual' — a validated, safe webhook_url could otherwise
+      // 3xx-redirect to a private/internal address and have that followed
+      // automatically, silently defeating the SSRF guard above. Any
+      // redirect is treated as a delivery failure rather than followed;
+      // if the receiver genuinely needs to move endpoints, the agent
+      // should update its webhook_url directly via PUT /me/webhook
+      // (which re-validates), not rely on an HTTP redirect.
       const res = await fetch(agent.webhook_url, {
         method: 'POST',
         headers,
         body,
+        redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
 
-      const resBody = await res.text().catch(() => '');
+      const isRedirect = res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400);
+      const resBody = isRedirect ? '' : await res.text().catch(() => '');
 
       db.prepare(`
         UPDATE bap_webhook_deliveries
@@ -160,12 +169,17 @@ async function attemptDelivery(
             response_code = ?, response_body = ?
         WHERE id = ?
       `).run(
-        res.ok ? 'delivered' : 'failed',
+        res.ok && !isRedirect ? 'delivered' : 'failed',
         attempt,
-        res.status,
-        resBody.slice(0, 500),
+        isRedirect ? 0 : res.status,
+        isRedirect ? 'Blocked: webhook endpoint returned a redirect, which is not followed (SSRF hardening).' : resBody.slice(0, 500),
         deliveryId
       );
+
+      if (isRedirect) {
+        console.warn(`[BAP Webhook] Delivery ${deliveryId} blocked — endpoint attempted a redirect.`);
+        return; // do not retry — a redirecting endpoint won't stop redirecting
+      }
 
       if (res.ok) return; // success
     } catch (err) {
