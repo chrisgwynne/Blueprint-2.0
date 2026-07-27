@@ -46,6 +46,17 @@ export interface WorldModelSnapshot {
   recent_outcomes: Array<{ task_id: string; verdict: string | null; change_pct: number | null }>;
   prediction_confidence: number | null;
   agent_confidence: Array<{ agent_id: string; calibration_score: number | null }>;
+  /**
+   * Full-enforcement follow-up: "connectors update the World Model, signals
+   * are generated from the World Model" — the raw per-connector data blob
+   * (same shape signal-engine.ts's rules already evaluate), keyed by
+   * connector_id. server/jobs/scheduler.ts and server/routes/connectors.ts
+   * now source runSignalEngine()'s `previousData` from the World Model's
+   * prior snapshot instead of an ad-hoc `metrics` table diff — the 40
+   * existing signal rules never had to change, only where their input
+   * comes from.
+   */
+  connector_data: Record<string, { connector_id: string; connector_type: string; data: unknown; recorded_at: string }>;
 }
 
 const TREND_KEYWORDS: Record<string, RegExp> = {
@@ -132,6 +143,31 @@ export function buildWorldModelSnapshot(businessId: string): WorldModelSnapshot 
     openSignals.length === 0 ? 'stable' :
     openSignals.length > 5 ? 'declining' : 'stable';
 
+  const connectorData: WorldModelSnapshot['connector_data'] = {};
+  const connectorRows = safeQuery(
+    () => db.prepare('SELECT id, type FROM connectors WHERE business_id = ?').all(businessId) as Array<{ id: string; type: string }>,
+    [] as Array<{ id: string; type: string }>,
+  );
+  for (const c of connectorRows) {
+    // recorded_at has only second-level precision — rowid DESC tiebreaks
+    // ties so the truly most recent sync's blob wins (see getCurrentWorldModel's
+    // identical fix below for the same underlying issue).
+    const latest = safeQuery(
+      () => db.prepare(`
+        SELECT metric_data, recorded_at FROM metrics
+        WHERE connector_id = ? AND metric_name = ?
+        ORDER BY recorded_at DESC, rowid DESC LIMIT 1
+      `).get(c.id, `${c.type}_sync`) as { metric_data: string | null; recorded_at: string } | undefined,
+      undefined as { metric_data: string | null; recorded_at: string } | undefined,
+    );
+    if (!latest?.metric_data) continue;
+    try {
+      connectorData[c.id] = { connector_id: c.id, connector_type: c.type, data: JSON.parse(latest.metric_data), recorded_at: latest.recorded_at };
+    } catch {
+      // malformed blob — skip rather than poison the snapshot
+    }
+  }
+
   return {
     business_health: { status: overallBusinessStatus, open_critical_signals: criticalSignals.length },
     revenue_trend: bucketSignalTrend(openSignals, TREND_KEYWORDS.revenue!),
@@ -151,7 +187,21 @@ export function buildWorldModelSnapshot(businessId: string): WorldModelSnapshot 
     recent_outcomes: recentOutcomes,
     prediction_confidence: avgCalibration,
     agent_confidence: calibrationRows,
+    connector_data: connectorData,
   };
+}
+
+/**
+ * The World Model's own record of a connector's most-recently-synced raw
+ * data, as of the last snapshot written *before* this call — i.e. "what
+ * we knew before this sync", the same role the old ad-hoc "previous row
+ * in the metrics table" query used to play for signal-engine.ts. Reads
+ * the CURRENT (about-to-be-superseded) snapshot, so callers must call this
+ * before writing a new one.
+ */
+export function getPreviousConnectorData(businessId: string, connectorId: string): unknown {
+  const current = getCurrentWorldModel(businessId);
+  return current?.snapshot.connector_data?.[connectorId]?.data ?? null;
 }
 
 /** Persist a new timestamped, attributable snapshot. Fire-and-forget safe. */
@@ -179,12 +229,16 @@ function parseRow(row: Record<string, unknown>): WorldModelSnapshotRow {
   return { ...row, snapshot: JSON.parse(row['snapshot'] as string) } as unknown as WorldModelSnapshotRow;
 }
 
+// created_at has only second-level precision, so ties are possible when
+// multiple snapshots are written within the same second (e.g. several
+// connectors syncing back-to-back). rowid increases with insertion order,
+// so it's used as a tiebreaker to guarantee the truly most recent row wins.
 export function getCurrentWorldModel(businessId: string): WorldModelSnapshotRow | null {
-  const row = db.prepare('SELECT * FROM world_model_snapshots WHERE business_id = ? ORDER BY created_at DESC LIMIT 1').get(businessId) as Record<string, unknown> | null;
+  const row = db.prepare('SELECT * FROM world_model_snapshots WHERE business_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(businessId) as Record<string, unknown> | null;
   return row ? parseRow(row) : null;
 }
 
 export function getWorldModelHistory(businessId: string, limit = 20): WorldModelSnapshotRow[] {
-  const rows = db.prepare('SELECT * FROM world_model_snapshots WHERE business_id = ? ORDER BY created_at DESC LIMIT ?').all(businessId, Math.min(Math.max(limit, 1), 200)) as Record<string, unknown>[];
+  const rows = db.prepare('SELECT * FROM world_model_snapshots WHERE business_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?').all(businessId, Math.min(Math.max(limit, 1), 200)) as Record<string, unknown>[];
   return rows.map(parseRow);
 }

@@ -1,5 +1,6 @@
 import db, { generateId } from '../db/db.js';
 import { approveTask } from './task-queue.js';
+import { getBusinessProfile } from '../business/business-profile.js';
 
 export interface TaskRow {
   id: string;
@@ -64,9 +65,12 @@ function readApprovalPolicies(): ApprovalPolicies {
  * Determine whether a task should be auto-approved.
  *
  * Order of precedence:
- *   1. Per-action-type policy from Settings → Approval Policies
- *   2. Default policy from same Settings tab
- *   3. Legacy fallback: trust_tier === 'green' && approval_mode === 'auto'
+ *   1. This business's Business Profile approval_policy (Business Truth
+ *      Layer, per-business — more specific than the instance-wide
+ *      Settings policy below, so it's consulted first)
+ *   2. Per-action-type policy from Settings → Approval Policies
+ *   3. Default policy from same Settings tab
+ *   4. Legacy fallback: trust_tier === 'green' && approval_mode === 'auto'
  */
 export function shouldAutoApprove(task: TaskRow): boolean {
   // Hard floor: destructive / outward-facing actions are never auto-approved,
@@ -74,6 +78,14 @@ export function shouldAutoApprove(task: TaskRow): boolean {
   // `default: 'auto'` policy (or an over-eager / injected model) must not be
   // able to execute an irreversible change unattended.
   if (task.action_type && DANGEROUS_ACTION_TYPES.has(task.action_type)) return false;
+
+  const profile = getBusinessProfile(task.business_id);
+  if (profile && task.action_type) {
+    if (profile.approval_policy.always_require_approval?.includes(task.action_type)) return false;
+    if (profile.approval_policy.allow_auto_approve?.includes(task.action_type)) return true;
+  }
+  if (profile?.approval_policy.default_mode === 'manual') return false;
+  if (profile?.approval_policy.default_mode === 'auto') return true;
 
   const policies = readApprovalPolicies();
   const perAction = task.action_type ? policies[task.action_type] : undefined;

@@ -40,6 +40,12 @@ export interface ActionRegistryEntry {
   side_effect_classification: SideEffectClassification;
   requires_approval: boolean;
   risk_level: RiskLevel;
+  /** Does executor.ts's dispatch switch have a real case for this action_type? Static registry metadata (see db.ts migration notes) — used by the "executor exists/healthy" validation check. */
+  dispatched_by_executor: boolean;
+  /** Human-readable name + measurement guidance, mirrored into action_windows (server/brain/action-windows.ts) on every write — see db.ts migration notes for why these 3 fields exist here. */
+  display_name: string | null;
+  measurement_notes: string | null;
+  volatility: string | null;
   measurement_window_days: number[];
   success_metrics: string[];
   expected_impact: string | null;

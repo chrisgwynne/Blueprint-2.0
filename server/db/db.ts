@@ -1181,6 +1181,50 @@ const STARTUP_MIGRATIONS: string[] = [
   `UPDATE action_registry SET measurement_window_days = '[14,28,56]', success_metrics = '["gsc.total_clicks","shopify.revenue","shopify.conversion_rate"]' WHERE action_type = 'shopify_collection_update' AND success_metrics = '[]'`,
   `UPDATE action_registry SET measurement_window_days = '[1,7,28]', success_metrics = '["gbp.views_total","gbp.actions_website","gbp.actions_phone"]' WHERE action_type = 'gbp_post' AND success_metrics = '[]'`,
   `UPDATE action_registry SET measurement_window_days = '[7,21]', success_metrics = '["shopify.conversion_rate","ga4.bounce_rate","ga4.sessions","pagespeed.mobile.performance_score"]' WHERE action_type = 'shopify_theme_edit' AND success_metrics = '[]'`,
+
+  // ─── Full-enforcement follow-up: does a real executor.ts dispatch case ──
+  // exist for this action_type? Static registry metadata instead of a
+  // runtime cross-import of executor.ts (which would create a module
+  // cycle: task-queue.ts → action-registry.ts → executor.ts →
+  // task-queue.ts). Drives the "executor exists / is healthy" validation
+  // check — an action_type with no real dispatch case is never blocked
+  // for "unhealthy executor" (there's nothing to be unhealthy), but one
+  // that IS dispatched and has recently failed repeatedly is.
+  `ALTER TABLE action_registry ADD COLUMN dispatched_by_executor INTEGER NOT NULL DEFAULT 0`,
+  `UPDATE action_registry SET dispatched_by_executor = 1 WHERE action_type IN (
+    'github_issue', 'github_pr', 'investigation', 'deep_investigation', 'content_draft', 'meta_update',
+    'shopify_product_create', 'shopify_product_update', 'shopify_description_update', 'shopify_page_create',
+    'shopify_page_update', 'shopify_blog_post_create', 'shopify_meta_update', 'shopify_collection_update',
+    'shopify_tag_update', 'shopify_theme_edit', 'hire_agent', 'wix_seo_update', 'server_file_write',
+    'server_file_rollback', 'gbp_update', 'klaviyo_flow_update', 'meta_ads_update', 'connect_connector',
+    'research_connector'
+  )`,
+
+  // ─── Full-enforcement follow-up: consolidate action-windows.ts's ────────
+  // ACTION_WINDOWS into action_registry. These 3 columns are the only
+  // fields action_windows carries that action_registry didn't already
+  // have (min/expected/max_days already live in measurement_window_days,
+  // metric_types already lives in success_metrics) — adding them makes
+  // action_registry fully sufficient to seed+sync action_windows, so
+  // seedActionWindows() (server/brain/action-windows.ts) now reads from
+  // action_registry instead of its own hardcoded array, and
+  // upsertActionRegistryEntry() (server/tasks/action-registry.ts)
+  // writes through to action_windows on every edit — one edit surface,
+  // two tables kept in agreement, instead of two independently-editable
+  // copies of the same knowledge.
+  `ALTER TABLE action_registry ADD COLUMN display_name TEXT`,
+  `ALTER TABLE action_registry ADD COLUMN measurement_notes TEXT`,
+  `ALTER TABLE action_registry ADD COLUMN volatility TEXT`,
+  `UPDATE action_registry SET display_name = 'Meta title/description change', volatility = 'medium', measurement_notes = 'Google recrawls pages on its own schedule. CTR changes visible in GSC after recrawl and sufficient impression volume. Allow 3 weeks minimum, 6 weeks for low-traffic pages.' WHERE action_type = 'meta_update' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Product description rewrite', volatility = 'high', measurement_notes = 'Conversion rate changes visible within 1-2 weeks with sufficient traffic. Requires minimum ~100 sessions to the page for statistical significance.' WHERE action_type = 'shopify_description_update' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'New landing page', volatility = 'low', measurement_notes = 'New pages take time to be discovered, crawled, indexed, and ranked. Expect 4-8 weeks before meaningful ranking signals, up to 16 weeks for competitive keywords.' WHERE action_type = 'shopify_page_create' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Code change / deployment', volatility = 'low', measurement_notes = 'Code changes affect PageSpeed immediately. User behaviour metrics (bounce rate, sessions) need 1-2 weeks of data to show statistically significant change.' WHERE action_type = 'github_pr' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'New content / blog post', volatility = 'low', measurement_notes = 'Content SEO is slow. New posts typically take 3-6 months to reach peak rankings. Do not evaluate content performance before 4 weeks, and ideally measure at 3 months.' WHERE action_type = 'content_draft' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Meta Ads campaign change', volatility = 'high', measurement_notes = 'Meta algorithm needs a learning period (typically 50 conversions or 7 days). Do not evaluate or change ads during the learning phase — it resets progress.' WHERE action_type = 'meta-ads-change' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Shopify SEO title/description', volatility = 'medium', measurement_notes = 'Same as meta_update — depends on Googlebot recrawl schedule.' WHERE action_type = 'shopify_meta_update' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Collection page update', volatility = 'medium', measurement_notes = 'Collection pages have SEO and UX components. SEO takes weeks, conversion rate impact visible sooner with sufficient traffic.' WHERE action_type = 'shopify_collection_update' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Google Business Profile post', volatility = 'high', measurement_notes = 'GBP posts have immediate but short-lived visibility. Views peak in first week. Measure within 7-14 days.' WHERE action_type = 'gbp_post' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Shopify theme file edit', volatility = 'medium', measurement_notes = 'Theme changes take effect immediately. Conversion and UX metric changes need 7-14 days of traffic for statistical significance.' WHERE action_type = 'shopify_theme_edit' AND display_name IS NULL`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

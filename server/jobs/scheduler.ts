@@ -9,7 +9,7 @@ import { withLeaderLock, tryAcquireOrRenewLeaderLock } from './scheduler-lock.js
 import { runExecutionWorkerTick, recoverStuckJobs } from '../tasks/execution-worker.js';
 import { pruneExpiredIdempotencyKeys } from '../lib/idempotency.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
-import { writeWorldModelSnapshot } from '../world-model/world-model.js';
+import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 
 let schedulerStarted = false;
 
@@ -113,17 +113,13 @@ export async function syncConnector(connector: Connector): Promise<{ ok: boolean
     // Run signal engine against the new data
     const { runSignalEngine } = await import('../signals/signal-engine.js') as unknown as { runSignalEngine: (...args: any[]) => Promise<any[]> };
 
-    // Get the previous blob for comparison
-    const prevMetric = db.prepare(`
-      SELECT metric_data FROM metrics
-      WHERE business_id = ? AND connector_id = ? AND metric_name = ?
-      ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
-    `).get(connector.business_id, connector.id, `${connector.type}_sync`) as { metric_data: string | null } | undefined;
-
-    let previousData: unknown = null;
-    if (prevMetric?.metric_data) {
-      try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
-    }
+    // "Connectors update the World Model, signals are generated from the
+    // World Model" — previousData now comes from the World Model's own
+    // record of this connector's last-known data (the prior snapshot,
+    // written after the LAST sync), not an ad-hoc second query against
+    // the metrics table. The 40 signal rules below are unaffected — they
+    // still just receive (current, previous) in the same shape.
+    const previousData = getPreviousConnectorData(connector.business_id, connector.id);
 
     // For pagespeed, pass mobile data directly to match signal rule field paths
     const signalData = (connector.type === 'pagespeed' && (data as Record<string, unknown>).mobile) ? (data as Record<string, unknown>).mobile : data;

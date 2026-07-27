@@ -44,6 +44,8 @@ afterAll(() => {
   db.prepare(`DELETE FROM goal_assessments WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM goals WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM connector_confidence WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM connectors WHERE business_id = ?`).run(BIZ);
 });
 
 describe('getRankedRecommendations', () => {
@@ -72,6 +74,24 @@ describe('getRankedRecommendations', () => {
     expect(opp).toBeDefined();
     expect(opp!.source_type).toBe('opportunity');
     expect(opp!.rationale.length).toBeGreaterThan(0);
+  });
+
+  test('an opportunity sourced from a low-confidence connector is excluded, not ranked', () => {
+    const connectorId = generateId();
+    db.prepare(`INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at) VALUES (?, ?, 'gsc', 'GSC', '{}', 'connected', '{}', CURRENT_TIMESTAMP)`).run(connectorId, BIZ);
+    db.prepare(`INSERT INTO connector_confidence (id, connector_id, business_id, overall_confidence, overall_status, created_at, updated_at) VALUES (?, ?, ?, 0.1, 'broken', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(generateId(), connectorId, BIZ);
+
+    const oppId = generateId();
+    db.prepare(`
+      INSERT INTO goal_suggestions (id, business_id, title, confidence, opportunity_value, opportunity_unit, connector_source, status, required_effort, created_at, updated_at)
+      VALUES (?, ?, 'Untrusted GSC opportunity', 0.9, 500, 'gbp_per_month', 'gsc', 'pending', 'low', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `).run(oppId, BIZ);
+
+    const { recommendations, excluded } = getRankedRecommendations(BIZ);
+    expect(recommendations.some((r) => r.id === oppId)).toBe(false);
+    const exclusion = excluded.find((e) => e.id === oppId);
+    expect(exclusion).toBeDefined();
+    expect(exclusion!.reason).toContain('gsc');
   });
 
   test('a candidate matching a blocking constraint is excluded, not ranked, with a reason', () => {

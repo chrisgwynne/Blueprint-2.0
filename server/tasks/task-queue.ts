@@ -406,37 +406,56 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   const existing = parseRow(existingRaw)!;
 
   // ─── Typed Action & Executor Registry validation gate ──────────────────────
-  // "Before a task can become executable Blueprint must validate..." — this
-  // is the propose→approve transition, so it runs here rather than at task
-  // creation (which would immediately break the many existing tests/fixtures
-  // that create tasks with arbitrary action_types against DBs with no real
-  // connectors configured). A null action_type (manual to-do) always passes.
-  // Only two checks hard-block: the action_type must be a known, active
-  // registry entry, and the business's profile must support it. Everything
-  // else (missing connectors, payload schema mismatches) is recorded as a
-  // non-blocking Blueprint System Issue rather than blocking approval, since
-  // those checks depend on real per-business connector configuration that
-  // most existing businesses/tests don't have.
+  // "Before a task can become executable Blueprint must validate: action
+  // exists, executor exists, payload matches schema, business type
+  // supports action, required connectors exist, connector confidence is
+  // acceptable, permissions exist, executor is healthy." Every one of
+  // those is a hard block here — this runs at the propose→approve
+  // transition (not task creation) since gating creation would break
+  // fixtures that build tasks before any connector exists; approval is
+  // the actual "becomes executable" moment the spec means. A null
+  // action_type (manual to-do) always passes untouched.
   const businessProfile = getBusinessProfile(existing.business_id);
+
+  // ─── Business Profile automation_policy: daily autonomous-task cap ─────────
+  // "max_autonomous_tasks_per_day" caps how many tasks Blueprint approves
+  // through non-human channels (BAP, Telegram, timed auto-approval) in a
+  // calendar day — it does not cap what a human explicitly approves
+  // through the dashboard, which is always allowed to proceed.
+  const dailyCap = businessProfile?.automation_policy?.max_autonomous_tasks_per_day;
+  if (dailyCap != null && !approvedBy.startsWith('dashboard:')) {
+    const todayCount = (db.prepare(`
+      SELECT COUNT(*) as n FROM tasks
+      WHERE business_id = ? AND approved_by IS NOT NULL AND approved_by NOT LIKE 'dashboard:%'
+        AND approved_at >= datetime('now', 'start of day')
+    `).get(existing.business_id) as { n: number }).n;
+    if (todayCount >= dailyCap) {
+      createSystemIssue({
+        business_id: existing.business_id,
+        issue_type: 'automation_policy_daily_cap_reached',
+        severity: 'warning',
+        title: `Task "${existing.title}" cannot be auto-approved — daily autonomous task cap reached`,
+        description: `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
+        related_task_id: id,
+        related_action_type: existing.action_type,
+      });
+      throw new Error(
+        `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day, ` +
+        `and ${todayCount} have already been approved today. A human can still approve this task via the dashboard. ` +
+        'A Blueprint System Issue has been created explaining why.'
+      );
+    }
+  }
+
   const connectors = db.prepare('SELECT * FROM connectors WHERE business_id = ?').all(existing.business_id) as Connector[];
   const actionValidation = validateAction({
     actionType: existing.action_type,
     payload: existing.action_payload,
+    businessId: existing.business_id,
     businessProfile,
     connectors,
+    approvedBy,
   });
-
-  for (const warning of actionValidation.warnings) {
-    createSystemIssue({
-      business_id: existing.business_id,
-      issue_type: `action_validation_warning:${warning.code}`,
-      severity: 'warning',
-      title: `Task "${existing.title}" has an unresolved action validation warning`,
-      description: warning.message,
-      related_task_id: id,
-      related_action_type: existing.action_type,
-    });
-  }
 
   if (!actionValidation.valid) {
     createSystemIssue({

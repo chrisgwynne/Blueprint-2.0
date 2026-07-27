@@ -59,6 +59,40 @@ describe('upsertActionRegistryEntry', () => {
     expect(updated.risk_level).toBe('high');
     expect(updated.description).toBe('v1'); // untouched
   });
+
+  test('a 3-element measurement_window_days writes through to action_windows (consolidation)', () => {
+    db.prepare(`DELETE FROM action_windows WHERE action_type = 'test_windows_sync_action'`).run();
+    upsertActionRegistryEntry('test_windows_sync_action', {
+      measurement_window_days: [5, 10, 20],
+      success_metrics: ['some.metric'],
+      display_name: 'Test Windows Sync',
+      measurement_notes: 'test notes',
+      volatility: 'low',
+    });
+    const row = db.prepare('SELECT * FROM action_windows WHERE action_type = ?').get('test_windows_sync_action') as any;
+    expect(row).not.toBeNull();
+    expect(row.display_name).toBe('Test Windows Sync');
+    expect(row.min_days).toBe(5);
+    expect(row.expected_days).toBe(10);
+    expect(row.max_days).toBe(20);
+    expect(JSON.parse(row.metric_types)).toEqual(['some.metric']);
+    expect(row.volatility).toBe('low');
+  });
+
+  test('editing an existing action_type updates its action_windows row in place, not a duplicate', () => {
+    db.prepare(`DELETE FROM action_windows WHERE action_type = 'test_windows_sync_action_2'`).run();
+    upsertActionRegistryEntry('test_windows_sync_action_2', {
+      measurement_window_days: [1, 2, 3], display_name: 'v1', volatility: 'low',
+    });
+    upsertActionRegistryEntry('test_windows_sync_action_2', {
+      measurement_window_days: [4, 5, 6], display_name: 'v2', volatility: 'high',
+    });
+    const rows = db.prepare('SELECT * FROM action_windows WHERE action_type = ?').all('test_windows_sync_action_2') as any[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].display_name).toBe('v2');
+    expect(rows[0].min_days).toBe(4);
+    expect(rows[0].volatility).toBe('high');
+  });
 });
 
 describe('validatePayloadAgainstSchema', () => {
@@ -98,43 +132,67 @@ describe('validatePayloadAgainstSchema', () => {
 });
 
 describe('validateAction', () => {
+  const BIZ = 'biz_validate_action_test';
+
+  beforeAll(() => {
+    db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Validate Action Test', 'validate-action-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
+  });
+
   test('a null action_type always passes with no issues (manual to-do exemption)', () => {
-    const result = validateAction({ actionType: null, payload: {}, businessProfile: null, connectors: [] });
+    const result = validateAction({ actionType: null, payload: {}, businessId: BIZ, businessProfile: null, connectors: [] });
     expect(result.valid).toBe(true);
     expect(result.issues).toEqual([]);
     expect(result.warnings).toEqual([]);
   });
 
   test('an unregistered action_type is a blocking issue', () => {
-    const result = validateAction({ actionType: 'totally_made_up_action_xyz', payload: {}, businessProfile: null, connectors: [] });
+    const result = validateAction({ actionType: 'totally_made_up_action_xyz', payload: {}, businessId: BIZ, businessProfile: null, connectors: [] });
     expect(result.valid).toBe(false);
     expect(result.issues[0]!.code).toBe('unknown_action_type');
   });
 
   test('an ecommerce-only action on a service business is a blocking issue', () => {
     const profile = { business_type: 'service' } as any;
-    const result = validateAction({ actionType: 'shopify_product_update', payload: {}, businessProfile: profile, connectors: [] });
+    const result = validateAction({ actionType: 'shopify_product_update', payload: {}, businessId: BIZ, businessProfile: profile, connectors: [] });
     expect(result.valid).toBe(false);
-    expect(result.issues[0]!.code).toBe('business_type_incompatible');
+    expect(result.issues.some((i) => i.code === 'business_type_incompatible')).toBe(true);
   });
 
-  test('an ecommerce-only action on an ecommerce business passes', () => {
+  test('an ecommerce-only action with no required connectors passes on an ecommerce business', () => {
     const profile = { business_type: 'ecommerce' } as any;
-    const result = validateAction({ actionType: 'shopify_product_update', payload: {}, businessProfile: profile, connectors: [] });
+    const result = validateAction({ actionType: 'product_suggestion', payload: {}, businessId: BIZ, businessProfile: profile, connectors: [] });
     expect(result.valid).toBe(true);
   });
 
-  test('missing a required connector is a warning, not a blocker', () => {
-    const result = validateAction({ actionType: 'github_issue', payload: {}, businessProfile: null, connectors: [] });
-    expect(result.valid).toBe(true);
-    expect(result.warnings.some((w) => w.code === 'missing_connector')).toBe(true);
+  test('a required connector missing entirely is a blocking issue', () => {
+    const result = validateAction({ actionType: 'github_issue', payload: {}, businessId: BIZ, businessProfile: null, connectors: [] });
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((i) => i.code === 'missing_connector')).toBe(true);
   });
 
-  test('a required connector present clears the missing_connector warning', () => {
+  test('a required connector present but never confidence-scored is still blocking (fail-closed)', () => {
     const result = validateAction({
-      actionType: 'github_issue', payload: {}, businessProfile: null,
-      connectors: [{ id: 'c1', business_id: 'b1', type: 'github', name: 'GH', credentials: {}, status: 'connected', last_sync: null, last_error: null, config: {}, created_at: '' }],
+      actionType: 'github_issue', payload: {}, businessId: BIZ, businessProfile: null,
+      connectors: [{ id: 'c-unscored', business_id: BIZ, type: 'github', name: 'GH', credentials: {}, status: 'connected', last_sync: null, last_error: null, config: {}, created_at: '' }],
     });
-    expect(result.warnings.some((w) => w.code === 'missing_connector')).toBe(false);
+    expect(result.valid).toBe(false);
+    expect(result.issues.some((i) => i.code === 'connector_confidence_low')).toBe(true);
+    expect(result.issues.some((i) => i.code === 'missing_connector')).toBe(false);
+  });
+
+  test('a required connector present AND confidence-scored healthy passes both checks', () => {
+    const connectorId = 'c-healthy';
+    db.prepare(`INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at) VALUES (?, ?, 'github', 'GH', '{}', 'connected', '{}', CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING`).run(connectorId, BIZ);
+    db.prepare(`
+      INSERT INTO connector_confidence (id, connector_id, business_id, overall_confidence, overall_status, created_at, updated_at)
+      VALUES ('cc-healthy', ?, ?, 0.95, 'healthy', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO NOTHING
+    `).run(connectorId, BIZ);
+    const result = validateAction({
+      actionType: 'github_issue', payload: {}, businessId: BIZ, businessProfile: null,
+      connectors: [{ id: connectorId, business_id: BIZ, type: 'github', name: 'GH', credentials: {}, status: 'connected', last_sync: null, last_error: null, config: {}, created_at: '' }],
+    });
+    expect(result.issues.some((i) => i.code === 'missing_connector')).toBe(false);
+    expect(result.issues.some((i) => i.code === 'connector_confidence_low')).toBe(false);
   });
 });
