@@ -33,6 +33,7 @@ import {
   withRequiredIdempotency, sendError,
 } from '../bap/route-helpers.js';
 import { computeFreshness } from '../connectors/freshness.js';
+import { isConnectorApplicable } from '../connectors/confidence.js';
 
 // No blanket auth/rate-limit middleware here — see bap-goals.ts's
 // docstring on this file's mounting inside bap.ts's already-authenticated
@@ -57,16 +58,30 @@ function summarizeConfig(config: unknown): Record<string, unknown> {
   return { url, siteUrl, propertyId, repos, owner, pollingIntervalMinutes, defaultDataType };
 }
 
+// Issue #27: a never-used, ecommerce-only connector (e.g. google-merchant)
+// on a non-ecommerce business surfaced as `status: 'disconnected'` —
+// indistinguishable from a genuinely broken integration, causing false
+// "this needs attention" noise for agents/operators. isConnectorApplicable()
+// (server/connectors/confidence.ts) already encodes "was this ever synced,
+// and if not, does the business's Business Profile business_type actually
+// use this connector type" — reused here rather than a second copy of that
+// logic, and the raw status is still returned as raw_status for anyone who
+// wants ground truth.
 function withFreshness(row: Record<string, unknown>): Record<string, unknown> {
   const freshness = computeFreshness(row);
+  const applicable = isConnectorApplicable(
+    { type: row.type as string, last_sync: row.last_sync as string | null },
+    row.business_id as string,
+  );
   return normalizeTimestamps({
     id: row.id, business_id: row.business_id, type: row.type, name: row.name,
-    status: freshness.status, raw_status: row.status, last_sync: row.last_sync,
+    status: applicable ? freshness.status : 'not_applicable', raw_status: row.status, last_sync: row.last_sync,
     last_error: row.last_error, config_summary: summarizeConfig(row.config),
     hours_since_sync: freshness.hours_since_sync,
     next_sync_in_minutes: freshness.next_sync_in_minutes,
     stale_threshold_hours: freshness.stale_threshold_hours,
     created_at: row.created_at,
+    ...(applicable ? {} : { not_applicable_reason: `This connector type is not used by this business (business_type is not 'ecommerce') and has never synced.` }),
   }, ['last_sync', 'created_at']);
 }
 
