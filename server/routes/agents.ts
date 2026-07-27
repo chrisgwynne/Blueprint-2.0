@@ -487,13 +487,12 @@ router.post('/proposals/:taskId/approve', async (req: Request, res: Response) =>
     const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
 
     const { approveTask } = await import('../tasks/task-queue.js');
-    const { executeTask } = await import('../tasks/executor.js');
     const approved = approveTask(taskId, actor);
     if (!approved) return res.status(404).json({ error: 'Proposal not found.' });
 
-    // Execute the hire immediately (install → standby). Fire-and-forget so we
-    // don't hold the response; the agent will appear in the roster on standby.
-    executeTask(taskId).catch((err: Error) => console.warn('[agents] hire execution failed:', err.message));
+    // approveTask() atomically enqueues the execution job and wakes the
+    // worker itself — the hire (install → standby) runs via the same
+    // durable job path as every other executable action type now.
     res.json({ ok: true, task_id: taskId, message: 'Proposal approved. Agent will be hired and placed on standby.' });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message || 'Failed to approve proposal.' });

@@ -6,7 +6,7 @@ import { createTask as _createTask, listTasks, approveTask, rejectTask, updateTa
 import type { TaskStatus } from '../tasks/task-queue.js';
 const createTask = _createTask as unknown as (opts: Record<string, unknown>) => Record<string, unknown>;
 import { createTaskEvent, getTaskEvents } from '../tasks/task-events.js';
-import { executeTask, isExecutable, rollbackTask } from '../tasks/executor.js';
+import { rollbackTask } from '../tasks/executor.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -169,11 +169,12 @@ router.post('/', (req: Request, res: Response) => {
 /**
  * PATCH /api/tasks/:id/approve
  *
- * Approves the task. If the task's action_type is executable (github_issue,
- * github_pr, investigation, content_draft), the executor is fired in the
- * background — the HTTP response returns immediately with status='approved',
- * and the executor transitions the task through executing → complete/failed.
- * The frontend can poll task detail or task events to see the result.
+ * Approves the task. approveTask() itself atomically enqueues a durable
+ * execution job for executable action types (task-queue.ts) and wakes the
+ * execution worker immediately for low latency — this route no longer
+ * calls executeTask() directly. The HTTP response returns as soon as the
+ * approval (and job creation) is committed; the frontend can poll task
+ * detail, task events, or GET /api/tasks/:id/execution-job to see progress.
  */
 router.patch('/:id/approve', (req: Request, res: Response) => {
   try {
@@ -182,14 +183,6 @@ router.patch('/:id/approve', (req: Request, res: Response) => {
     const approver = session.userId as string;
     const task = approveTask(id, approver) as unknown as Record<string, unknown>;
     createTaskEvent(id, 'approved', approver, 'Task approved', {});
-
-    // Fire-and-forget execution for executable action types
-    if (task && isExecutable(task.action_type as string)) {
-      // Don't await — let the HTTP response return immediately
-      executeTask(task.id as string).catch((err: Error) => {
-        console.error(`[tasks] Background execution of ${task.id as string} crashed:`, err);
-      });
-    }
 
     return res.json(parseRow(task));
   } catch (err) {
@@ -337,10 +330,6 @@ router.post('/bulk/approve', async (req: Request, res: Response) => {
 
         approveTask(id, approver);
         createTaskEvent(id, 'approved', approver, note ?? 'Bulk approved', {});
-        const actionType = (db.prepare('SELECT action_type FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | undefined)?.action_type as string | undefined;
-        if (isExecutable(actionType ?? '')) {
-          executeTask(id).catch(() => {});
-        }
         approved++;
       } catch (err) {
         errors.push({ id, error: (err as Error).message });

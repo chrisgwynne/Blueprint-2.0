@@ -259,6 +259,28 @@ const connector = {
     return res.json() as unknown;
   },
 
+  /**
+   * Search for an existing issue or PR whose body contains `marker` (an
+   * idempotency marker embedded by the task executor, see
+   * tasks/execution-safety.ts). Used as a pre-flight check before creating
+   * an issue/PR, and during crash recovery, to verify whether a create
+   * call that may have succeeded before a crash actually did — so a retry
+   * never blindly creates a duplicate.
+   */
+  async searchByMarker(credentials: Creds, owner: string, repo: string, marker: string, type: 'issue' | 'pr'): Promise<{ number: number; html_url: string; state: string } | null> {
+    if (!owner || !repo || !marker) return null;
+    const typeQualifier = type === 'pr' ? 'is:pr' : 'is:issue';
+    const q = encodeURIComponent(`repo:${owner}/${repo} in:body "${marker}" ${typeQualifier}`);
+    const res = await withRetry(
+      () => checkedFetch(`${BASE}/search/issues?q=${q}&per_page=5`, {
+        headers: ghHeaders(credentials.token),
+      }),
+      { label: 'GitHub searchByMarker' }
+    );
+    const data = await res.json() as { items?: Array<{ number: number; html_url: string; state: string }> };
+    return data.items?.[0] ?? null;
+  },
+
   async getAuthUrl(_state?: string): Promise<string> { throw new Error('GitHub connector uses Personal Access Token, not OAuth.'); },
   async exchangeCode(_code: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: string; scope?: string }> { throw new Error('GitHub connector uses Personal Access Token, not OAuth.'); },
   async refreshToken(_credentials: Creds): Promise<{ accessToken: string; expiresAt?: string }> { throw new Error('GitHub connector uses Personal Access Token, not OAuth.'); },
