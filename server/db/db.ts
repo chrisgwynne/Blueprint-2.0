@@ -706,6 +706,271 @@ const STARTUP_MIGRATIONS: string[] = [
   `ALTER TABLE bap_audit ADD COLUMN request_id TEXT`,
   `ALTER TABLE bap_audit ADD COLUMN correlation_id TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_bap_audit_correlation ON bap_audit(correlation_id)`,
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // Phase 3: Strategic Intelligence & Autonomous Business Reasoning
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── 3.1 Goal Engine — real foreign keys, replacing the project_id proxy ──
+  // goals/tasks/signals previously only shared an optional project_id
+  // column (see PHASE2.md). These are the real relationships Phase 2
+  // documented as a gap. Additive: project_id is left in place (nothing
+  // reads it exclusively after this), and every new column is nullable so
+  // existing rows are unaffected until backfilled below.
+  `ALTER TABLE tasks ADD COLUMN goal_id TEXT REFERENCES goals(id)`,
+  `ALTER TABLE signals ADD COLUMN goal_id TEXT REFERENCES goals(id)`,
+  `ALTER TABLE task_outcomes ADD COLUMN goal_id TEXT REFERENCES goals(id)`,
+  `ALTER TABLE agent_runs ADD COLUMN goal_id TEXT REFERENCES goals(id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_signals_goal ON signals(goal_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_task_outcomes_goal ON task_outcomes(goal_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_runs_goal ON agent_runs(goal_id)`,
+  // One-time-per-row backfill: only ever fills a NULL goal_id from the old
+  // project_id proxy, so it is safe to re-run on every startup (a no-op
+  // once a row has a goal_id) and a no-op on a fresh database.
+  `UPDATE tasks SET goal_id = (
+     SELECT g.id FROM goals g WHERE g.project_id = tasks.project_id AND g.business_id = tasks.business_id LIMIT 1
+   ) WHERE goal_id IS NULL AND project_id IS NOT NULL`,
+  `UPDATE signals SET goal_id = (
+     SELECT g.id FROM goals g WHERE g.project_id = signals.project_id AND g.business_id = signals.business_id LIMIT 1
+   ) WHERE goal_id IS NULL AND project_id IS NOT NULL`,
+
+  // Goal model additions the spec calls for that had no column at all.
+  // milestones/dependencies get real relational tables below instead of
+  // joining the existing milestones/notes/tags JSON columns — those three
+  // stay JSON (small, free-form, non-relational lists); milestones and
+  // dependencies are the two that are genuinely relational (a growing,
+  // independently-queried collection, and a goal-to-goal edge).
+  `ALTER TABLE goals ADD COLUMN owner TEXT`,
+  `ALTER TABLE goals ADD COLUMN confidence REAL`,
+  `ALTER TABLE goals ADD COLUMN priority TEXT DEFAULT 'p2'`,
+
+  `CREATE TABLE IF NOT EXISTS goal_milestones (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id),
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    title TEXT NOT NULL,
+    target_pct REAL,
+    notes TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    achieved_at DATETIME,
+    source TEXT DEFAULT 'human',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_goal_milestones_goal ON goal_milestones(goal_id)`,
+
+  // goal_dependencies is deliberately goal-to-goal only (the spec's
+  // "dependencies" field, e.g. "Goal B can't start until Goal A hits 50%").
+  // Cross-entity dependency conflicts (a *task* depending on something)
+  // are handled by the conflict engine, not this table.
+  `CREATE TABLE IF NOT EXISTS goal_dependencies (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id),
+    depends_on_goal_id TEXT NOT NULL REFERENCES goals(id),
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    note TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_dependencies_unique ON goal_dependencies(goal_id, depends_on_goal_id)`,
+
+  // ─── 3.2 Strategic Planning Engine — durable, versioned assessments ───────
+  // One row per reasoning pass (goal-reasoner.ts), so "update it over time"
+  // (the spec's words) means append, not overwrite — the goal's assessment
+  // history is itself part of its timeline.
+  `CREATE TABLE IF NOT EXISTS goal_assessments (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id),
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    feasibility_verdict TEXT,
+    feasibility_confidence REAL,
+    feasibility_reasoning TEXT,
+    key_constraint TEXT,
+    expected_impact TEXT,
+    gap_analysis JSON,
+    assumptions JSON DEFAULT '[]',
+    risks JSON DEFAULT '[]',
+    dependencies JSON DEFAULT '[]',
+    measurement_plan JSON,
+    success_criteria JSON DEFAULT '[]',
+    recommended_strategy_id TEXT,
+    created_by TEXT DEFAULT 'goal-reasoner',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_goal_assessments_goal ON goal_assessments(goal_id, created_at)`,
+
+  // ─── 3.3 Multi-Strategy Planning — comparable candidate strategies ────────
+  // goal-reasoner.ts already asks the LLM for multiple "paths"; this table
+  // is where each path becomes a durable, individually comparable object
+  // (previously they only existed inside a JSON blob in the reasoning
+  // response and a rendered KB markdown page — never queryable by BAP).
+  `CREATE TABLE IF NOT EXISTS goal_strategies (
+    id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL REFERENCES goals(id),
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    assessment_id TEXT REFERENCES goal_assessments(id),
+    name TEXT NOT NULL,
+    summary TEXT,
+    expected_impact_summary TEXT,
+    confidence REAL,
+    estimated_effort TEXT,
+    estimated_cost REAL,
+    estimated_cost_unit TEXT DEFAULT 'gbp',
+    time_to_impact_days INTEGER,
+    historical_success_rate REAL,
+    historical_sample_size INTEGER DEFAULT 0,
+    evidence JSON DEFAULT '[]',
+    depends_on JSON DEFAULT '[]',
+    is_recommended INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'candidate',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_goal_strategies_goal ON goal_strategies(goal_id, status)`,
+
+  // ─── 3.4 Conflict Engine — a category dimension orthogonal to conflict_type ─
+  // conflict_type already distinguishes *which entities* are in conflict
+  // (goal_vs_goal, task_vs_window, task_vs_goal, and the new types added in
+  // conflict-engine.ts this phase). category distinguishes *what kind* of
+  // conflict it is (direct/resource/timing/dependency), matching the
+  // spec's explicit taxonomy, independent of which entity types collided.
+  `ALTER TABLE conflicts ADD COLUMN category TEXT DEFAULT 'direct'`,
+  `UPDATE conflicts SET category = 'timing' WHERE conflict_type = 'task_vs_window' AND category = 'direct'`,
+
+  // ─── 3.5 Decision Memory ───────────────────────────────────────────────────
+  // Every "why did we decide X" question Hermes can ask should be
+  // answerable from this table alone — evidence and reasoning captured at
+  // decision time, not reconstructed later from scattered rows.
+  // related_*_id columns are deliberately plain TEXT — NOT foreign keys —
+  // same "soft reference" pattern as audit_log.entity_id. A decision is a
+  // durable historical record; it must remain readable (and its FK-owning
+  // row must remain deletable) even after the goal/task/signal/outcome/
+  // conflict it references is gone. A hard FK here would mean deleting a
+  // task could never fail loudly (good) but would then make deleting a
+  // long-completed task impossible for as long as any decision ever
+  // mentioned it (bad) — audit-log-style logs accept dangling references
+  // for exactly this reason.
+  `CREATE TABLE IF NOT EXISTS decisions (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    decision_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    reasoning TEXT,
+    evidence JSON DEFAULT '[]',
+    confidence REAL,
+    alternatives_rejected JSON DEFAULT '[]',
+    author TEXT NOT NULL,
+    related_goal_id TEXT,
+    related_task_id TEXT,
+    related_signal_id TEXT,
+    related_outcome_id TEXT,
+    related_conflict_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_business_created ON decisions(business_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_goal ON decisions(related_goal_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_decisions_task ON decisions(related_task_id)`,
+
+  // ─── 3.6 Agent Calibration — proper calibration, not a single average ─────
+  // Additive columns; existing rows default calibration_method to
+  // 'simple_average' so old and new rows are honestly distinguishable in
+  // the same table rather than silently reinterpreted.
+  `ALTER TABLE agent_calibration ADD COLUMN false_positives INTEGER DEFAULT 0`,
+  `ALTER TABLE agent_calibration ADD COLUMN false_negatives INTEGER DEFAULT 0`,
+  `ALTER TABLE agent_calibration ADD COLUMN recommendations_accepted INTEGER DEFAULT 0`,
+  `ALTER TABLE agent_calibration ADD COLUMN recommendations_rejected INTEGER DEFAULT 0`,
+  `ALTER TABLE agent_calibration ADD COLUMN execution_success_rate REAL`,
+  `ALTER TABLE agent_calibration ADD COLUMN long_term_success_rate REAL`,
+  `ALTER TABLE agent_calibration ADD COLUMN calibration_method TEXT DEFAULT 'simple_average'`,
+  `ALTER TABLE agent_calibration ADD COLUMN conservatism_factor REAL DEFAULT 1.0`,
+  `ALTER TABLE agent_calibration ADD COLUMN bins JSON`,
+
+  // ─── 3.9 Knowledge Graph ───────────────────────────────────────────────────
+  // business_id is nullable to allow shared/abstract nodes (e.g. a
+  // cross-business "tactic" entity) that don't belong to one tenant —
+  // everything tenant-scoped sets it. ref_table/ref_id link back to the
+  // row this node represents (a task, goal, signal, decision, ...) so the
+  // graph never duplicates data, only relationships.
+  `CREATE TABLE IF NOT EXISTS kg_entities (
+    id TEXT PRIMARY KEY,
+    business_id TEXT REFERENCES businesses(id),
+    entity_type TEXT NOT NULL,
+    ref_table TEXT,
+    ref_id TEXT,
+    label TEXT NOT NULL,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_entities_business_type ON kg_entities(business_id, entity_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_entities_ref ON kg_entities(ref_table, ref_id)`,
+
+  `CREATE TABLE IF NOT EXISTS kg_edges (
+    id TEXT PRIMARY KEY,
+    business_id TEXT REFERENCES businesses(id),
+    from_entity_id TEXT NOT NULL REFERENCES kg_entities(id),
+    to_entity_id TEXT NOT NULL REFERENCES kg_entities(id),
+    edge_type TEXT NOT NULL,
+    weight REAL DEFAULT 1.0,
+    evidence TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_edges_from ON kg_edges(from_entity_id, edge_type)`,
+  `CREATE INDEX IF NOT EXISTS idx_kg_edges_to ON kg_edges(to_entity_id, edge_type)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_edges_unique ON kg_edges(from_entity_id, to_entity_id, edge_type)`,
+
+  // ─── 3.10 Opportunity Engine — extend goal_suggestions, don't fork it ────
+  // goal_suggestions (Brain feature 6, server/brain/goal-suggester.ts) is
+  // already exactly this: a quantified-opportunity scanner over connector
+  // data. These columns add the remaining fields the spec asks an
+  // "opportunity" to carry that goal_suggestions didn't yet have.
+  `ALTER TABLE goal_suggestions ADD COLUMN required_effort TEXT`,
+  `ALTER TABLE goal_suggestions ADD COLUMN related_goal_ids JSON DEFAULT '[]'`,
+  `ALTER TABLE goal_suggestions ADD COLUMN related_risks JSON DEFAULT '[]'`,
+  `ALTER TABLE goal_suggestions ADD COLUMN why_it_matters TEXT`,
+
+  // ─── 3.12 Cross-Business Learning — abstracted patterns, no business_id ──
+  // Deliberately has no business_id, business name, URL, or any other
+  // tenant-identifying column — enforced by omission, not by a redaction
+  // pass. pattern_key is a stable abstract key (e.g.
+  // "seo.meta_rewrite.low_ctr_high_impressions"), not a business-specific
+  // string.
+  `CREATE TABLE IF NOT EXISTS cross_business_patterns (
+    id TEXT PRIMARY KEY,
+    pattern_key TEXT NOT NULL,
+    action_type TEXT,
+    category TEXT,
+    description TEXT NOT NULL,
+    sample_size INTEGER DEFAULT 0,
+    success_count INTEGER DEFAULT 0,
+    success_rate REAL,
+    applicable_business_types JSON DEFAULT '[]',
+    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_cross_business_patterns_key ON cross_business_patterns(pattern_key)`,
+
+  // ─── 3.14 Constraint Engine ────────────────────────────────────────────────
+  // restraint.ts already enforces one constraint type (measurement
+  // windows) implicitly via action_memory. This table generalizes to the
+  // other types the spec lists (budgets, hours, resource limits, campaign
+  // freezes, seasonality, manual constraints) as explicit, queryable,
+  // operator-authored rows rather than inferred state.
+  `CREATE TABLE IF NOT EXISTS constraints (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    constraint_type TEXT NOT NULL,
+    scope JSON DEFAULT '{}',
+    limit_value REAL,
+    limit_unit TEXT,
+    period TEXT,
+    starts_at DATETIME,
+    ends_at DATETIME,
+    active INTEGER NOT NULL DEFAULT 1,
+    note TEXT,
+    created_by TEXT DEFAULT 'human',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_constraints_business_active ON constraints(business_id, active)`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

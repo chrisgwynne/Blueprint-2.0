@@ -281,41 +281,52 @@ export async function runRetrospective(
   }
   await fileTransferableToShared(businessId, parsed).catch(() => {});
 
+  // Phase 3 — cross-business learning: recompute the abstract,
+  // non-identifying outcome patterns every business's opportunity engine
+  // and historical-learning queries can consult. Global (not scoped to
+  // this business), so a retrospective anywhere on the instance keeps it
+  // fresh for everyone.
+  try {
+    const { updateCrossBusinessPatterns } = await import('./cross-business-patterns.js') as unknown as { updateCrossBusinessPatterns: () => unknown };
+    updateCrossBusinessPatterns();
+  } catch (err) {
+    console.warn('[retrospective] cross-business pattern update failed:', (err as Error).message);
+  }
+
   return { id, ...parsed, kb_path: kbPath };
 }
 
+/**
+ * Phase 3: the numeric calibration fields (error/score/offset/bins/etc)
+ * are now always computed deterministically by
+ * server/brain/calibration.ts's recalculateCalibrationForBusiness() — this
+ * function used to insert its OWN agent_calibration row per agent using
+ * the LLM's self-reported calibration_error, a second, less reliable
+ * source of truth for the exact same numbers the deterministic engine
+ * already computes from task_outcomes directly. It now only attaches the
+ * LLM's qualitative note/grade onto the row the deterministic engine just
+ * wrote, rather than inserting a competing row.
+ */
 async function applyCalibration(
   businessId: string,
   parsed: Record<string, unknown>,
-  periodStart: Date,
-  periodEnd: Date
+  _periodStart: Date,
+  _periodEnd: Date
 ): Promise<void> {
-  const assessments = Array.isArray(parsed.agent_assessments) ? parsed.agent_assessments as Record<string, unknown>[] : [];
-  const notes = Array.isArray(parsed.calibration_notes) ? parsed.calibration_notes as Record<string, unknown>[] : [];
-  const noteByAgent = Object.fromEntries(notes.map((n) => [n.agent_id, n]));
+  const { recalculateCalibrationForBusiness } = await import('./calibration.js') as unknown as {
+    recalculateCalibrationForBusiness: (businessId: string) => unknown;
+  };
+  recalculateCalibrationForBusiness(businessId);
 
+  const assessments = Array.isArray(parsed.agent_assessments) ? parsed.agent_assessments as Record<string, unknown>[] : [];
   for (const a of assessments) {
-    if (!a.agent_id) continue;
-    const calNote = noteByAgent[a.agent_id as string];
-    const calParams: any[] = [
-      crypto.randomUUID(), a.agent_id as string, businessId,
-      periodStart.toISOString(), periodEnd.toISOString(),
-      (a.tasks_proposed as number | null) ?? 0,
-      (a.avg_stated_confidence as number | null) ?? null,
-      (a.avg_actual_outcome_rate as number | null) ?? null,
-      (a.calibration_error as number | null) ?? null,
-      a.calibration_error != null ? Math.max(0, 1 - Math.abs(a.calibration_error as number)) : null,
-      (calNote?.calibration_offset as number | null) ?? 0,
-      null, // trend is calculated over multiple periods elsewhere
-      (a.note as string | null) ?? (calNote?.note as string | null) ?? null,
-    ];
-    db.prepare(`
-      INSERT INTO agent_calibration
-      (id, agent_id, business_id, period_start, period_end,
-       tasks_with_outcomes, avg_stated_confidence, avg_actual_outcome_rate,
-       calibration_error, calibration_score, calibration_offset, trend, notes)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(...calParams);
+    if (!a.agent_id || !a.note) continue;
+    const latest = db.prepare(
+      'SELECT id FROM agent_calibration WHERE agent_id = ? AND business_id = ? ORDER BY calculated_at DESC LIMIT 1'
+    ).get(a.agent_id as string, businessId) as { id: string } | undefined;
+    if (latest) {
+      db.prepare('UPDATE agent_calibration SET notes = ? WHERE id = ?').run(a.note as string, latest.id);
+    }
   }
 }
 

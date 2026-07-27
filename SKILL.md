@@ -53,6 +53,13 @@ curl -X POST $BLUEPRINT_URL/api/bap/v1/register \
       "goals:read", "goals:propose", "goals:update",
       "connectors:read", "connectors:sync",
       "outcomes:read", "audit:read",
+      "opportunities:read", "opportunities:trigger",
+      "conflicts:read",
+      "decisions:read",
+      "graph:read", "graph:trigger",
+      "recommendations:read",
+      "retrospectives:read", "retrospectives:trigger",
+      "calibration:read",
       "kb:read", "kb:write",
       "metrics:read", "agents:read", "agents:trigger"
     ],
@@ -63,12 +70,16 @@ curl -X POST $BLUEPRINT_URL/api/bap/v1/register \
 The full grantable permission list is exactly: `signals:read`,
 `signals:create`, `tasks:read`, `tasks:propose`, `tasks:approve`,
 `goals:read`, `goals:propose`, `goals:update`, `connectors:read`,
-`connectors:sync`, `outcomes:read`, `audit:read`, `kb:read`, `kb:write`,
+`connectors:sync`, `outcomes:read`, `audit:read`, `opportunities:read`,
+`opportunities:trigger`, `conflicts:read`, `decisions:read`, `graph:read`,
+`graph:trigger`, `recommendations:read`, `retrospectives:read`,
+`retrospectives:trigger`, `calibration:read`, `kb:read`, `kb:write`,
 `metrics:read`, `agents:read`, `agents:trigger`. Requesting anything else is
 silently dropped, not an error. There is no `signals:update` or
 `tasks:update` permission — updating a signal's status or approving a task
 is gated by `signals:read` / `tasks:approve` respectively (see the
-Signals/Tasks sections below).
+Signals/Tasks sections below). `recommendations:read` also gates
+`BLUEPRINT_PATTERNS` below — there is no separate `patterns:read`.
 
 Store the returned `api_key`. Shown once only — if you lose it, register a
 new agent rather than trying to recover it.
@@ -521,17 +532,100 @@ goal includes `metric_name`/`metric_baseline`/`metric_target`/
 
 ### BLUEPRINT_GOAL_DETAIL
 
-Full detail: progress history (`goal_checks`), best-effort linked
-tasks/signals (via shared `project_id` — same caveat as the task list's
-`goal_id` filter), blockers (open conflicts + a `deadline_at_risk` flag),
-and conflicts.
+Full detail: progress history (`goal_checks`), linked tasks/signals/outcomes
+(via the real `tasks.goal_id`/`signals.goal_id`/`task_outcomes.goal_id`
+foreign keys added in Phase 3, unioned with the legacy `project_id` proxy so
+nothing created before the FK existed loses its linkage), blockers (open
+conflicts + a `deadline_at_risk` flag), conflicts, and a `strategic_planning`
+summary.
 
 ```bash
 curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID" \
   -H "BAP-Key: $BLUEPRINT_API_KEY"
 ```
 
-**Response:** `{ goal, linked_metrics, linked_tasks, linked_signals, progress: { progress_pct, last_checked, checks }, blockers: { open_conflicts, deadline_at_risk }, conflicts }`.
+**Response:** `{ goal, linked_metrics, linked_tasks, linked_signals, linked_outcomes, progress: { progress_pct, last_checked, checks }, blockers: { open_conflicts, deadline_at_risk }, conflicts, strategic_planning }`.
+
+`goal.dependencies` (inside the `goal` object itself) is now a real list —
+`[{ goal_id, title, status, progress_pct, note }]` — populated from
+`goal_dependencies`, one row per goal this goal depends on. `goal.milestones`
+merges the real `goal_milestones` table with any legacy free-form JSON
+milestones a goal created before Phase 3 still carries.
+
+`strategic_planning` is `{ latest_assessment, strategy_count }` —
+`latest_assessment` is `null` until `BLUEPRINT_GOAL_PLAN` has run at least
+once for this goal (either automatically on goal creation, or triggered
+manually). See `BLUEPRINT_GOAL_STRATEGIC_PLANNING` below for the full
+assessment/strategy detail this summarizes.
+
+---
+
+### BLUEPRINT_GOAL_TIMELINE
+
+The merged, chronological history of everything that has happened to a
+goal — created, progress checks, strategic assessments, strategies
+proposed, conflicts detected, and decisions recorded against it — as one
+feed instead of five separate calls.
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/timeline" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Response:** `{ "goal_id": "goal_xxx", "events": [{ "at": "...", "type": "goal_created", "summary": "...", "data": {...} }, ...] }`,
+sorted oldest first. `type` is one of `goal_created`, `progress_check`,
+`strategic_assessment`, `strategy_proposed`, `conflict_detected`,
+`decision`, `goal_achieved`.
+
+---
+
+### BLUEPRINT_GOAL_STRATEGIC_PLANNING
+
+The Phase 3 Strategic Planning Engine: is this goal actually achievable,
+what are the risks/assumptions/dependencies, and which of several candidate
+strategies should it pursue. Backed by `server/brain/goal-reasoner.ts`.
+
+**Latest assessment** (feasibility verdict/confidence/reasoning, key
+constraint, gap analysis, assumptions, risks, dependencies, measurement
+plan, success criteria):
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/assessment" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+404 if planning has never run for this goal — trigger it first (below).
+
+**Full assessment history** (every reasoning pass, newest first, paginated):
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/assessments?page=1&limit=20" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Candidate strategies for this goal** (comparable side-by-side: confidence,
+estimated effort/cost, time to impact, historical success rate for similar
+strategies, evidence, `is_recommended`):
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/strategies" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Only candidates still open (vs. already selected/rejected)
+curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/strategies?status=candidate" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+**Response:** `{ strategies: [...], total: N }` — sorted recommended-first,
+then by confidence.
+
+**(Re-)run strategic planning now** — fire-and-forget, same shape as
+`BLUEPRINT_CHECK_GOAL`. Use when the goal's situation has materially
+changed (new metric data, a new constraint, a resolved blocker) and you
+don't want to wait for it to happen automatically:
+```bash
+curl -X POST "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/plan" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY" -H "Idempotency-Key: $(uuidgen)"
+```
+**Response:** `{ "goal_id": "goal_xxx", "status": "planning", "message": "..." }` (202) —
+poll `BLUEPRINT_GOAL_STRATEGIC_PLANNING`'s assessment/strategies endpoints
+for the result; a fresh assessment also runs automatically whenever a goal
+is created.
 
 ---
 
@@ -551,15 +645,26 @@ curl -X POST "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/goals"
     "metric_name": "gsc.total_clicks",
     "metric_target": 1450,
     "strategy": "Prioritise meta rewrites on top-traffic pages first.",
-    "tags": ["seo", "q2-2026"]
+    "tags": ["seo", "q2-2026"],
+    "owner": "you",
+    "confidence": 0.8,
+    "priority": "p1",
+    "depends_on": ["goal_xxx"]
   }'
 ```
 
 `title` is required. If `metric_baseline` is omitted but `metric_name` is
 given, Blueprint auto-fills the baseline from the latest matching metric.
-Creating a goal fires background goal-reasoning and conflict-detection —
-don't expect `linked_metrics`/`conflicts` to be populated instantly; poll
-`BLUEPRINT_GOAL_DETAIL` after a few seconds if you need them.
+`priority` must be `p1`, `p2`, or `p3` (defaults to `p2`) — it feeds
+`BLUEPRINT_RECOMMENDATIONS`' ranking. `depends_on` is an array of other goal
+IDs this goal can't meaningfully proceed without (unknown or invalid IDs are
+silently dropped, not an error — same "best effort, not fatal" philosophy
+as the rest of this file). Creating a goal fires background goal-reasoning
+(Phase 3: this now also produces a `goal_assessments` row and one
+`goal_strategies` row per candidate approach — see
+`BLUEPRINT_GOAL_STRATEGIC_PLANNING`) and conflict-detection — don't expect
+`linked_metrics`/`conflicts`/`strategic_planning` to be populated instantly;
+poll `BLUEPRINT_GOAL_DETAIL` after a few seconds if you need them.
 
 **Response:** `{ "goal": {...} }` (201).
 
@@ -580,11 +685,14 @@ curl -X PATCH "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID" \
 
 Updatable scalar fields: `title`, `description`, `status`, `deadline`,
 `metric_name`, `metric_baseline`, `metric_target`, `metric_unit`,
-`strategy`, `project_id`. Updatable array fields (replace-whole-array, not
-merge): `assigned_agents`, `milestones`, `notes`, `tags`. `status` must be
-one of `active | paused | achieved | missed | cancelled`. To archive a goal
-specifically, prefer `BLUEPRINT_ARCHIVE_GOAL` below (same effect, clearer
-intent).
+`strategy`, `project_id`, `owner`, `confidence`, `priority`. Updatable array
+fields (replace-whole-array, not merge): `assigned_agents`, `milestones`,
+`notes`, `tags`. `depends_on` (array of goal IDs) is accepted too but is
+handled separately from the other fields — it replaces the goal's full
+dependency set in `goal_dependencies` rather than a plain column update.
+`status` must be one of `active | paused | achieved | missed | cancelled`.
+`priority` must be one of `p1 | p2 | p3`. To archive a goal specifically,
+prefer `BLUEPRINT_ARCHIVE_GOAL` below (same effect, clearer intent).
 
 **Response:** `{ "goal": {...} }`.
 
@@ -613,6 +721,39 @@ that works against it, or two goals pulling in different directions.
 curl "$BLUEPRINT_URL/api/bap/v1/goals/$GOAL_ID/conflicts" \
   -H "BAP-Key: $BLUEPRINT_API_KEY"
 ```
+
+---
+
+### BLUEPRINT_CONFLICTS
+
+The general, business-wide conflict list — every `conflict_type`
+(`goal_vs_goal`, `task_vs_window`, `task_vs_goal`, `task_vs_task`,
+`signal_vs_goal`, `goal_dependency`), not just ones referencing one specific
+goal (`BLUEPRINT_GOAL_CONFLICTS` above is the goal-scoped version of this).
+Read-only — resolving or dismissing a conflict is a dashboard-only action;
+use this to see conflicts and factor them into what you recommend or
+propose, not to adjudicate them.
+
+```bash
+# Open conflicts (the default)
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/conflicts" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Filter by type/category, or a specific entity, across all statuses
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/conflicts?status=all&conflict_type=task_vs_goal&category=resource&entity_id=tsk_xxx" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Detail
+curl "$BLUEPRINT_URL/api/bap/v1/conflicts/$CONFLICT_ID" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Filter params:** `status` (defaults to `open`; pass `status=all` for
+resolved too), `conflict_type` (CSV), `category` (CSV — `direct`,
+`resource`, `timing`, `dependency`; Phase 3 addition, orthogonal to
+`conflict_type` — it distinguishes *what kind* of conflict independent of
+*which entities* collided), `entity_id` (matches either side of the
+conflict). **Response:** `{ "conflicts": [...], "total": N, "pagination": {...} }`.
 
 ---
 
@@ -702,6 +843,241 @@ sample_size, success_rate }` — the historical hit-rate for this
 `action_type` in this business, from other final outcomes. `sample_size:
 0` (and `success_rate: null`) means no prior data — treat your own
 confidence as unadjusted in that case.
+
+---
+
+### BLUEPRINT_OPPORTUNITIES
+
+Quantified opportunities Blueprint's connector-data scanner has already
+found — "this is worth roughly £X/month if you do Y" — before you go
+looking for one yourself. Backed by the same engine that feeds
+`BLUEPRINT_RECOMMENDATIONS` (`server/brain/goal-suggester.ts`).
+
+```bash
+# Pending opportunities (the default)
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/opportunities" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# All statuses, from one connector
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/opportunities?status=all&connector_source=gsc" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Detail
+curl "$BLUEPRINT_URL/api/bap/v1/opportunities/$OPPORTUNITY_ID" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Filter params:** `status` (defaults to `pending`; pass `status=all` for
+accepted/dismissed/snoozed too — comma-separated for multiple), `connector_source`.
+Sorted by `opportunity_value` descending, then newest first. **Response:**
+`{ "opportunities": [...], "total": N, "pagination": {...} }`. Each
+opportunity carries `opportunity_value`/`opportunity_unit`, `barrier`,
+`required_effort`, `related_goal_ids`, `related_risks`, `why_it_matters`,
+and `evidence` (parsed object).
+
+**Trigger a fresh scan now** (requires `opportunities:trigger`, a stronger
+grant than `opportunities:read` — most external agents only need to read):
+```bash
+curl -X POST "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/opportunities/scan" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY" -H "Idempotency-Key: $(uuidgen)"
+```
+**Response:** `{ "business_id": "biz_xxx", "status": "scanning", "message": "..." }`
+(202) — fire-and-forget, an LLM-backed pattern scan over connector data.
+Poll `GET .../opportunities` for results; don't expect them immediately.
+
+---
+
+### BLUEPRINT_DECISIONS
+
+"Why did we decide this six months ago?" — a durable, evidence-carrying
+record of every consequential decision Blueprint (or a human, or you) has
+made, answerable without reconstructing it from scattered task/goal/audit
+state. **Read-only from BAP: decisions are written by the engines that make
+them (task approval/rejection, strategy selection, conflict resolution,
+opportunity accept/dismiss) — you can never create or edit one directly.**
+
+```bash
+# Recall — search + filter + paginate
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/decisions?q=seo&decision_type=strategy_selection" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Detail
+curl "$BLUEPRINT_URL/api/bap/v1/decisions/$DECISION_ID" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Filter params:** `q` (searches title/decision/reasoning text),
+`decision_type` (one of `task_approval`, `task_rejection`,
+`task_cancellation`, `strategy_selection`, `goal_creation`,
+`goal_status_change`, `conflict_resolution`, `conflict_dismissal`,
+`opportunity_accepted`, `opportunity_dismissed`, `manual`),
+`related_goal_id`, `related_task_id`, `date_from`/`date_to`. **Response:**
+`{ "decisions": [...], "total": N, "pagination": {...} }`. Each decision
+carries `title`, `decision`, `reasoning`, `evidence` (array),
+`alternatives_rejected` (array), `confidence`, `author`, and whichever
+`related_goal_id`/`related_task_id`/`related_signal_id`/`related_outcome_id`/
+`related_conflict_id` apply — these are soft references (not foreign keys),
+so a decision remains readable even after the thing it references is
+deleted. **Always check this before recommending something that sounds
+familiar** — see the "Strategic planning" pattern below.
+
+---
+
+### BLUEPRINT_GRAPH
+
+Relationship traversal, not keyword search: starting from one entity (a
+goal, task, signal, decision, or registered knowledge-graph entity), walk
+the typed edges outward to a bounded depth. Backed by
+`server/brain/knowledge-graph.ts`. Edge types: `caused`, `supports`,
+`blocks`, `depends_on`, `relates_to`, `mentions`, `supersedes`,
+`contradicts`, `improves`, `regresses`.
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/graph?ref_table=goals&ref_id=$GOAL_ID&depth=2" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Only follow specific edge types
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/graph?ref_table=tasks&ref_id=$TASK_ID&edge_types=caused,improves,regresses" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Required params:** `ref_table` (one of `goals`, `tasks`, `signals`,
+`decisions`, `kg_entities`) and `ref_id` — together identify the starting
+node. **Optional:** `depth` (`1`–`5`, default `2`), `edge_types` (CSV).
+**Response:** `{ nodes: [...], edges: [...], total_nodes: N, total_edges: N }`.
+Traversal follows edges in both directions and is capped at 200 nodes.
+Returns `{ nodes: [], edges: [] }` (not a 404) if the starting entity has no
+graph node yet — try `BLUEPRINT_GRAPH_REBUILD` below, or the entity may
+genuinely have no derivable relationships yet. Entity types with no backing
+table (competitor, product, customer, campaign, person) never appear here
+automatically — there is no automatic extraction pipeline for them yet.
+
+**Rebuild derived edges now** (requires `graph:trigger`) — synchronous, not
+fire-and-forget (a full rebuild over existing rows is comparatively cheap;
+unlike the other Phase 3 triggers, this returns its result directly, not a
+202):
+```bash
+curl -X POST "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/graph/rebuild" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY" -H "Idempotency-Key: $(uuidgen)"
+```
+**Response:** `{ "business_id": "biz_xxx", "entities": N, "edges": N }` (200) —
+total counts after the rebuild, not how many changed. Idempotent (upserts),
+safe to call repeatedly.
+
+---
+
+### BLUEPRINT_RECOMMENDATIONS
+
+"What should we do next?" — every currently-actionable candidate (proposed
+tasks, pending opportunities, candidate goal strategies) merged into one
+ranked, explainable list. Scored on confidence, goal priority, urgency,
+historical success rate, effort, and open-conflict risk — check this
+**before** proposing something new, in case it's already been surfaced and
+ranked.
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/recommendations?limit=10" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Response:** `{ recommendations: [...], excluded: [...], explanation_depth, total }`.
+Each recommendation carries `source_type` (`task`/`opportunity`/`strategy`),
+`score`, `rationale` (human-readable strings, never an opaque number
+alone), and an `explanation` object: `evidence`, `reasoning`,
+`alternatives_considered`, `risk`, `expected_impact`, `historical_evidence`,
+`linked_kb`, `linked_signals`, `linked_metrics`. Full KB-backed explanation
+is only computed for the top 5 (expensive per-item search) — the rest still
+get every other explanation field, just without `linked_kb` populated;
+`explanation_depth` tells you which is which, so this is documented, not
+silently inconsistent. `excluded` lists candidates a blocking constraint
+ruled out, with the reason — so nothing vanishes silently.
+
+---
+
+### BLUEPRINT_RETROSPECTIVES
+
+Periodic, structured look-backs — what worked, what didn't, learnings,
+per-agent assessments, still-open windows of opportunity, recommendations,
+and any operating changes to make. Backed by
+`server/brain/retrospective-engine.ts`.
+
+```bash
+# List, newest first, paginated
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/retrospectives" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# Detail
+curl "$BLUEPRINT_URL/api/bap/v1/retrospectives/$RETROSPECTIVE_ID" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Response (list):** `{ "retrospectives": [...], "total": N, "pagination": {...} }` —
+each row is a summary (`period_start`, `period_end`, `executive_summary`,
+`kb_path`, `triggered_by`, `created_at`); fetch the detail for the full
+report. **Response (detail):** the summary fields plus
+`what_worked`/`what_didnt`/`learnings`/`agent_assessments`/`open_windows`/
+`recommendations`/`operating_changes`/`calibration_notes` (all parsed
+arrays).
+
+**Trigger one now** (requires `retrospectives:trigger`, distinct from the
+`retrospectives:read` needed to list/read them):
+```bash
+curl -X POST "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/retrospectives/run" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY" -H "Idempotency-Key: $(uuidgen)"
+```
+**Response:** `{ "business_id": "biz_xxx", "status": "running", "message": "..." }`
+(202) — fire-and-forget, an LLM call over a month of data plus a KB write.
+Poll `GET .../retrospectives` for the result.
+
+---
+
+### BLUEPRINT_CALIBRATION
+
+How well-calibrated is a given agent's stated confidence against what
+actually happened — per-agent, so you can tell whether to trust your own
+(or another agent's) confidence numbers at face value or discount them.
+
+```bash
+# Latest calibration per agent for this business
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/calibration" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+
+# One agent's full history instead of just its latest row
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/calibration?agent_id=seo-sentinel&history=1" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Response (default, latest-per-agent):** `{ "calibration": [...], "total": N }`.
+**Response (`history=1`):** `{ "calibration_history": [...] }` (up to 50 rows,
+newest first, one row per calculation pass). Each row carries
+`tasks_with_outcomes`, `avg_stated_confidence`, `avg_actual_outcome_rate`,
+`calibration_error`, `calibration_score`, `calibration_offset`, `trend`,
+`false_positives`/`false_negatives`, `recommendations_accepted`/`_rejected`,
+`execution_success_rate`, `long_term_success_rate`, `calibration_method`,
+`conservatism_factor`, and `bins` (parsed array). `calibration_method` is
+`simple_average` for rows computed before Phase 3's richer calibration
+existed — an honest marker, not a silent reinterpretation of old data.
+
+---
+
+### BLUEPRINT_PATTERNS
+
+Cross-business learning, fully abstracted: "across every business on this
+Blueprint instance, action X succeeded Y% of the time" — no business name,
+URL, task title, or other tenant-identifying value is ever included, only
+an `action_type`, an aggregate success rate/sample size, and the set of
+business *types* (e.g. `ecommerce`, `saas` — never names) that contributed.
+Requires `recommendations:read` (no separate `patterns:read` permission).
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/patterns" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+**Response:** `{ "patterns": [...], "total": N }`, filtered to patterns
+applicable to your business's type (or with no type restriction). Each
+pattern: `{ pattern_key, action_type, description, sample_size,
+success_count, success_rate, applicable_business_types }`.
 
 ---
 
@@ -1032,6 +1408,42 @@ When you've approved (or are watching) a task that executes asynchronously:
 
 ---
 
+### Strategic planning / historical learning
+
+Before recommending or proposing anything non-trivial — a new push, a
+strategy change, a re-run of something that sounds familiar — check what's
+already known and already ranked, in this order:
+
+```
+1. BLUEPRINT_DECISIONS (q=<keywords>)              → have we already decided
+                                                       something about this?
+2. BLUEPRINT_RECOMMENDATIONS                        → is it already ranked?
+                                                       Check score/rationale
+                                                       before duplicating the
+                                                       analysis yourself.
+3. BLUEPRINT_GOAL_STRATEGIC_PLANNING (strategies)   → if this serves a goal,
+                                                       compare against its
+                                                       existing candidate
+                                                       strategies rather than
+                                                       proposing a new one
+                                                       that duplicates one.
+4. BLUEPRINT_PATTERNS                               → has this action_type
+                                                       worked elsewhere, in
+                                                       the abstract?
+5. BLUEPRINT_GRAPH (ref_table=goals&ref_id=...)     → what else is connected
+                                                       to this goal/task that
+                                                       might be affected?
+6. Only then: BLUEPRINT_PROPOSE_TASK / BLUEPRINT_UPDATE_GOAL / BLUEPRINT_GOAL_PLAN
+```
+
+Example: before recommending a new SEO push — `GET decisions?q=seo` (have we
+tried this before, and what did we decide?) → `GET
+businesses/:id/recommendations` (is an SEO task or strategy already
+ranked?) → `GET goals/:id/strategies` (compare against existing candidate
+strategies for the relevant goal) → only then `POST tasks`.
+
+---
+
 ## Rules
 
 **Read before you write.**
@@ -1060,6 +1472,25 @@ across all sessions and all agents.
 If a metric or connector's data is missing from a response, check
 `BLUEPRINT_CONNECTORS` before assuming "no activity" — it may mean the
 connector is stale or erroring, not that the number is genuinely zero.
+
+**Decisions are read-only — never write directly.**
+`BLUEPRINT_DECISIONS` is a recall surface only. There is no "create a
+decision" endpoint and there never will be one via BAP — decisions are
+recorded automatically, at the moment they're made, by the engine that made
+them (task approval/rejection, strategy selection, conflict resolution,
+opportunity accept/dismiss). If you want a record of your own reasoning
+kept, use `BLUEPRINT_KB_WRITE` (`decisions/`) instead.
+
+**Conflicts are read-only from BAP.**
+`BLUEPRINT_CONFLICTS` / `BLUEPRINT_GOAL_CONFLICTS` let you see and factor in
+open conflicts; resolving or dismissing one is a dashboard-only action, same
+boundary as the audit trail.
+
+**Check before you plan, not just before you propose.**
+`BLUEPRINT_RECOMMENDATIONS` and `BLUEPRINT_GOAL_STRATEGIC_PLANNING`'s
+strategies exist specifically so you don't re-derive an analysis Blueprint
+has already ranked or already generated candidates for — see "Strategic
+planning / historical learning" above.
 
 **Blueprint unavailable.**
 If API calls fail, continue without Blueprint. Note what to do when it
@@ -1097,14 +1528,24 @@ BLUEPRINT_PROPOSE_TASK         → suggest an action for human approval
 BLUEPRINT_APPROVE_TASK         → approve/reject/cancel a task
 BLUEPRINT_EXECUTION_JOBS       → operational visibility into async execution
 BLUEPRINT_GOALS                → search business goals
-BLUEPRINT_GOAL_DETAIL          → progress, links, blockers, conflicts
+BLUEPRINT_GOAL_DETAIL          → progress, links, blockers, conflicts, strategic_planning
+BLUEPRINT_GOAL_TIMELINE        → merged chronological history of a goal
+BLUEPRINT_GOAL_STRATEGIC_PLANNING → feasibility assessment + candidate strategies + (re)plan
 BLUEPRINT_PROPOSE_GOAL         → propose a new goal
 BLUEPRINT_UPDATE_GOAL          → update goal fields/status/progress
 BLUEPRINT_ARCHIVE_GOAL         → soft-cancel a goal
 BLUEPRINT_CHECK_GOAL           → force a progress recompute
 BLUEPRINT_GOAL_CONFLICTS       → conflicts referencing a goal
+BLUEPRINT_CONFLICTS            → business-wide conflict list/detail
 BLUEPRINT_CONNECTORS           → connector health, freshness, sync history
 BLUEPRINT_OUTCOMES             → did past actions actually work?
+BLUEPRINT_OPPORTUNITIES        → quantified opportunities found by the scanner
+BLUEPRINT_DECISIONS            → recall why something was decided (read-only)
+BLUEPRINT_GRAPH                → traverse typed relationships between entities
+BLUEPRINT_RECOMMENDATIONS      → ranked, explainable "what should we do next"
+BLUEPRINT_RETROSPECTIVES       → periodic structured look-backs
+BLUEPRINT_CALIBRATION          → how well-calibrated is an agent's confidence
+BLUEPRINT_PATTERNS             → cross-business learning, fully abstracted
 BLUEPRINT_TRIGGER_AGENT        → run an internal Blueprint agent now
 BLUEPRINT_RUNS                 → list/cancel/retry agent runs
 BLUEPRINT_KB_QUERY             → ask the knowledge base a question

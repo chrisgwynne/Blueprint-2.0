@@ -331,10 +331,24 @@ components:
         last_checked: { type: string, format: date-time, nullable: true }
         achieved_at: { type: string, format: date-time, nullable: true }
         strategy: { type: string, nullable: true }
-        milestones: { type: array, items: { type: object } }
+        milestones: { type: array, items: { type: object }, description: "Merges the real goal_milestones table (Phase 3) with any legacy free-form JSON milestones." }
+        dependencies:
+          type: array
+          description: "Phase 3 — real goal-to-goal dependencies from goal_dependencies, replacing the earlier project_id-only proxy."
+          items:
+            type: object
+            properties:
+              goal_id: { type: string, description: "The goal this goal depends on." }
+              title: { type: string }
+              status: { type: string }
+              progress_pct: { type: number, nullable: true }
+              note: { type: string, nullable: true }
         notes: { type: array, items: { type: object } }
         tags: { type: array, items: { type: string } }
         project_id: { type: string, nullable: true }
+        owner: { type: string, nullable: true, description: "Phase 3." }
+        confidence: { type: number, nullable: true, description: "Phase 3." }
+        priority: { type: string, enum: [p1, p2, p3], default: p2, description: "Phase 3." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -425,6 +439,247 @@ components:
         after_state: { type: object, nullable: true }
         metadata: { type: object, nullable: true }
         created_at: { type: string, format: date-time }
+
+    # ── Phase 3 ──────────────────────────────────────────────────────────
+    Opportunity:
+      type: object
+      description: "Backed by goal_suggestions (server/brain/goal-suggester.ts), extended in Phase 3."
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        opportunity_value: { type: number, nullable: true }
+        opportunity_unit: { type: string, default: gbp_per_month }
+        metric_name: { type: string, nullable: true }
+        current_value: { type: number, nullable: true }
+        target_value: { type: number, nullable: true }
+        barrier: { type: string, nullable: true }
+        suggested_deadline: { type: string, format: date-time, nullable: true }
+        suggested_agents: { type: array, items: { type: string } }
+        suggested_workflow_id: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        connector_source: { type: string, nullable: true }
+        evidence: { type: object }
+        status: { type: string, default: pending }
+        snoozed_until: { type: string, format: date-time, nullable: true }
+        dismissed_reason: { type: string, nullable: true }
+        accepted_goal_id: { type: string, nullable: true }
+        required_effort: { type: string, nullable: true, description: "Phase 3 addition." }
+        related_goal_ids: { type: array, items: { type: string }, description: "Phase 3 addition." }
+        related_risks: { type: array, items: { type: object }, description: "Phase 3 addition." }
+        why_it_matters: { type: string, nullable: true, description: "Phase 3 addition." }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Decision:
+      type: object
+      description: "Read-only from BAP — written by decision-memory.ts's recordDecision(), called by the engine that made the decision (task-queue.ts, goal-reasoner.ts, conflict-engine.ts, goal-suggester.ts)."
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        decision_type:
+          type: string
+          enum: [task_approval, task_rejection, task_cancellation, strategy_selection, goal_creation, goal_status_change, conflict_resolution, conflict_dismissal, opportunity_accepted, opportunity_dismissed, manual]
+        title: { type: string }
+        decision: { type: string }
+        reasoning: { type: string, nullable: true }
+        evidence: { type: array, items: { type: object } }
+        confidence: { type: number, nullable: true }
+        alternatives_rejected: { type: array, items: { type: object } }
+        author: { type: string }
+        related_goal_id: { type: string, nullable: true, description: "Soft reference — not a foreign key." }
+        related_task_id: { type: string, nullable: true }
+        related_signal_id: { type: string, nullable: true }
+        related_outcome_id: { type: string, nullable: true }
+        related_conflict_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    GraphNode:
+      type: object
+      properties:
+        id: { type: string, description: "kg_entities.id, an opaque graph node id — not the same as ref_id." }
+        entity_type: { type: string, description: "e.g. goal, task, signal, decision, or a standalone type (competitor, product, customer, campaign, person)." }
+        label: { type: string }
+        ref_table: { type: string, nullable: true, description: "The backing table (goals/tasks/signals/decisions/...), null for standalone entities." }
+        ref_id: { type: string, nullable: true }
+
+    GraphEdge:
+      type: object
+      properties:
+        id: { type: string }
+        from_entity_id: { type: string }
+        to_entity_id: { type: string }
+        edge_type:
+          type: string
+          enum: [caused, supports, blocks, depends_on, relates_to, mentions, supersedes, contradicts, improves, regresses]
+        weight: { type: number, default: 1.0 }
+        evidence: { type: string, nullable: true }
+
+    Recommendation:
+      type: object
+      description: "getRankedRecommendations() output, enriched with an explanation object per item (server/routes/bap-review.ts explainRecommendation())."
+      properties:
+        id: { type: string }
+        source_type: { type: string, enum: [task, opportunity, strategy] }
+        title: { type: string }
+        score: { type: number }
+        rationale: { type: array, items: { type: string } }
+        expected_impact: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        estimated_cost: { type: number, nullable: true }
+        estimated_effort: { type: string, nullable: true }
+        historical_success_rate: { type: number, nullable: true }
+        historical_sample_size: { type: integer }
+        goal_id: { type: string, nullable: true }
+        goal_title: { type: string, nullable: true }
+        has_open_conflict: { type: boolean }
+        explanation:
+          type: object
+          properties:
+            evidence: { type: array, items: { type: string } }
+            reasoning: { type: array, items: { type: string } }
+            alternatives_considered: { type: array, items: { type: object } }
+            confidence: { type: number, nullable: true }
+            risk: { type: string }
+            expected_impact: { type: string, nullable: true }
+            historical_evidence:
+              type: object
+              properties:
+                success_rate: { type: number, nullable: true }
+                sample_size: { type: integer }
+            linked_kb: { type: array, items: { type: object }, description: "Only populated for the top 5 (explanation_depth) — [] otherwise, not missing/omitted." }
+            linked_signals: { type: array, items: { type: object } }
+            linked_metrics: { type: object, nullable: true }
+
+    ExcludedRecommendation:
+      type: object
+      properties:
+        id: { type: string }
+        source_type: { type: string, enum: [task, opportunity, strategy] }
+        title: { type: string }
+        reason: { type: string, description: "The blocking constraint's note, or a generic fallback." }
+
+    RetrospectiveSummary:
+      type: object
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        executive_summary: { type: string, nullable: true }
+        kb_path: { type: string, nullable: true }
+        triggered_by: { type: string, default: scheduler }
+        created_at: { type: string, format: date-time }
+
+    RetrospectiveDetail:
+      allOf:
+        - { $ref: '#/components/schemas/RetrospectiveSummary' }
+        - type: object
+          properties:
+            what_worked: { type: array, items: { type: object } }
+            what_didnt: { type: array, items: { type: object } }
+            learnings: { type: array, items: { type: object } }
+            agent_assessments: { type: array, items: { type: object } }
+            open_windows: { type: array, items: { type: object } }
+            recommendations: { type: array, items: { type: object } }
+            operating_changes: { type: array, items: { type: object } }
+            calibration_notes: { type: array, items: { type: object } }
+            full_report_json: { type: object, nullable: true }
+
+    CalibrationRow:
+      type: object
+      properties:
+        id: { type: string }
+        agent_id: { type: string }
+        business_id: { type: string, nullable: true }
+        period_start: { type: string, format: date-time }
+        period_end: { type: string, format: date-time }
+        tasks_with_outcomes: { type: integer }
+        avg_stated_confidence: { type: number, nullable: true }
+        avg_actual_outcome_rate: { type: number, nullable: true }
+        calibration_error: { type: number, nullable: true }
+        calibration_score: { type: number, nullable: true }
+        calibration_offset: { type: number, default: 0 }
+        trend: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        false_positives: { type: integer, default: 0 }
+        false_negatives: { type: integer, default: 0 }
+        recommendations_accepted: { type: integer, default: 0 }
+        recommendations_rejected: { type: integer, default: 0 }
+        execution_success_rate: { type: number, nullable: true }
+        long_term_success_rate: { type: number, nullable: true }
+        calibration_method: { type: string, default: simple_average, description: "'simple_average' marks rows computed before Phase 3's richer calibration existed." }
+        conservatism_factor: { type: number, default: 1.0 }
+        bins: { type: array, items: { type: object } }
+        calculated_at: { type: string, format: date-time }
+
+    CrossBusinessPattern:
+      type: object
+      description: "No business_id, name, URL, or task title — enforced structurally, the underlying table has no such column."
+      properties:
+        pattern_key: { type: string }
+        action_type: { type: string }
+        description: { type: string }
+        sample_size: { type: integer }
+        success_count: { type: integer }
+        success_rate: { type: number, nullable: true }
+        applicable_business_types: { type: array, items: { type: string }, description: "Business types (e.g. ecommerce, saas), never names." }
+
+    GoalAssessment:
+      type: object
+      description: "One row per strategic-planning pass (goal-reasoner.ts) — append-only history, not overwritten."
+      properties:
+        id: { type: string }
+        goal_id: { type: string }
+        business_id: { type: string }
+        feasibility_verdict: { type: string, nullable: true }
+        feasibility_confidence: { type: number, nullable: true }
+        feasibility_reasoning: { type: string, nullable: true }
+        key_constraint: { type: string, nullable: true }
+        expected_impact: { type: string, nullable: true }
+        gap_analysis: { type: object, nullable: true }
+        assumptions: { type: array, items: { type: object } }
+        risks: { type: array, items: { type: object } }
+        dependencies: { type: array, items: { type: object } }
+        measurement_plan: { type: object, nullable: true }
+        success_criteria: { type: array, items: { type: object } }
+        recommended_strategy_id: { type: string, nullable: true }
+        created_by: { type: string, default: goal-reasoner }
+        created_at: { type: string, format: date-time }
+
+    GoalStrategy:
+      type: object
+      description: "One durable, individually comparable candidate path per goal — previously only existed inside a JSON blob and a rendered KB page."
+      properties:
+        id: { type: string }
+        goal_id: { type: string }
+        business_id: { type: string }
+        assessment_id: { type: string, nullable: true }
+        name: { type: string }
+        summary: { type: string, nullable: true }
+        expected_impact_summary: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        estimated_effort: { type: string, nullable: true }
+        estimated_cost: { type: number, nullable: true }
+        estimated_cost_unit: { type: string, default: gbp }
+        time_to_impact_days: { type: integer, nullable: true }
+        historical_success_rate: { type: number, nullable: true }
+        historical_sample_size: { type: integer, default: 0 }
+        evidence: { type: array, items: { type: object } }
+        depends_on: { type: array, items: { type: string } }
+        is_recommended: { type: boolean }
+        status: { type: string, default: candidate }
+        created_at: { type: string, format: date-time }
+
+    TimelineEvent:
+      type: object
+      description: "One merged, chronological feed — GET /goals/{goalId}/timeline."
+      properties:
+        at: { type: string, format: date-time, nullable: true }
+        type: { type: string, enum: [goal_created, progress_check, strategic_assessment, strategy_proposed, conflict_detected, decision, goal_achieved] }
+        summary: { type: string }
+        data: { type: object, description: "The underlying row this event summarizes." }
 
 # ─────────────────────────────────────────────────────────────────────────
 paths:
@@ -1078,6 +1333,10 @@ paths:
                 assigned_agents: { type: array, items: { type: string } }
                 milestones: { type: array, items: { type: object } }
                 tags: { type: array, items: { type: string } }
+                owner: { type: string, description: "Phase 3." }
+                confidence: { type: number, description: "Phase 3." }
+                priority: { type: string, enum: [p1, p2, p3], default: p2, description: "Phase 3." }
+                depends_on: { type: array, items: { type: string }, description: "Phase 3. Goal IDs this goal depends on — invalid/unknown IDs are silently dropped, not an error." }
       responses:
         '201': { description: "{ goal }" }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -1086,7 +1345,7 @@ paths:
   /goals/{goalId}:
     get:
       operationId: getGoalDetail
-      summary: Goal detail — progress, linked metrics/tasks/signals, blockers, conflicts
+      summary: Goal detail — progress, linked metrics/tasks/signals/outcomes, blockers, conflicts, strategic planning
       x-bap-permission: goals:read
       parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -1101,6 +1360,7 @@ paths:
                   linked_metrics: { type: object, nullable: true }
                   linked_tasks: { type: array, items: { type: object } }
                   linked_signals: { type: array, items: { type: object } }
+                  linked_outcomes: { type: array, items: { type: object }, description: "Phase 3 — via task_outcomes.goal_id." }
                   progress:
                     type: object
                     properties:
@@ -1113,6 +1373,12 @@ paths:
                       open_conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
                       deadline_at_risk: { type: boolean }
                   conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
+                  strategic_planning:
+                    type: object
+                    description: "Phase 3 — summary; see GET /goals/{goalId}/assessment and /strategies for full detail."
+                    properties:
+                      latest_assessment: { allOf: [{ $ref: '#/components/schemas/GoalAssessment' }], nullable: true }
+                      strategy_count: { type: integer }
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
     patch:
@@ -1143,6 +1409,10 @@ paths:
                 milestones: { type: array, items: { type: object } }
                 notes: { type: array, items: { type: object } }
                 tags: { type: array, items: { type: string } }
+                owner: { type: string, description: "Phase 3." }
+                confidence: { type: number, description: "Phase 3." }
+                priority: { type: string, enum: [p1, p2, p3], description: "Phase 3." }
+                depends_on: { type: array, items: { type: string }, description: "Phase 3. Replaces the goal's full dependency set (goal_dependencies) — not a merge." }
       responses:
         '200': { description: "{ goal }" }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -1181,6 +1451,427 @@ paths:
       parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
       responses:
         '200': { description: "{ conflicts }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Phase 3: Strategic Planning Engine + Multi-Strategy Planning ───────
+  /goals/{goalId}/timeline:
+    get:
+      operationId: getGoalTimeline
+      summary: Merged chronological event feed for a goal (created, checks, assessments, strategies, conflicts, decisions, achieved)
+      x-bap-permission: goals:read
+      parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  goal_id: { type: string }
+                  events: { type: array, items: { $ref: '#/components/schemas/TimelineEvent' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /goals/{goalId}/assessment:
+    get:
+      operationId: getGoalAssessment
+      summary: Latest strategic feasibility assessment for a goal
+      x-bap-permission: goals:read
+      parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assessment: { $ref: '#/components/schemas/GoalAssessment' }
+        '404': { description: "No assessment exists yet — trigger one with POST /goals/{goalId}/plan." }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /goals/{goalId}/assessments:
+    get:
+      operationId: listGoalAssessments
+      summary: Full assessment history for a goal (one row per planning pass), newest first, paginated
+      x-bap-permission: goals:read
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assessments: { type: array, items: { $ref: '#/components/schemas/GoalAssessment' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /goals/{goalId}/strategies:
+    get:
+      operationId: listGoalStrategies
+      summary: Candidate strategies for a goal, comparable side-by-side
+      x-bap-permission: goals:read
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, default: candidate }, description: "e.g. candidate, selected, rejected." }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  strategies: { type: array, items: { $ref: '#/components/schemas/GoalStrategy' } }
+                  total: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /goals/{goalId}/plan:
+    post:
+      operationId: planGoal
+      summary: (Re-)run strategic planning for a goal now
+      x-bap-permission: goals:update
+      description: >-
+        Fire-and-forget — a fresh LLM-backed planning pass can take many
+        seconds. Poll GET /goals/{goalId}/assessment and
+        GET /goals/{goalId}/strategies for the result.
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { description: "{ goal_id, status: 'planning', message }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 3: Conflicts (general, business-wide) ─────────────────────────
+  /businesses/{businessId}/conflicts:
+    get:
+      operationId: listConflicts
+      summary: List conflicts — every conflict_type, filterable, paginated
+      x-bap-permission: conflicts:read
+      description: >-
+        The general, business-wide conflict surface (see also
+        GET /goals/{goalId}/conflicts for the goal-scoped view). Read-only —
+        resolving or dismissing a conflict remains a dashboard-only action.
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string, default: open }, description: "'all' for resolved too." }
+        - { name: conflict_type, in: query, schema: { type: string }, description: "CSV: goal_vs_goal, task_vs_window, task_vs_goal, task_vs_task, signal_vs_goal, goal_dependency." }
+        - { name: category, in: query, schema: { type: string }, description: "CSV: direct, resource, timing, dependency. Phase 3 addition, orthogonal to conflict_type." }
+        - { name: entity_id, in: query, schema: { type: string }, description: "Matches either entity_a_id or entity_b_id." }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /conflicts/{conflictId}:
+    get:
+      operationId: getConflictDetail
+      summary: Conflict detail
+      x-bap-permission: conflicts:read
+      parameters: [{ name: conflictId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conflict: { $ref: '#/components/schemas/Conflict' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 3: Opportunity Engine ─────────────────────────────────────────
+  /businesses/{businessId}/opportunities:
+    get:
+      operationId: listOpportunities
+      summary: List quantified opportunities — filterable, paginated
+      x-bap-permission: opportunities:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string, default: pending }, description: "CSV, or 'all'." }
+        - { name: connector_source, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  opportunities: { type: array, items: { $ref: '#/components/schemas/Opportunity' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /opportunities/{opportunityId}:
+    get:
+      operationId: getOpportunityDetail
+      summary: Opportunity detail
+      x-bap-permission: opportunities:read
+      parameters: [{ name: opportunityId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  opportunity: { $ref: '#/components/schemas/Opportunity' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/opportunities/scan:
+    post:
+      operationId: triggerOpportunityScan
+      summary: Trigger a fresh opportunity scan now
+      x-bap-permission: opportunities:trigger
+      description: >-
+        Fire-and-forget — an LLM-backed pattern scan over connector data.
+        Poll GET /businesses/{businessId}/opportunities for results.
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { description: "{ business_id, status: 'scanning', message }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 3: Decision Memory (read-only) ────────────────────────────────
+  /businesses/{businessId}/decisions:
+    get:
+      operationId: listDecisions
+      summary: Recall decisions — search/filter/paginate
+      x-bap-permission: decisions:read
+      description: >-
+        Read-only: decisions are written by the engines that make them
+        (task-queue.ts, goal-reasoner.ts, conflict-engine.ts,
+        goal-suggester.ts), never directly via BAP.
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: q, in: query, schema: { type: string }, description: "Searches title/decision/reasoning." }
+        - { name: decision_type, in: query, schema: { type: string } }
+        - { name: related_goal_id, in: query, schema: { type: string } }
+        - { name: related_task_id, in: query, schema: { type: string } }
+        - { name: date_from, in: query, schema: { type: string, format: date-time } }
+        - { name: date_to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decisions: { type: array, items: { $ref: '#/components/schemas/Decision' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /decisions/{decisionId}:
+    get:
+      operationId: getDecisionDetail
+      summary: Decision detail
+      x-bap-permission: decisions:read
+      parameters: [{ name: decisionId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decision: { allOf: [{ $ref: '#/components/schemas/Decision' }], nullable: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 3: Knowledge Graph ─────────────────────────────────────────────
+  /businesses/{businessId}/graph:
+    get:
+      operationId: traverseGraph
+      summary: Traverse the knowledge graph from a starting entity
+      x-bap-permission: graph:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: ref_table, in: query, required: true, schema: { type: string, enum: [goals, tasks, signals, decisions, kg_entities] } }
+        - { name: ref_id, in: query, required: true, schema: { type: string } }
+        - { name: depth, in: query, schema: { type: integer, minimum: 1, maximum: 5, default: 2 } }
+        - { name: edge_types, in: query, schema: { type: string }, description: "CSV of caused,supports,blocks,depends_on,relates_to,mentions,supersedes,contradicts,improves,regresses." }
+      responses:
+        '200':
+          description: "OK. { nodes: [], edges: [] } if the starting entity has no graph node yet — not a 404."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes: { type: array, items: { $ref: '#/components/schemas/GraphNode' } }
+                  edges: { type: array, items: { $ref: '#/components/schemas/GraphEdge' } }
+                  total_nodes: { type: integer }
+                  total_edges: { type: integer }
+        '400': { description: "Missing ref_table/ref_id, or ref_table outside the allowed set." }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /businesses/{businessId}/graph/rebuild:
+    post:
+      operationId: rebuildGraph
+      summary: Recompute every derivable edge for a business now
+      x-bap-permission: graph:trigger
+      description: >-
+        Synchronous (200, not 202) — idempotent (upserts), safe to call
+        repeatedly. Returns total entity/edge counts afterward, not how many
+        changed.
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ business_id, entities, edges }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 3: Review surfaces (recommendations, retrospectives, calibration, patterns) ─
+  /businesses/{businessId}/recommendations:
+    get:
+      operationId: listRecommendations
+      summary: Ranked, explainable recommendations across tasks/opportunities/strategies
+      x-bap-permission: recommendations:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  recommendations: { type: array, items: { $ref: '#/components/schemas/Recommendation' } }
+                  excluded: { type: array, items: { $ref: '#/components/schemas/ExcludedRecommendation' } }
+                  explanation_depth: { type: string, description: "e.g. 'full for the top 5, partial (no KB search) for the rest'." }
+                  total: { type: integer }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /businesses/{businessId}/retrospectives:
+    get:
+      operationId: listRetrospectives
+      summary: List retrospectives, newest first, paginated
+      x-bap-permission: retrospectives:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retrospectives: { type: array, items: { $ref: '#/components/schemas/RetrospectiveSummary' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /retrospectives/{retrospectiveId}:
+    get:
+      operationId: getRetrospectiveDetail
+      summary: Retrospective detail — full report
+      x-bap-permission: retrospectives:read
+      parameters: [{ name: retrospectiveId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  retrospective: { $ref: '#/components/schemas/RetrospectiveDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/retrospectives/run:
+    post:
+      operationId: runRetrospective
+      summary: Trigger a retrospective now
+      x-bap-permission: retrospectives:trigger
+      description: >-
+        Fire-and-forget — an LLM call over a month of data plus a KB write.
+        Poll GET /businesses/{businessId}/retrospectives for the result.
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { description: "{ business_id, status: 'running', message }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/calibration:
+    get:
+      operationId: getCalibration
+      summary: Agent calibration — latest per agent, or full history for one agent
+      x-bap-permission: calibration:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: agent_id, in: query, schema: { type: string } }
+        - { name: history, in: query, schema: { type: string }, description: "Any truthy value returns calibration_history (up to 50 rows) instead of the latest-per-agent list." }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      calibration: { type: array, items: { $ref: '#/components/schemas/CalibrationRow' } }
+                      total: { type: integer }
+                  - type: object
+                    properties:
+                      calibration_history: { type: array, items: { $ref: '#/components/schemas/CalibrationRow' } }
+
+  /businesses/{businessId}/patterns:
+    get:
+      operationId: listCrossBusinessPatterns
+      summary: Cross-business learning — abstracted patterns only, no tenant-identifying data
+      x-bap-permission: recommendations:read
+      description: "No separate patterns:read permission — reuses recommendations:read."
+      parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  patterns: { type: array, items: { $ref: '#/components/schemas/CrossBusinessPattern' } }
+                  total: { type: integer }
         '404': { $ref: '#/components/responses/NotFound' }
 
   # ── Phase 2: Connectors ─────────────────────────────────────────────────

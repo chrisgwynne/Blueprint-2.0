@@ -203,6 +203,10 @@ export interface GoalSuggestion {
   suggested_agents: string[];
   confidence: number | null;
   status: string;
+  required_effort?: string | null;
+  related_goal_ids?: string[];
+  related_risks?: string[];
+  why_it_matters?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -211,6 +215,7 @@ export interface Conflict {
   id: string;
   business_id: string;
   conflict_type: string;
+  category?: string;
   severity: string;
   entity_a_type: string;
   entity_a_id: string;

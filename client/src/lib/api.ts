@@ -311,6 +311,12 @@ export const checkGoal = (businessId: string, id: string) => post(`/goals/${busi
 export const proposeGoal = (businessId: string, context: unknown) => post(`/goals/${businessId}/propose`, { context })
 export const reasonGoal = (businessId: string, id: string) => post(`/goals/${businessId}/${id}/reason`)
 
+// Phase 3 — strategic planning
+export const getGoalAssessment = (businessId: string, id: string) => get(`/goals/${businessId}/${id}/assessment`)
+export const getGoalAssessments = (businessId: string, id: string) => get(`/goals/${businessId}/${id}/assessments`)
+export const getGoalStrategies = (businessId: string, id: string) => get(`/goals/${businessId}/${id}/strategies`)
+export const getGoalTimeline = (businessId: string, id: string) => get(`/goals/${businessId}/${id}/timeline`)
+
 // ============================================
 // Agent calibration (Feature 5)
 // ============================================
@@ -349,7 +355,7 @@ export const runRetrospective = (businessId: string) => post(`/retrospectives/${
 // ============================================
 // Goal suggestions (Feature 6)
 // ============================================
-export const getGoalSuggestions = (businessId: string) => get(`/goal-suggestions/${businessId}`)
+export const getGoalSuggestions = (businessId: string, status = 'active') => get(`/goal-suggestions/${businessId}`, { status })
 export const runGoalSuggestionScan = (businessId: string) => post(`/goal-suggestions/${businessId}/scan`)
 export const acceptGoalSuggestion = (businessId: string, id: string) =>
   post(`/goal-suggestions/${businessId}/${id}/accept`)
@@ -461,3 +467,16 @@ export const setSecurityEnforcement = (enabled: boolean) => post('/security/enfo
 export const toggleSecurityLayer = (key: string, enabled: boolean) => post('/security/toggle', { key, enabled })
 export const getSecurityEvents = (params?: Params) => get('/security/events', params)
 export const getSecurityOutboundLog = (params?: Params) => get('/security/outbound-log', params)
+
+// ─── Decision Memory (Phase 3) ─────────────────────────────────────────────
+export const getDecisions = (businessId: string, params?: Params) => get(`/decisions/${businessId}`, params)
+export const getDecisionDetail = (businessId: string, id: string) => get(`/decisions/${businessId}/${id}`)
+
+// ─── Knowledge Graph (Phase 3) ──────────────────────────────────────────────
+export const getGraph = (businessId: string, params: Params) => get(`/graph/${businessId}`, params)
+export const rebuildGraph = (businessId: string) => post(`/graph/${businessId}/rebuild`)
+
+// ─── Review: recommendations, calibration, cross-business patterns (Phase 3)
+export const getRecommendations = (businessId: string, params?: Params) => get(`/review/${businessId}/recommendations`, params)
+export const getCalibration = (businessId: string, params?: Params) => get(`/review/${businessId}/calibration`, params)
+export const getCrossBusinessPatterns = (businessId: string) => get(`/review/${businessId}/patterns`)

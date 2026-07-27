@@ -212,6 +212,13 @@ const mountRoutes = async () => {
   const { default: investigationsRoutes } = await import('./routes/investigations.js');
   const { default: goalSuggestionsRoutes } = await import('./routes/goal-suggestions.js');
   const { default: securityRoutes } = await import('./routes/security.js');
+  // Phase 3 — session-authenticated mirrors of the BAP-only Phase 3
+  // surfaces (bap-decisions.ts, bap-graph.ts, bap-review.ts), for the
+  // dashboard. Same underlying engines, isAuthenticated instead of a BAP
+  // key — see each file's docstring.
+  const { default: decisionsRoutes } = await import('./routes/decisions.js');
+  const { default: graphRoutes } = await import('./routes/graph.js');
+  const { default: reviewRoutes } = await import('./routes/review.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -248,6 +255,9 @@ const mountRoutes = async () => {
   app.use('/api/investigations', investigationsRoutes);
   app.use('/api/goal-suggestions', goalSuggestionsRoutes);
   app.use('/api/security', securityRoutes);
+  app.use('/api/decisions', decisionsRoutes);
+  app.use('/api/graph', graphRoutes);
+  app.use('/api/review', reviewRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!(req.session as any)?.userId) return res.status(401).json({ error: 'Unauthorized' });

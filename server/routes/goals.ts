@@ -15,14 +15,76 @@ function safeParse(v: unknown, fb: unknown): unknown {
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return fb; }
 }
+
+/**
+ * Phase 3 — real milestones (goal_milestones) merged with any legacy
+ * free-form goals.milestones JSON, same fallback approach as
+ * bap-goals.ts's loadMilestones().
+ */
+function loadMilestones(goalId: string, legacyJson: unknown): Record<string, unknown>[] {
+  const real = db.prepare(
+    'SELECT id, title, target_pct, notes, status, achieved_at, source, created_at FROM goal_milestones WHERE goal_id = ? ORDER BY created_at ASC'
+  ).all(goalId) as Record<string, unknown>[];
+  const realTitles = new Set(real.map((m) => m.title));
+  const legacy = (safeParse(legacyJson, []) as Record<string, unknown>[]).filter((m) => m?.title && !realTitles.has(m.title));
+  return [...real, ...legacy.map((m) => ({ ...m, id: null, source: 'legacy_json', status: m.status ?? 'pending' }))];
+}
+
+function loadDependencies(goalId: string): Record<string, unknown>[] {
+  return db.prepare(`
+    SELECT gd.depends_on_goal_id AS goal_id, gd.note, g.title, g.status, g.progress_pct
+    FROM goal_dependencies gd JOIN goals g ON g.id = gd.depends_on_goal_id
+    WHERE gd.goal_id = ?
+  `).all(goalId) as Record<string, unknown>[];
+}
+
+/** Replace a goal's full dependency set, silently dropping IDs that aren't real goals in this business. */
+function setDependencies(goalId: string, businessId: string, dependsOn: unknown): void {
+  if (!Array.isArray(dependsOn)) return;
+  const validIds = (dependsOn as unknown[])
+    .filter((id): id is string => typeof id === 'string' && id !== goalId)
+    .filter((id) => db.prepare('SELECT 1 FROM goals WHERE id = ? AND business_id = ?').get(id, businessId));
+  db.prepare('DELETE FROM goal_dependencies WHERE goal_id = ?').run(goalId);
+  for (const dep of validIds) {
+    db.prepare(`
+      INSERT INTO goal_dependencies (id, goal_id, depends_on_goal_id, business_id, created_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(goal_id, depends_on_goal_id) DO NOTHING
+    `).run(crypto.randomUUID(), goalId, dep, businessId);
+  }
+}
+
 function parseRow(r: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!r) return null;
+  const { milestones: _legacyMilestones, ...rest } = r;
   return {
-    ...r,
+    ...rest,
     assigned_agents: safeParse(r.assigned_agents, []),
-    milestones: safeParse(r.milestones, []),
+    milestones: loadMilestones(r.id as string, r.milestones),
+    dependencies: loadDependencies(r.id as string),
     notes: safeParse(r.notes, []),
     tags: safeParse(r.tags, []),
+  };
+}
+
+function parseAssessmentRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    assumptions: safeParse(row.assumptions, []),
+    risks: safeParse(row.risks, []),
+    dependencies: safeParse(row.dependencies, []),
+    gap_analysis: safeParse(row.gap_analysis, null),
+    measurement_plan: safeParse(row.measurement_plan, null),
+    success_criteria: safeParse(row.success_criteria, []),
+  };
+}
+
+function parseStrategyRow(row: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...row,
+    evidence: safeParse(row.evidence, []),
+    depends_on: safeParse(row.depends_on, []),
+    is_recommended: Boolean(row.is_recommended),
   };
 }
 
@@ -52,8 +114,15 @@ router.post('/:businessId', (req: Request, res: Response) => {
       metric_name, metric_target, metric_unit,
       assigned_agents = [], strategy, milestones = [], tags = [],
       project_id = null, metric_baseline: providedBaseline,
+      owner = null, confidence = null, priority = 'p2', depends_on,
     } = req.body ?? {};
     if (!title) return res.status(400).json({ error: 'title is required' });
+    if (priority !== undefined && !['p1', 'p2', 'p3'].includes(String(priority))) {
+      return res.status(400).json({ error: 'priority must be one of: p1, p2, p3' });
+    }
+    if (confidence !== undefined && confidence !== null && (typeof confidence !== 'number' || confidence < 0 || confidence > 1)) {
+      return res.status(400).json({ error: 'confidence must be a number between 0 and 1' });
+    }
 
     // Auto-fill baseline from latest metric if metric_name set and not provided
     let baseline = providedBaseline;
@@ -71,15 +140,19 @@ router.post('/:businessId', (req: Request, res: Response) => {
       INSERT INTO goals
       (id, business_id, title, description, deadline, metric_name,
        metric_baseline, metric_target, metric_current, metric_unit,
-       assigned_agents, strategy, milestones, tags, project_id, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'human')
+       assigned_agents, strategy, milestones, tags, project_id, created_by,
+       owner, confidence, priority)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'human', ?, ?, ?)
     `).run(
       id, businessId, title, description ?? null, deadline ?? null,
       metric_name ?? null, baseline, metric_target ?? null, baseline,
       metric_unit ?? null,
       JSON.stringify(assigned_agents), strategy ?? null,
-      JSON.stringify(milestones), JSON.stringify(tags), project_id
+      JSON.stringify(milestones), JSON.stringify(tags), project_id,
+      owner, typeof confidence === 'number' ? confidence : null, priority ?? 'p2',
     );
+
+    if (depends_on) setDependencies(id, businessId, depends_on);
 
     // Brain — fire-and-forget strategic reasoning pass
     (async () => {
@@ -117,7 +190,22 @@ router.get('/:businessId/:id', (req: Request, res: Response) => {
     const checks = db.prepare(
       'SELECT * FROM goal_checks WHERE goal_id=? ORDER BY checked_at DESC LIMIT 50'
     ).all(id);
-    res.json({ goal: parseRow(goal), checks });
+    const latestAssessment = db.prepare(
+      'SELECT * FROM goal_assessments WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1'
+    ).get(id) as Record<string, unknown> | undefined;
+    const strategyCount = (db.prepare('SELECT COUNT(*) AS n FROM goal_strategies WHERE goal_id = ?').get(id) as { n: number }).n;
+    const conflicts = db.prepare(
+      "SELECT id, conflict_type, severity, entity_a_type, entity_a_id, entity_b_type, entity_b_id, description, status, detected_at FROM conflicts WHERE business_id = ? AND status = 'open' AND ((entity_a_type = 'goal' AND entity_a_id = ?) OR (entity_b_type = 'goal' AND entity_b_id = ?))"
+    ).all(businessId, id, id) as Record<string, unknown>[];
+    res.json({
+      goal: parseRow(goal),
+      checks,
+      conflicts,
+      strategic_planning: {
+        latest_assessment: latestAssessment ? parseAssessmentRow(latestAssessment) : null,
+        strategy_count: strategyCount,
+      },
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -129,7 +217,14 @@ router.put('/:businessId/:id', (req: Request, res: Response) => {
     const id = req.params.id as string;
     const businessId = req.params.businessId as string;
     const allowed = ['title', 'description', 'status', 'deadline', 'metric_name',
-      'metric_baseline', 'metric_target', 'metric_unit', 'strategy', 'project_id'];
+      'metric_baseline', 'metric_target', 'metric_unit', 'strategy', 'project_id',
+      'owner', 'confidence', 'priority'];
+    if (req.body.priority !== undefined && !['p1', 'p2', 'p3'].includes(String(req.body.priority))) {
+      return res.status(400).json({ error: 'priority must be one of: p1, p2, p3' });
+    }
+    if (req.body.confidence !== undefined && req.body.confidence !== null && (typeof req.body.confidence !== 'number' || req.body.confidence < 0 || req.body.confidence > 1)) {
+      return res.status(400).json({ error: 'confidence must be a number between 0 and 1' });
+    }
     const updates: string[] = [];
     const values: any[] = [];
     for (const key of allowed) {
@@ -144,7 +239,11 @@ router.put('/:businessId/:id', (req: Request, res: Response) => {
         values.push(JSON.stringify(req.body[key]));
       }
     }
-    if (updates.length === 0) return res.status(400).json({ error: 'no fields to update' });
+    if (req.body.depends_on !== undefined) setDependencies(id, businessId, req.body.depends_on);
+    if (updates.length === 0 && req.body.depends_on === undefined) return res.status(400).json({ error: 'no fields to update' });
+    if (updates.length === 0) {
+      return res.json(parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id) as Record<string, unknown> | null));
+    }
     updates.push('updated_at=CURRENT_TIMESTAMP');
     values.push(id, businessId);
     db.prepare(`UPDATE goals SET ${updates.join(', ')} WHERE id=? AND business_id=?`).run(...values);
@@ -189,6 +288,87 @@ router.post('/:businessId/:id/reason', async (req: Request, res: Response) => {
     const { runGoalReasoning } = await import('../brain/goal-reasoner.js') as unknown as { runGoalReasoning: (id: string, businessId: string) => Promise<any> };
     const result = await runGoalReasoning(id, businessId);
     res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Phase 3: strategic assessment + candidate strategies + timeline ──────
+
+router.get('/:businessId/:id/assessment', (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const businessId = String(req.params.businessId);
+    const goal = db.prepare('SELECT id FROM goals WHERE id=? AND business_id=?').get(id, businessId);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    const latest = db.prepare('SELECT * FROM goal_assessments WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1').get(id) as Record<string, unknown> | undefined;
+    if (!latest) return res.status(404).json({ error: `No strategic assessment exists yet for this goal — trigger one with POST /:businessId/${id}/reason.` });
+    res.json({ assessment: parseAssessmentRow(latest) });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/:businessId/:id/assessments', (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const businessId = String(req.params.businessId);
+    const goal = db.prepare('SELECT id FROM goals WHERE id=? AND business_id=?').get(id, businessId);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    const rows = db.prepare('SELECT * FROM goal_assessments WHERE goal_id = ? ORDER BY created_at DESC').all(id) as Record<string, unknown>[];
+    res.json({ assessments: rows.map(parseAssessmentRow), total: rows.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/:businessId/:id/strategies', (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const businessId = String(req.params.businessId);
+    const goal = db.prepare('SELECT id FROM goals WHERE id=? AND business_id=?').get(id, businessId);
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    const rows = db.prepare(
+      'SELECT * FROM goal_strategies WHERE goal_id = ? ORDER BY is_recommended DESC, confidence DESC NULLS LAST, created_at DESC'
+    ).all(id) as Record<string, unknown>[];
+    res.json({ strategies: rows.map(parseStrategyRow), total: rows.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/:businessId/:id/timeline', (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const businessId = String(req.params.businessId);
+    const goal = db.prepare('SELECT * FROM goals WHERE id=? AND business_id=?').get(id, businessId) as Record<string, unknown> | undefined;
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+
+    const events: Array<{ at: string | null; type: string; summary: string; data: Record<string, unknown> }> = [];
+    events.push({ at: goal.created_at as string, type: 'goal_created', summary: `Goal created: ${goal.title as string}`, data: { created_by: goal.created_by } });
+    for (const c of db.prepare('SELECT * FROM goal_checks WHERE goal_id = ? ORDER BY checked_at ASC').all(id) as Record<string, unknown>[]) {
+      events.push({ at: c.checked_at as string, type: 'progress_check', summary: `Progress check: ${(c.progress_pct as number | null)?.toFixed?.(0) ?? c.progress_pct}% (${c.status_change ?? 'no change'})`, data: c });
+    }
+    for (const a of db.prepare('SELECT id, feasibility_verdict, feasibility_confidence, created_at FROM goal_assessments WHERE goal_id = ? ORDER BY created_at ASC').all(id) as Record<string, unknown>[]) {
+      events.push({ at: a.created_at as string, type: 'strategic_assessment', summary: `Strategic assessment: ${a.feasibility_verdict ?? 'unknown'} (${Math.round(((a.feasibility_confidence as number | null) ?? 0) * 100)}% confidence)`, data: a });
+    }
+    for (const s of db.prepare('SELECT id, name, is_recommended, created_at FROM goal_strategies WHERE goal_id = ? ORDER BY created_at ASC').all(id) as Record<string, unknown>[]) {
+      events.push({ at: s.created_at as string, type: 'strategy_proposed', summary: `Strategy proposed: ${s.name}${s.is_recommended ? ' (recommended)' : ''}`, data: s });
+    }
+    for (const c of db.prepare(
+      "SELECT id, conflict_type, description, detected_at FROM conflicts WHERE business_id = ? AND ((entity_a_type = 'goal' AND entity_a_id = ?) OR (entity_b_type = 'goal' AND entity_b_id = ?)) ORDER BY detected_at ASC"
+    ).all(businessId, id, id) as Record<string, unknown>[]) {
+      events.push({ at: c.detected_at as string, type: 'conflict_detected', summary: `Conflict detected: ${c.description}`, data: c });
+    }
+    for (const d of db.prepare(
+      'SELECT id, decision_type, title, decision, confidence, created_at FROM decisions WHERE related_goal_id = ? ORDER BY created_at ASC'
+    ).all(id) as Record<string, unknown>[]) {
+      events.push({ at: d.created_at as string, type: 'decision', summary: `Decision: ${d.title}`, data: d });
+    }
+    if (goal.achieved_at) events.push({ at: goal.achieved_at as string, type: 'goal_achieved', summary: `Goal achieved: ${goal.title as string}`, data: {} });
+
+    events.sort((a, b) => new Date(a.at ?? 0).getTime() - new Date(b.at ?? 0).getTime());
+    res.json({ goal_id: id, events });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

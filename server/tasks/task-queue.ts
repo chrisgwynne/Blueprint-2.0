@@ -1,5 +1,6 @@
 import db, { generateId, audit } from '../db/db.js';
 import { enqueueExecutionJob, getActiveJobForTask, cancelJob as cancelExecutionJob } from './execution-jobs.js';
+import { recordDecision } from '../brain/decision-memory.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ export interface TaskRow {
   id: string;
   business_id: string;
   signal_id: string | null;
+  goal_id: string | null;
   mission_id: string | null;
   title: string;
   description: string | null;
@@ -46,6 +48,7 @@ export interface TaskRow {
 export interface CreateTaskParams {
   business_id: string;
   signal_id?: string | null;
+  goal_id?: string | null;
   mission_id?: string | null;
   title: string;
   description?: string | null;
@@ -142,6 +145,7 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   const {
     business_id,
     signal_id = null,
+    goal_id = null,
     mission_id = null,
     title,
     description = null,
@@ -162,20 +166,28 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (!title) throw new Error('title is required.');
   if (!proposed_by) throw new Error('proposed_by is required.');
 
+  // goal_id is a real FK (Phase 3) — reject silently-wrong linkage rather
+  // than storing a dangling reference to another business's goal.
+  if (goal_id) {
+    const goal = db.prepare('SELECT id FROM goals WHERE id = ? AND business_id = ?').get(goal_id, business_id);
+    if (!goal) throw new Error(`Goal '${goal_id}' not found for this business.`);
+  }
+
   const id = generateId();
   const now = new Date().toISOString();
 
   db.prepare(`
     INSERT INTO tasks (
-      id, business_id, signal_id, mission_id, title, description,
+      id, business_id, signal_id, goal_id, mission_id, title, description,
       proposed_by, assigned_to, action_type, action_payload,
       status, trust_tier, priority, confidence, estimated_impact,
       rollback_data, approval_mode, degraded_data, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     business_id,
     signal_id,
+    goal_id,
     mission_id,
     title,
     description,
@@ -416,6 +428,15 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   const after = runApproval();
 
   audit(existing.business_id, 'task', id, 'approve', approvedBy, existing, after);
+  recordDecision({
+    business_id: existing.business_id, decision_type: 'task_approval',
+    title: `Approved: ${existing.title}`,
+    decision: `Approved task "${existing.title}" (${existing.action_type ?? 'no action_type'}).`,
+    reasoning: existing.description ?? null,
+    confidence: existing.confidence ?? null,
+    author: approvedBy, related_task_id: id, related_signal_id: existing.signal_id ?? null,
+    related_goal_id: existing.goal_id ?? null,
+  });
 
   fireWebhook('task.approved', {
     task_id: id, business_id: existing.business_id,
@@ -489,6 +510,15 @@ export function rejectTask(id: string, rejectedBy: string, reason = ''): TaskRow
   const before = parseRow(existing);
   const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
   audit(existing.business_id, 'task', id, 'reject', rejectedBy, before, after, { reason });
+  recordDecision({
+    business_id: existing.business_id as string, decision_type: 'task_rejection',
+    title: `Rejected: ${before?.title ?? id}`,
+    decision: `Rejected task "${before?.title ?? id}"${reason ? `: ${reason}` : '.'}`,
+    reasoning: reason || null,
+    author: rejectedBy, related_task_id: id,
+    related_signal_id: (before?.signal_id as string | null) ?? null,
+    related_goal_id: (before?.goal_id as string | null) ?? null,
+  });
 
   return after;
 }

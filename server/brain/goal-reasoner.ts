@@ -16,6 +16,8 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { actionTypeTrackRecord } from '../tasks/historical-learning.js';
+import { recordDecision } from './decision-memory.js';
 
 const SYSTEM_PROMPT = `You are Blueprint's strategic goal reasoner.
 
@@ -48,6 +50,7 @@ Schema:
     "trajectory_now": "improving|flat|declining",
     "projected_at_deadline": <number|null>
   },
+  "assumptions": ["thing we are assuming is true for this whole assessment to hold"],
   "paths": [
     {
       "name": "short label",
@@ -55,6 +58,8 @@ Schema:
       "confidence": 0.0-1.0,
       "time_to_impact_days": <number>,
       "effort": "low|medium|high",
+      "estimated_cost_gbp": <number|null — rough monthly cost of pursuing this path, or null if effectively free>,
+      "action_type_hint": "the closest existing action_type this path resembles (e.g. meta_update, content_draft, github_issue), or null if none fit — used to look up historical track record, not executed directly",
       "depends_on": ["other path name if any"]
     }
   ],
@@ -73,6 +78,7 @@ Schema:
     "leading_indicators": ["metrics that move first"],
     "decision_points": ["when to re-evaluate the plan"]
   },
+  "success_criteria": ["concrete, measurable statement of what 'achieved' looks like — e.g. 'gsc.avg_ctr >= 3.2% for 2 consecutive weeks'"],
   "quick_wins": ["small things to do this week"],
   "do_not_do": ["things to avoid — wasted effort or will break attribution"],
   "agent_briefings": [
@@ -116,6 +122,7 @@ export async function runGoalReasoning(
   applyReasoningResults(ctx.goal, reasoning);
   const kbPath = await buildKBDocument(ctx, reasoning).catch(() => null);
   updateAgentGoalContext(ctx.goal, reasoning);
+  persistStrategicPlanning(goalId, businessId, reasoning);
 
   return { reasoning, tasks_created: 0, kb_filed: kbPath };
 }
@@ -486,5 +493,104 @@ function updateAgentGoalContext(goal: Record<string, unknown>, reasoning: Record
       VALUES (?, ?, CURRENT_TIMESTAMP)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(key, JSON.stringify(payload));
+  }
+}
+
+/* ─── Phase 3: Strategic Planning Engine + Multi-Strategy Planning ─────────
+ *
+ * Everything above this point (applyReasoningResults/buildKBDocument/
+ * updateAgentGoalContext) is the original Phase-0/1/2-era behaviour —
+ * unchanged. This section is what turns a single reasoning pass into two
+ * durable, independently queryable object sets: one goal_assessments row
+ * (the "strategic assessment" — feasibility/risks/assumptions/measurement
+ * plan/success criteria) and one goal_strategies row per candidate path
+ * (comparable side-by-side: confidence/effort/cost/evidence/historical
+ * success), rather than only the flattened `goal.strategy` text blob and
+ * a rendered KB page a caller could read but never query structurally.
+ */
+
+function persistStrategicPlanning(goalId: string, businessId: string, reasoning: Record<string, unknown>): void {
+  try {
+    const feasibility = (reasoning.feasibility as Record<string, unknown> | null) ?? null;
+    const paths = Array.isArray(reasoning.paths) ? reasoning.paths as Record<string, unknown>[] : [];
+    const successCriteria = Array.isArray(reasoning.success_criteria) ? reasoning.success_criteria as string[] : [];
+
+    const assessmentId = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO goal_assessments (
+        id, goal_id, business_id, feasibility_verdict, feasibility_confidence,
+        feasibility_reasoning, key_constraint, expected_impact, gap_analysis,
+        assumptions, risks, dependencies, measurement_plan, success_criteria,
+        created_by, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'goal-reasoner', CURRENT_TIMESTAMP)
+    `).run(
+      assessmentId, goalId, businessId,
+      (feasibility?.verdict as string | null) ?? null,
+      (feasibility?.confidence as number | null) ?? null,
+      (feasibility?.honest_assessment as string | null) ?? null,
+      (feasibility?.key_constraint as string | null) ?? null,
+      (reasoning.recommended_path as string | null) ?? null,
+      JSON.stringify(reasoning.gap_analysis ?? null),
+      JSON.stringify(Array.isArray(reasoning.assumptions) ? reasoning.assumptions : []),
+      JSON.stringify(Array.isArray(reasoning.risks) ? reasoning.risks : []),
+      JSON.stringify(Array.isArray(reasoning.constraints) ? reasoning.constraints : []),
+      JSON.stringify(reasoning.measurement_plan ?? null),
+      JSON.stringify(successCriteria),
+    );
+
+    let recommendedStrategyId: string | null = null;
+    for (const p of paths) {
+      const strategyId = crypto.randomUUID();
+      const isRecommended = p.name === reasoning.recommended_path;
+      if (isRecommended) recommendedStrategyId = strategyId;
+
+      // Historical success rate is best-effort: only populated when the
+      // LLM's action_type_hint matches a real, previously-used action_type
+      // for this business. A miss (hint is null, or no track record yet)
+      // leaves it null rather than guessing.
+      const hint = (p.action_type_hint as string | null) ?? null;
+      const track = hint ? actionTypeTrackRecord(businessId, hint) : null;
+
+      db.prepare(`
+        INSERT INTO goal_strategies (
+          id, goal_id, business_id, assessment_id, name, summary,
+          expected_impact_summary, confidence, estimated_effort, estimated_cost,
+          estimated_cost_unit, time_to_impact_days, historical_success_rate,
+          historical_sample_size, evidence, depends_on, is_recommended, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'gbp', ?, ?, ?, ?, ?, ?, 'candidate', CURRENT_TIMESTAMP)
+      `).run(
+        strategyId, goalId, businessId, assessmentId,
+        String(p.name ?? 'Unnamed strategy'), (p.summary as string | null) ?? null,
+        (p.summary as string | null) ?? null,
+        typeof p.confidence === 'number' ? p.confidence : null,
+        (p.effort as string | null) ?? null,
+        typeof p.estimated_cost_gbp === 'number' ? p.estimated_cost_gbp : null,
+        typeof p.time_to_impact_days === 'number' ? p.time_to_impact_days : null,
+        track?.success_rate ?? null,
+        track?.sample_size ?? 0,
+        JSON.stringify(hint ? [`Historical track record for action_type "${hint}": ${track?.success_count ?? 0}/${track?.sample_size ?? 0} succeeded.`] : []),
+        JSON.stringify(Array.isArray(p.depends_on) ? p.depends_on : []),
+        isRecommended ? 1 : 0,
+      );
+    }
+
+    if (recommendedStrategyId) {
+      db.prepare('UPDATE goal_assessments SET recommended_strategy_id = ? WHERE id = ?').run(recommendedStrategyId, assessmentId);
+    }
+
+    if (reasoning.recommended_path && paths.length > 0) {
+      const alternatives = paths.filter((p) => p.name !== reasoning.recommended_path).map((p) => ({ name: p.name, summary: p.summary, confidence: p.confidence }));
+      recordDecision({
+        business_id: businessId, decision_type: 'strategy_selection',
+        title: `Strategy selected for goal: ${reasoning.recommended_path}`,
+        decision: `Recommended strategy "${reasoning.recommended_path}" over ${alternatives.length} alternative(s).`,
+        reasoning: (feasibility?.honest_assessment as string | null) ?? null,
+        confidence: (feasibility?.confidence as number | null) ?? null,
+        alternatives_rejected: alternatives,
+        author: 'goal-reasoner', related_goal_id: goalId,
+      });
+    }
+  } catch (err) {
+    console.warn('[goal-reasoner] Phase 3 strategic planning persistence failed:', (err as Error).message);
   }
 }
