@@ -18,9 +18,18 @@ BLUEPRINT_BUSINESS_ID=biz_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
 **Get your API key (run once):**
+
+Registration requires either a logged-in Blueprint dashboard session, or a
+`BAP_REGISTRATION_SECRET` configured by the operator (ask them for it — it's
+set in their `.env`, not something you can obtain yourself). Wildcard
+permissions and wildcard business access (`"*"`) are never granted by
+self-registration; request only the specific permissions and business IDs
+you need, and ask the operator to grant more via the dashboard if required.
+
 ```bash
 curl -X POST $BLUEPRINT_URL/api/bap/v1/register \
   -H "Content-Type: application/json" \
+  -H "X-Registration-Secret: $BLUEPRINT_REGISTRATION_SECRET" \
   -d '{
     "name": "YourAgentName",
     "requested_permissions": [
@@ -29,7 +38,7 @@ curl -X POST $BLUEPRINT_URL/api/bap/v1/register \
       "kb:read", "kb:write",
       "metrics:read", "agents:trigger"
     ],
-    "business_access": ["*"]
+    "business_access": ["biz_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
   }'
 ```
 

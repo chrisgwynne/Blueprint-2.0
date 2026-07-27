@@ -6,6 +6,7 @@ import { existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import db from './db/db.js';
+import { isProductionAdminPasswordUnsafe } from './lib/startup-checks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -127,6 +128,17 @@ if (!sessionSecret) {
     process.exit(1);
   }
   console.error('[startup] CRITICAL: SESSION_SECRET environment variable is not set! Using an insecure dev-only fallback.');
+}
+
+// Admin credentials — refuse to start in production with a known-default
+// password (the .env.example placeholder is 'changeme'), or with none set
+// at all. Mirrors the SESSION_SECRET fail-closed check above.
+if (isProductionAdminPasswordUnsafe(process.env.NODE_ENV, process.env.ADMIN_PASSWORD)) {
+  console.error(
+    '[startup] FATAL: ADMIN_PASSWORD must be set to a non-default value in production. ' +
+    'Refusing to start with a default/guessable admin password.'
+  );
+  process.exit(1);
 }
 
 app.use(session({

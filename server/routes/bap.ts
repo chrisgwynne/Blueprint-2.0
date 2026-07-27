@@ -1,8 +1,9 @@
 /**
  * Blueprint Agent Protocol (BAP) — Gateway Routes.
  *
- * All routes live under /api/bap/v1/ and use BAP-Key header auth
- * (except /register which is open).
+ * All routes live under /api/bap/v1/ and use BAP-Key header auth.
+ * /register instead requires an authenticated dashboard session or a
+ * valid X-Registration-Secret header (see bap/auth.ts) — it is NOT open.
  *
  * Endpoints:
  *   POST   /register                          — create agent + issue key
@@ -35,9 +36,12 @@ import db, { generateId } from '../db/db.js';
 import {
   generateApiKey, hashApiKey, keyPrefix,
   bapAuth, requirePermission, hasPermission,
+  requireRegistrationAuth, filterGrantablePermissions, filterValidBusinessIds,
 } from '../bap/auth.js';
 import { bapRateLimit } from '../bap/rate-limiter.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { assertSafeWebhookUrl, UnsafeWebhookUrlError } from '../lib/ssrf-guard.js';
+import { KBPathError } from '../kb/kb-engine.js';
 
 const router = Router();
 
@@ -60,16 +64,16 @@ function businessRow(businessId: string): Record<string, unknown> | undefined {
   return db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId) as Record<string, unknown> | undefined;
 }
 
-// ─── REGISTRATION (open — no auth required) ─────────────────────────────────
+// ─── REGISTRATION (requires session auth or X-Registration-Secret) ──────────
 
-router.post('/register', bapRateLimit('register'), async (req: Request, res: Response) => {
+router.post('/register', bapRateLimit('register'), requireRegistrationAuth, async (req: Request, res: Response) => {
   try {
     const {
       name,
       description,
       owner,
       requested_permissions = [],
-      business_access = ['*'],
+      business_access = [],
       webhook_url,
       webhook_events = [],
     } = req.body as {
@@ -84,14 +88,28 @@ router.post('/register', bapRateLimit('register'), async (req: Request, res: Res
 
     if (!name) return res.status(400).json({ error: 'name is required.' });
 
+    if (webhook_url) {
+      try {
+        await assertSafeWebhookUrl(webhook_url);
+      } catch (err) {
+        if (err instanceof UnsafeWebhookUrlError) {
+          return res.status(400).json({ error: err.message });
+        }
+        throw err;
+      }
+    }
+
     const id = `agt_${crypto.randomBytes(8).toString('hex')}`;
     const rawKey = generateApiKey();
     const hash = await hashApiKey(rawKey);
     const prefix = keyPrefix(rawKey);
 
-    // For personal Blueprint instances, grant all requested permissions.
-    // A future multi-tenant mode could add admin approval here.
-    const permissions = Array.isArray(requested_permissions) ? requested_permissions : [];
+    // Self-registration never grants a wildcard permission or wildcard
+    // business access, regardless of what was requested — see
+    // bap/auth.ts's filterGrantablePermissions/filterValidBusinessIds.
+    // An operator can grant broader access afterwards via the dashboard.
+    const permissions = filterGrantablePermissions(requested_permissions);
+    const grantedBusinessAccess = filterValidBusinessIds(business_access);
 
     // Generate a webhook secret if a URL is provided
     const webhookSecret = webhook_url
@@ -107,7 +125,7 @@ router.post('/register', bapRateLimit('register'), async (req: Request, res: Res
       id, name, description ?? null, owner ?? null,
       hash, prefix,
       JSON.stringify(permissions),
-      JSON.stringify(business_access),
+      JSON.stringify(grantedBusinessAccess),
       webhook_url ?? null,
       webhookSecret,
       JSON.stringify(webhook_events),
@@ -118,7 +136,7 @@ router.post('/register', bapRateLimit('register'), async (req: Request, res: Res
       api_key: rawKey,
       api_key_prefix: prefix,
       permissions,
-      business_access,
+      business_access: grantedBusinessAccess,
       webhook_secret: webhookSecret,
       message: 'Store your API key securely — it will not be shown again.',
     });
@@ -399,8 +417,19 @@ router.patch('/signals/:signalId', requirePermission('signals:read'), (req: Requ
   try {
     const signalId = String(req.params.signalId);
     const { status, note } = req.body as { status?: string; note?: string };
-    const existing = db.prepare('SELECT * FROM signals WHERE id = ?').get(signalId);
+    const existing = db.prepare('SELECT * FROM signals WHERE id = ?').get(signalId) as Record<string, unknown> | undefined;
     if (!existing) return res.status(404).json({ error: 'Signal not found.' });
+
+    // The route above only confirmed the caller holds `signals:read` for
+    // *some* business (there's no :businessId in this path for the coarse
+    // check to scope to). Re-check against the signal's actual business
+    // now that we know it, closing the cross-tenant IDOR this route used
+    // to have.
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'signals:read', existing.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: signal does not belong to an authorized business.' });
+    }
+
     if (!status) return res.status(400).json({ error: 'status is required.' });
 
     const updates = ['status = ?'];
@@ -520,6 +549,18 @@ router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: R
       return res.status(400).json({ error: 'action must be "approve" or "reject".' });
     }
 
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+
+    // Same issue as PATCH /signals/:id — this path has no :businessId for
+    // the coarse permission check to scope to. Look the task up first and
+    // re-check against its actual business before approving/rejecting or
+    // (for approve) executing it, closing the cross-tenant IDOR.
+    const taskRow = db.prepare('SELECT business_id FROM tasks WHERE id = ?').get(taskId) as { business_id: string } | undefined;
+    if (!taskRow) return res.status(404).json({ error: `Task '${taskId}' not found.` });
+    if (!hasPermission(bapAgent, 'tasks:approve', taskRow.business_id)) {
+      return res.status(403).json({ error: 'Permission denied: task does not belong to an authorized business.' });
+    }
+
     const { approveTask, rejectTask } = await import('../tasks/task-queue.js') as unknown as {
       approveTask: (id: string, actor: string) => Record<string, unknown>;
       rejectTask: (id: string, actor: string, reason: string) => Record<string, unknown>;
@@ -528,7 +569,6 @@ router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: R
       createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
     };
 
-    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
     let task: Record<string, unknown>;
     if (action === 'approve') {
       task = approveTask(taskId, `bap:${bapAgent.id as string}`);
@@ -571,6 +611,7 @@ router.get('/businesses/:businessId/kb/file/*', requirePermission('kb:read'), as
 
     return res.json({ ...(file as Record<string, unknown>), backlinks });
   } catch (err) {
+    if (err instanceof KBPathError) return res.status(400).json({ error: err.message });
     if ((err as Error).message.includes('not found')) return res.status(404).json({ error: (err as Error).message });
     return res.status(500).json({ error: (err as Error).message });
   }
@@ -662,6 +703,7 @@ router.post('/businesses/:businessId/kb/write',
 
       return res.json({ ...written });
     } catch (err) {
+      if (err instanceof KBPathError) return res.status(400).json({ error: err.message });
       return res.status(500).json({ error: (err as Error).message });
     }
   }
@@ -725,7 +767,26 @@ router.get('/businesses/:businessId/metrics/snapshot', requirePermission('metric
 
 router.get('/businesses/:businessId/agents', requirePermission('agents:read'), (req: Request, res: Response) => {
   try {
-    const agents = db.prepare('SELECT id, name, status, last_run, next_run, run_count, total_cost_usd, acceptance_rate FROM agents').all();
+    const businessId = String(req.params.businessId);
+    // Internal agents (the `agents` table) are a shared, instance-wide
+    // roster — there is no per-business row to filter on. The previous
+    // query returned each agent's *global* run_count/total_cost_usd,
+    // which leaked aggregate usage/spend covering every business on the
+    // instance to a caller authorized for only one of them. Compute the
+    // run count/cost/last-run scoped to the caller's own business instead
+    // via agent_runs (which is genuinely business-scoped) so the response
+    // only reflects data about the business the caller has access to.
+    // `acceptance_rate` has no clean per-business equivalent and is
+    // dropped from this response rather than leaked.
+    const agents = db.prepare(`
+      SELECT
+        a.id, a.name, a.status,
+        (SELECT MAX(ar.started_at) FROM agent_runs ar WHERE ar.agent_id = a.id AND ar.business_id = ?) AS last_run,
+        a.next_run,
+        (SELECT COUNT(*) FROM agent_runs ar WHERE ar.agent_id = a.id AND ar.business_id = ?) AS run_count,
+        (SELECT COALESCE(SUM(ar.cost_usd), 0) FROM agent_runs ar WHERE ar.agent_id = a.id AND ar.business_id = ?) AS total_cost_usd
+      FROM agents a
+    `).all(businessId, businessId, businessId);
     return res.json({ agents });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -776,6 +837,21 @@ router.get('/runs/:runId', (req: Request, res: Response) => {
   try {
     const run = db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(String(req.params.runId)) as Record<string, unknown> | undefined;
     if (!run) return res.status(404).json({ error: 'Run not found.' });
+
+    // This route previously had no permission check at all — any agent
+    // holding any valid, active API key could read any business's run
+    // reasoning/cost by ID. Require agents:read scoped to the run's
+    // actual business now that we know it.
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'agents:read', run.business_id as string)) {
+      return res.status(403).json({
+        error: 'Permission denied: agents:read',
+        your_permissions: (() => {
+          try { return JSON.parse(String(bapAgent.permissions ?? '[]')); } catch { return []; }
+        })(),
+      });
+    }
+
     return res.json({
       run_id: run.id,
       agent_id: run.agent_id,
@@ -796,11 +872,22 @@ router.get('/runs/:runId', (req: Request, res: Response) => {
 
 // ─── WEBHOOK MANAGEMENT ────────────────────────────────────────────────────
 
-router.put('/me/webhook', (req: Request, res: Response) => {
+router.put('/me/webhook', async (req: Request, res: Response) => {
   try {
     const { url, secret, events } = req.body as { url?: string; secret?: string; events?: string[] };
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
     const agentId = bapAgent.id as string;
+
+    if (url) {
+      try {
+        await assertSafeWebhookUrl(url);
+      } catch (err) {
+        if (err instanceof UnsafeWebhookUrlError) {
+          return res.status(400).json({ error: err.message });
+        }
+        throw err;
+      }
+    }
 
     const updates: string[] = [];
     const values: any[] = [];
