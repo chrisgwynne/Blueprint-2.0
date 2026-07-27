@@ -1,0 +1,120 @@
+/**
+ * execution-worker.ts's recoverStuckJobs() — the crash-recovery sweep
+ * covering Phase 1 exit criteria "kill during execution + restart resumes
+ * or safely enters review" and "lost worker heartbeat -> lease expires and
+ * recovers". Exercises all three branches documented on the function:
+ *   1. external_reference already recorded -> finalise as complete, no re-run
+ *   2. internal_idempotent action, no reference -> safe to requeue
+ *   3. external_verifiable action, no reference -> manual_review (never guess)
+ */
+import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
+import db, { generateId } from '../db/db.js';
+import { recoverStuckJobs } from './execution-worker.js';
+import { enqueueExecutionJob, claimNextJob, getExecutionJob, setExternalReference } from './execution-jobs.js';
+import { getTask, createTask, type TaskRow } from './task-queue.js';
+
+const BIZ = 'biz_recovery_test';
+
+beforeAll(() => {
+  db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Recovery Test', 'recovery-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
+});
+
+afterEach(() => {
+  db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
+});
+
+/**
+ * Build an approved task and enqueue its execution job directly (the same
+ * two DB operations approveTask() performs), then force it into a stuck,
+ * lease-expired state. Deliberately does NOT call the real approveTask() —
+ * that also fires triggerWorkerTick(), which wakes the actual background
+ * execution worker via a live dynamic import of jobs/scheduler.js. In a
+ * shared-process test run that background tick can race this test's own
+ * assertions (claiming/executing the job moments after recoverStuckJobs()
+ * requeues it), which is a real behaviour in production but pure flakiness
+ * in a test that wants full control over the job's state.
+ */
+function approvedAndStuck(actionType: string): { taskId: string; jobId: string } {
+  const task = createTask({
+    business_id: BIZ,
+    title: 'Recovery fixture task',
+    proposed_by: 'test',
+    action_type: actionType,
+    action_payload: {},
+    approval_mode: 'requires_approval',
+  })!;
+  db.prepare(`UPDATE tasks SET status = 'approved', version = version + 1 WHERE id = ?`).run(task.id);
+  const approved = { ...task, status: 'approved', version: (task.version ?? 1) + 1 } as TaskRow;
+  enqueueExecutionJob(approved);
+
+  const job = db.prepare(`SELECT id FROM execution_jobs WHERE task_id = ?`).get(task.id) as { id: string };
+  claimNextJob('dead-worker');
+  db.prepare(`UPDATE execution_jobs SET status = 'executing', lease_expires_at = ? WHERE id = ?`)
+    .run(new Date(Date.now() - 60_000).toISOString(), job.id);
+  db.prepare(`UPDATE tasks SET status = 'executing' WHERE id = ?`).run(task.id);
+
+  return { taskId: task.id, jobId: job.id };
+}
+
+describe('recoverStuckJobs', () => {
+  test('a stuck job with an already-recorded external_reference is finalised as complete, not re-run', async () => {
+    const { taskId, jobId } = approvedAndStuck('github_issue'); // external_verifiable
+    setExternalReference(jobId, { issue_number: 7, repo: 'acme/widgets' });
+
+    const stats = await recoverStuckJobs();
+    expect(stats.recovered).toBe(1);
+    expect(stats.requeued).toBe(0);
+    expect(stats.manualReview).toBe(0);
+
+    expect(getTask(taskId)?.status).toBe('complete');
+    expect(getExecutionJob(jobId)?.status).toBe('succeeded');
+  });
+
+  test('a stuck internal_idempotent job with no external reference is safely requeued for a fresh attempt', async () => {
+    const { taskId, jobId } = approvedAndStuck('kb_write'); // not in EXTERNAL_VERIFIABLE_ACTIONS
+
+    const stats = await recoverStuckJobs();
+    expect(stats.recovered).toBe(0);
+    expect(stats.requeued).toBe(1);
+    expect(stats.manualReview).toBe(0);
+
+    expect(getTask(taskId)?.status).toBe('approved'); // recovery-only transition back
+    expect(getExecutionJob(jobId)?.status).toBe('queued');
+  });
+
+  test('a stuck external-write job with no reference is sent to manual review, never blindly retried', async () => {
+    const { taskId, jobId } = approvedAndStuck('shopify_product_create'); // external_verifiable
+
+    const stats = await recoverStuckJobs();
+    expect(stats.recovered).toBe(0);
+    expect(stats.requeued).toBe(0);
+    expect(stats.manualReview).toBe(1);
+
+    expect(getTask(taskId)?.status).toBe('manual_review');
+    expect(getExecutionJob(jobId)?.status).toBe('manual_review');
+  });
+
+  test('a job whose lease has not expired is left untouched', async () => {
+    const task = createTask({
+      business_id: BIZ, title: 'Live lease fixture', proposed_by: 'test',
+      action_type: 'kb_write', action_payload: {}, approval_mode: 'requires_approval',
+    })!;
+    db.prepare(`UPDATE tasks SET status = 'approved', version = version + 1 WHERE id = ?`).run(task.id);
+    enqueueExecutionJob({ ...task, status: 'approved', version: (task.version ?? 1) + 1 } as TaskRow);
+    claimNextJob('live-worker'); // lease is in the future by default
+
+    const stats = await recoverStuckJobs();
+    expect(stats.recovered + stats.requeued + stats.manualReview).toBe(0);
+  });
+
+  test('two concurrent recovery sweeps do not double-process the same stuck job', async () => {
+    const { jobId } = approvedAndStuck('kb_write');
+
+    const [a, b] = await Promise.all([recoverStuckJobs(), recoverStuckJobs()]);
+    const totalRequeued = a.requeued + b.requeued;
+    expect(totalRequeued).toBe(1); // exactly one sweep actually reclaimed and acted on it
+
+    expect(getExecutionJob(jobId)?.status).toBe('queued');
+  });
+});

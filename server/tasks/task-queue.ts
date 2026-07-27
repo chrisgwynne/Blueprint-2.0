@@ -1,4 +1,5 @@
 import db, { generateId, audit } from '../db/db.js';
+import { enqueueExecutionJob, getActiveJobForTask, cancelJob as cancelExecutionJob } from './execution-jobs.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,7 +13,9 @@ export type TaskStatus =
   | 'rejected'
   | 'verified'
   | 'deferred'
-  | 'draft_ready';
+  | 'draft_ready'
+  | 'cancelled'
+  | 'manual_review';
 
 export interface TaskRow {
   id: string;
@@ -34,6 +37,8 @@ export interface TaskRow {
   outcome_data: unknown;
   approval_mode: string;
   degraded_data: number;
+  version: number;
+  approved_payload_snapshot: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -82,9 +87,17 @@ function fireWebhook(event: string, data: unknown): void {
 }
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  proposed: ['approved', 'rejected'],
-  approved: ['executing', 'rejected'],
-  executing: ['complete', 'failed', 'draft_ready'],
+  proposed: ['approved', 'rejected', 'cancelled'],
+  approved: ['executing', 'rejected', 'cancelled'],
+  // 'approved' here is deliberately narrow: it's ONLY used by
+  // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
+  // (its job's lease expired mid-execution, and the recovery classifier
+  // determined a fresh attempt is safe — see execution-safety.ts) back at
+  // the exact state executeTask()'s own approved-only guard requires
+  // before it will run at all. No other code path performs this
+  // transition — a normal 'executing' task cannot be pushed back to
+  // 'approved' by an API call.
+  executing: ['complete', 'failed', 'draft_ready', 'blocked', 'manual_review', 'approved'],
   draft_ready: ['complete', 'failed'], // human reviews the draft, then marks complete or rejects
   complete: ['verified'],
   failed: ['proposed'], // allow retry
@@ -92,6 +105,11 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   rejected: [],
   verified: [],
   deferred: ['proposed', 'rejected'], // Brain may defer; resurface on schedule
+  cancelled: [],
+  // A crash-recovery-flagged ambiguous outcome (execution-jobs.ts:markManualReview)
+  // — a human must look at the actual external system and tell Blueprint
+  // what happened before anything automated touches this task again.
+  manual_review: ['proposed', 'cancelled', 'failed'],
 };
 
 function safeJSON<T>(raw: unknown, fallback: T): T {
@@ -111,6 +129,7 @@ function parseRow(row: Record<string, unknown> | null): TaskRow | null {
     action_payload: safeJSON<Record<string, unknown>>(row.action_payload, {}),
     outcome_data: safeJSON<unknown>(row.outcome_data, null),
     rollback_data: safeJSON<unknown>(row.rollback_data, null),
+    approved_payload_snapshot: safeJSON<Record<string, unknown> | null>(row.approved_payload_snapshot, null),
   };
 }
 
@@ -331,44 +350,118 @@ export function updateTaskStatus(
   return after;
 }
 
+// Lazy import for waking the execution worker immediately after enqueueing
+// (avoids circular dependency at startup, same pattern as fireWebhook).
+function triggerWorkerTick(): void {
+  import('../jobs/scheduler.js')
+    .then((m) => { (m as unknown as { runExecutionWorkerTickNow?: () => void }).runExecutionWorkerTickNow?.(); })
+    .catch(() => {});
+}
+
 /**
- * Approve a task. Validates trust_tier enforcement.
- * Green + auto mode → immediately transitions to 'executing'.
+ * Approve a task.
+ *
+ * This is THE canonical approval path — the dashboard, BAP, Telegram, and
+ * every other surface all call this one function and nothing else (no
+ * separate executeTask() call). It atomically:
+ *   1. Compare-and-swaps status 'proposed' -> 'approved' (the WHERE
+ *      status='proposed' clause is what makes this safe under concurrent
+ *      approval attempts — e.g. dashboard and Telegram approving the same
+ *      task at the same moment: exactly one UPDATE matches a row, the
+ *      other sees changes=0 and reports "already approved/not proposed").
+ *   2. Bumps the task's version and snapshots action_payload into
+ *      approved_payload_snapshot — the execution job created in the same
+ *      transaction is bound to this exact version/snapshot, so nothing
+ *      that happens to the live task row afterwards can change what gets
+ *      executed.
+ *   3. Enqueues exactly one execution_jobs row (enforced by a unique
+ *      partial index, not just this function's own logic).
+ * Trust-tier/approval-mode no longer branches into a separate immediate-
+ * execution path (green+auto used to call updateTaskStatus(...,'executing',...)
+ * directly here) — every approved task goes through the same queued job,
+ * durable and crash-recoverable. The execution worker is woken immediately
+ * afterwards for low latency, but is not relied upon for correctness: the
+ * scheduled worker tick picks up any job the immediate wake-up call missed
+ * (e.g. because the process crashed right after this function returned).
  */
 export function approveTask(id: string, approvedBy: string): TaskRow | null {
-  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string; trust_tier: string; approval_mode: string; action_type: string | null } | null;
-  if (!existing) throw new Error(`Task '${id}' not found.`);
+  const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string; trust_tier: string; approval_mode: string; action_type: string | null; action_payload: string } | null;
+  if (!existingRaw) throw new Error(`Task '${id}' not found.`);
+  const existing = parseRow(existingRaw)!;
 
-  if (existing.status !== 'proposed') {
-    throw new Error(`Cannot approve task in status '${existing.status}'. Task must be 'proposed'.`);
-  }
+  const runApproval = db.transaction(() => {
+    const now = new Date().toISOString();
+    const result = db.prepare(`
+      UPDATE tasks SET
+        status = 'approved',
+        approved_by = ?,
+        approved_at = ?,
+        updated_at = ?,
+        version = version + 1,
+        approved_payload_snapshot = ?
+      WHERE id = ? AND status = 'proposed'
+    `).run(approvedBy, now, now, JSON.stringify(existing.action_payload ?? {}), id);
 
-  const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE tasks SET
-      status = 'approved',
-      approved_by = ?,
-      approved_at = ?,
-      updated_at = ?
-    WHERE id = ?
-  `).run(approvedBy, now, now, id);
+    if (!result.changes) {
+      // CAS lost — re-check current status for an accurate error message.
+      const current = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus };
+      throw new Error(`Cannot approve task in status '${current.status}'. Task must be 'proposed'.`);
+    }
 
-  const before = parseRow(existing);
-  let after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
-  audit(existing.business_id, 'task', id, 'approve', approvedBy, before, after);
+    const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
+    enqueueExecutionJob(after);
+    return after;
+  });
 
-  // Dispatch BAP webhook
+  const after = runApproval();
+
+  audit(existing.business_id, 'task', id, 'approve', approvedBy, existing, after);
+
   fireWebhook('task.approved', {
     task_id: id, business_id: existing.business_id,
     title: existing.title, approved_by: approvedBy,
     action_type: existing.action_type,
   });
 
-  // Auto-execute green tasks in auto approval mode
-  if (existing.trust_tier === 'green' && existing.approval_mode === 'auto') {
-    after = updateTaskStatus(id, 'executing', approvedBy, {});
+  triggerWorkerTick();
+
+  return after;
+}
+
+/**
+ * Cancel a task that hasn't started executing yet (proposed/approved), or
+ * whose execution job is sitting in manual_review awaiting a human
+ * decision. A task already 'executing' cannot be cancelled through this
+ * path — see execution-jobs.ts's job states for why (it may be mid
+ * external-write; cancelling blindly would risk exactly the ambiguity
+ * this whole framework exists to avoid).
+ */
+export function cancelTask(id: string, cancelledBy: string, reason = ''): TaskRow | null {
+  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string } | null;
+  if (!existing) throw new Error(`Task '${id}' not found.`);
+
+  const allowedFromStatuses: TaskStatus[] = ['proposed', 'approved', 'manual_review'];
+  if (!allowedFromStatuses.includes(existing.status)) {
+    throw new Error(`Cannot cancel task in status '${existing.status}'. Task must be 'proposed', 'approved', or 'manual_review'.`);
   }
 
+  const runCancel = db.transaction(() => {
+    const result = db.prepare(`
+      UPDATE tasks SET status = 'cancelled', rejection_reason = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status IN ('proposed', 'approved', 'manual_review')
+    `).run(reason, id);
+    if (!result.changes) {
+      const current = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus };
+      throw new Error(`Cannot cancel task in status '${current.status}'.`);
+    }
+    const activeJob = getActiveJobForTask(id);
+    if (activeJob) cancelExecutionJob(activeJob.id);
+    return parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>);
+  });
+
+  const after = runCancel();
+  audit(existing.business_id as string, 'task', id, 'cancel', cancelledBy, parseRow(existing), after, { reason });
+  fireWebhook('task.cancelled', { task_id: id, business_id: existing.business_id, cancelled_by: cancelledBy, reason });
   return after;
 }
 

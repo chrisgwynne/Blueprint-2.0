@@ -619,6 +619,82 @@ const STARTUP_MIGRATIONS: string[] = [
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS idx_agent_lifecycle_events_agent ON agent_lifecycle_events(agent_id, created_at DESC)`,
+
+  // ─── Autonomous execution reliability (idempotency, atomic queueing,
+  // leases, crash recovery) ─────────────────────────────────────────────────
+
+  // Generic BAP request-idempotency store. Scoped by (agent_id, scope,
+  // idempotency_key) — the same key from two different agents, or reused
+  // for two different operation types, are different claims.
+  `CREATE TABLE IF NOT EXISTS idempotency_keys (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_fingerprint TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'in_progress',
+    response_status INTEGER,
+    response_body JSON,
+    resource_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME,
+    expires_at DATETIME NOT NULL
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_claim ON idempotency_keys(agent_id, scope, idempotency_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON idempotency_keys(expires_at)`,
+
+  // Durable execution jobs — the single record of "this approved task
+  // needs to be executed" / "is being executed" / "was executed". Created
+  // atomically with approval (task-queue.ts:approveTask), claimed by a
+  // worker via a leased compare-and-swap, and the sole trigger for
+  // executor.ts:executeTask() — see jobs/scheduler.ts's execution worker.
+  `CREATE TABLE IF NOT EXISTS execution_jobs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES tasks(id),
+    task_version INTEGER NOT NULL DEFAULT 1,
+    business_id TEXT NOT NULL,
+    action_type TEXT,
+    status TEXT NOT NULL DEFAULT 'queued',
+    lease_owner TEXT,
+    lease_expires_at DATETIME,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 5,
+    next_attempt_at DATETIME,
+    external_reference JSON,
+    last_error TEXT,
+    result JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  // At most one *active* (non-terminal) job per task at a time — this is
+  // the "exactly one execution job per approved task/version" guarantee.
+  // Terminal jobs (succeeded/failed/dead_letter/cancelled) are excluded so
+  // history can accumulate (e.g. after a manual retry creates a fresh job).
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_jobs_one_active_per_task
+     ON execution_jobs(task_id)
+     WHERE status IN ('queued', 'leased', 'executing', 'manual_review')`,
+  `CREATE INDEX IF NOT EXISTS idx_execution_jobs_business ON execution_jobs(business_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_execution_jobs_claimable ON execution_jobs(status, next_attempt_at)`,
+
+  // Task table additions: a monotonic version bumped on every approval (so
+  // an execution job can be bound to the exact approval it came from), and
+  // an immutable snapshot of action_payload taken at approval time (so a
+  // later mutation of the live task row — if one were ever added — can
+  // never change what an already-approved job executes).
+  `ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
+  `ALTER TABLE tasks ADD COLUMN approved_payload_snapshot JSON`,
+
+  // Single global renewable leader lease. Every scheduled job (cron
+  // callback or the execution-job worker tick) checks this before doing
+  // any work; only the current holder proceeds. TTL-based, so a crashed
+  // holder's lease simply expires and another instance takes over — no
+  // manual intervention needed. See jobs/scheduler-lock.ts.
+  `CREATE TABLE IF NOT EXISTS scheduler_locks (
+    lock_name TEXT PRIMARY KEY,
+    owner TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

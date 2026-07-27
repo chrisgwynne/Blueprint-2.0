@@ -487,6 +487,35 @@ const connector = {
     return res.json();
   },
 
+  /**
+   * Best-effort pre-flight/recovery check: does a product/page/article
+   * created within the last `windowMinutes` already contain `marker` in
+   * its body? Used by tasks/execution-safety.ts before creating one of
+   * these resources, and during crash recovery, so a retry doesn't
+   * blindly duplicate a create call that already succeeded.
+   *
+   * Bounded to recently-created items (via created_at_min) rather than a
+   * full catalogue search — proportionate for its actual purpose (did
+   * *this* create call already happen a few minutes ago), not a general
+   * content-search feature.
+   */
+  async findRecentByMarker(
+    credentials: Creds,
+    resourcePath: 'products' | 'pages' | `blogs/${number | string}/articles`,
+    bodyField: 'body_html',
+    marker: string,
+    windowMinutes = 30,
+  ): Promise<{ id: number; url_field: string } | null> {
+    const since = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+    const res = await shopifyFetch(credentials, `/${resourcePath}.json?created_at_min=${encodeURIComponent(since)}&limit=250`);
+    if (!res.ok) return null;
+    const data = await res.json() as Record<string, Array<Record<string, unknown>>>;
+    const items = data[Object.keys(data)[0] ?? ''] ?? [];
+    const match = items.find((item) => typeof item[bodyField] === 'string' && (item[bodyField] as string).includes(marker));
+    if (!match) return null;
+    return { id: match.id as number, url_field: (match.handle as string) ?? '' };
+  },
+
   // ─── COLLECTIONS ───────────────────────────────────────────────────────────
 
   async fetchCollections(credentials: Creds): Promise<unknown[]> {

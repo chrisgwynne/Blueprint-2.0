@@ -5,8 +5,25 @@ import { runConductorAllBusinesses } from '../agents/conductor.js';
 import crypto from 'crypto';
 import type { Connector } from '../types/db.js';
 import type { ConnectorInterface } from '../connectors/connector.interface.js';
+import { withLeaderLock, tryAcquireOrRenewLeaderLock } from './scheduler-lock.js';
+import { runExecutionWorkerTick, recoverStuckJobs } from '../tasks/execution-worker.js';
+import { pruneExpiredIdempotencyKeys } from '../lib/idempotency.js';
 
 let schedulerStarted = false;
+
+/**
+ * Every cron registration in this file goes through this wrapper instead
+ * of calling node-cron's `cron.schedule` directly — it's the same
+ * function, plus a leader-lock guard (scheduler-lock.ts) so that if two
+ * Blueprint processes are ever running against the same database, only
+ * the one currently holding the lease actually does the work on a given
+ * tick. The other simply no-ops that tick rather than duplicating a
+ * connector sync, an agent run, an outcome check, or (most importantly)
+ * an execution-job claim.
+ */
+function scheduleWithLock(pattern: string, fn: () => void | Promise<void>, options?: Parameters<typeof cron.schedule>[2]): void {
+  cron.schedule(pattern, withLeaderLock(fn), options);
+}
 
 /**
  * Sync a single connector by loading its implementation and running fetch.
@@ -217,7 +234,7 @@ export function startScheduler(): void {
   console.log('[scheduler] Starting Blueprint scheduler...');
 
   // Every 15 minutes: check connector polling intervals, sync due connectors
-  cron.schedule('*/15 * * * *', async () => {
+  scheduleWithLock('*/15 * * * *', async () => {
     console.log('[scheduler] Running connector poll check...');
     try {
       const connectors = db.prepare(`SELECT * FROM connectors WHERE status != 'disconnected'`).all() as Connector[];
@@ -255,7 +272,7 @@ export function startScheduler(): void {
   });
 
   // Every hour: check for stale connectors
-  cron.schedule('30 * * * *', async () => {
+  scheduleWithLock('30 * * * *', async () => {
     try {
       const thresholds: Record<string, number> = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
       const connectors = db.prepare(`
@@ -289,7 +306,7 @@ export function startScheduler(): void {
   });
 
   // Conductor safety-net — every 15 minutes, work-gated.
-  cron.schedule('*/15 * * * *', async () => {
+  scheduleWithLock('*/15 * * * *', async () => {
     try {
       const { hasWorkToDo } = await import('../agents/work-checker.js') as any;
       const businesses = db.prepare('SELECT id, slug FROM businesses').all() as any[];
@@ -320,7 +337,7 @@ export function startScheduler(): void {
   });
 
   // Per-agent safety-net — every 5 minutes
-  cron.schedule('*/5 * * * *', async () => {
+  scheduleWithLock('*/5 * * * *', async () => {
     try {
       const { hasWorkToDo, _internal } = await import('../agents/work-checker.js') as any;
       const { getPollInterval } = await import('../agents/poll-intervals.js') as any;
@@ -364,7 +381,7 @@ export function startScheduler(): void {
   });
 
   // Every day at 06:00: full connector sync
-  cron.schedule('0 6 * * *', async () => {
+  scheduleWithLock('0 6 * * *', async () => {
     console.log('[scheduler] Running daily full connector sync...');
     try {
       const connectors = db.prepare(`SELECT * FROM connectors`).all() as Connector[];
@@ -385,7 +402,7 @@ export function startScheduler(): void {
   // blob) and grows without bound otherwise. Named metrics are kept longer
   // than the heavy `*_sync` raw blobs. Retention is configurable via the
   // settings keys metrics_retention_days / sync_blob_retention_days.
-  cron.schedule('30 4 * * *', () => {
+  scheduleWithLock('30 4 * * *', () => {
     try {
       const getSetting = (key: string, fallback: number): number => {
         try {
@@ -417,7 +434,7 @@ export function startScheduler(): void {
   });
 
   // Every 5 minutes: process timed approvals
-  cron.schedule('*/5 * * * *', async () => {
+  scheduleWithLock('*/5 * * * *', async () => {
     try {
       const results = await processTimedApproval();
       if (results.length > 0) {
@@ -429,7 +446,7 @@ export function startScheduler(): void {
   });
 
   // Weekly outcome attribution checks — Monday 9am
-  cron.schedule('0 9 * * 1', async () => {
+  scheduleWithLock('0 9 * * 1', async () => {
     try {
       const { runOutcomeChecks } = await import('../tasks/outcomes.js') as any;
       const checked = runOutcomeChecks();
@@ -440,7 +457,7 @@ export function startScheduler(): void {
   });
 
   // Weekly goal progress check — Monday 8am
-  cron.schedule('0 8 * * 1', async () => {
+  scheduleWithLock('0 8 * * 1', async () => {
     try {
       const { checkAllGoals } = await import('../goals/goal-engine.js') as any;
       const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
@@ -455,7 +472,7 @@ export function startScheduler(): void {
   });
 
   // Weekly goal suggestions scan — Wednesday 9am
-  cron.schedule('0 9 * * 3', async () => {
+  scheduleWithLock('0 9 * * 3', async () => {
     try {
       const { scanForGoalSuggestions } = await import('../brain/goal-suggester.js') as any;
       const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
@@ -475,7 +492,7 @@ export function startScheduler(): void {
   });
 
   // Monthly retrospective — 1st of every month at 06:00
-  cron.schedule('0 6 1 * *', async () => {
+  scheduleWithLock('0 6 1 * *', async () => {
     try {
       const { runRetrospective } = await import('../brain/retrospective-engine.js') as any;
       const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
@@ -493,7 +510,7 @@ export function startScheduler(): void {
   });
 
   // Weekly goal conflict audit — Monday 7am
-  cron.schedule('0 7 * * 1', async () => {
+  scheduleWithLock('0 7 * * 1', async () => {
     try {
       const { auditAllGoalConflicts, autoResolveStale } = await import('../brain/conflict-engine.js') as any;
       autoResolveStale();
@@ -509,7 +526,7 @@ export function startScheduler(): void {
   });
 
   // Weekly strategic goal-reasoning refresh — Monday 6am
-  cron.schedule('0 6 * * 1', async () => {
+  scheduleWithLock('0 6 * * 1', async () => {
     try {
       const { runGoalReasoning } = await import('../brain/goal-reasoner.js') as any;
       const goals = db.prepare(
@@ -531,7 +548,7 @@ export function startScheduler(): void {
   });
 
   // Brain — every morning at 07:00
-  cron.schedule('0 7 * * *', async () => {
+  scheduleWithLock('0 7 * * *', async () => {
     try {
       const { processDeferredTasks } = await import('../brain/restraint.js') as any;
       const { markMeasurementReady } = await import('../brain/action-windows.js') as any;
@@ -544,7 +561,7 @@ export function startScheduler(): void {
   });
 
   // Brain — weekly seasonal pattern detection (Sunday 04:00)
-  cron.schedule('0 4 * * 0', async () => {
+  scheduleWithLock('0 4 * * 0', async () => {
     try {
       const { detectSeasonalPatterns } = await import('../brain/seasonality.js') as any;
       const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
@@ -557,7 +574,7 @@ export function startScheduler(): void {
   });
 
   // Nightly KB lint + auto-fix — runs at 2am every night
-  cron.schedule('0 2 * * *', async () => {
+  scheduleWithLock('0 2 * * *', async () => {
     console.log('[scheduler] Running nightly KB lint + auto-fix...');
     try {
       const { getKBForBusiness } = await import('../kb/kb-config.js') as any;
@@ -611,7 +628,7 @@ export function startScheduler(): void {
   });
 
   // Every 5 minutes: retry failed BAP webhook deliveries
-  cron.schedule('*/5 * * * *', async () => {
+  scheduleWithLock('*/5 * * * *', async () => {
     try {
       const { retryPendingDeliveries } = await import('../bap/webhook-dispatcher.js') as any;
       const retried = await retryPendingDeliveries();
@@ -624,7 +641,7 @@ export function startScheduler(): void {
   });
 
   // Weekly full-KB analysis — Sunday at 4am
-  cron.schedule('0 4 * * 0', async () => {
+  scheduleWithLock('0 4 * * 0', async () => {
     console.log('[scheduler] Running weekly KB analysis pass...');
     try {
       const { analyseKBForSignals } = await import('../kb/kb-analyser.js') as any;
@@ -649,7 +666,7 @@ export function startScheduler(): void {
   });
 
   // Weekly git maintenance — Sunday 3am
-  cron.schedule('0 3 * * 0', async () => {
+  scheduleWithLock('0 3 * * 0', async () => {
     try {
       const { existsSync, statSync } = await import('fs');
       const { resolve, join } = await import('path');
@@ -673,5 +690,63 @@ export function startScheduler(): void {
     }
   });
 
+  // ─── Autonomous execution reliability ─────────────────────────────────────
+
+  // Execution-job worker: claims and runs queued jobs (approveTask() also
+  // wakes this immediately via runExecutionWorkerTickNow — this interval
+  // is the durability fallback, so a claim is never missed for longer
+  // than a minute even if the immediate wake-up is itself lost to a
+  // crash right after approval).
+  scheduleWithLock('* * * * *', async () => {
+    try {
+      const { claimed } = await runExecutionWorkerTick();
+      if (claimed > 0) console.log(`[scheduler] Execution worker: ran ${claimed} job(s).`);
+    } catch (err: any) {
+      console.error('[scheduler] Execution worker tick failed:', err.message);
+    }
+  });
+
+  // Crash recovery: jobs whose lease expired mid-execution. Runs less
+  // often than the worker tick — lease expiry (2 min default, see
+  // execution-jobs.ts's DEFAULT_LEASE_MS) is the signal something died,
+  // so this only needs to run roughly that often.
+  scheduleWithLock('*/2 * * * *', async () => {
+    try {
+      const stats = await recoverStuckJobs();
+      if (stats.recovered + stats.requeued + stats.manualReview > 0) {
+        console.log(`[scheduler] Crash recovery: ${stats.recovered} recovered, ${stats.requeued} requeued, ${stats.manualReview} sent to manual review.`);
+      }
+    } catch (err: any) {
+      console.error('[scheduler] Crash recovery sweep failed:', err.message);
+    }
+  });
+
+  // Idempotency-key housekeeping — daily.
+  scheduleWithLock('0 5 * * *', () => {
+    try {
+      const pruned = pruneExpiredIdempotencyKeys();
+      if (pruned > 0) console.log(`[scheduler] Pruned ${pruned} expired idempotency key(s).`);
+    } catch (err: any) {
+      console.error('[scheduler] Idempotency key pruning failed:', err.message);
+    }
+  });
+
   console.log('[scheduler] All jobs scheduled. Ready.');
+}
+
+/**
+ * Wake the execution worker immediately rather than waiting for the next
+ * scheduled tick — called by task-queue.ts:approveTask right after it
+ * enqueues a job, for low latency in the common (no-crash) case. Not
+ * relied on for correctness: if this call is itself lost (e.g. the
+ * process crashes right after approveTask returns), the scheduled tick
+ * above picks the job up within a minute regardless. Still respects the
+ * leader lock — a non-leader instance does not run jobs just because a
+ * local approveTask() call happened to fire on it.
+ */
+export function runExecutionWorkerTickNow(): void {
+  if (!tryAcquireOrRenewLeaderLock()) return;
+  runExecutionWorkerTick().catch((err: Error) => {
+    console.error('[scheduler] Immediate execution worker wake-up failed:', err.message);
+  });
 }

@@ -17,6 +17,8 @@ import { updateTaskStatus } from './task-queue.js';
 import { createBlueprintIssue } from '../lib/blueprint-github.js';
 import { createTaskEvent } from './task-events.js';
 import { parseJson } from '../types/shared.js';
+import { classifyAction, buildIdempotencyMarker } from './execution-safety.js';
+import { setExternalReference, type ExecutionJobRow } from './execution-jobs.js';
 import type * as GithubModule from '../connectors/github/index.js';
 import type * as WixModule from '../connectors/wix/index.js';
 import type * as ShopifyModule from '../connectors/shopify/index.js';
@@ -56,6 +58,7 @@ interface Task {
   estimated_impact?: string | null;
   rollback_data?: string | null;
   project_id?: string | null;
+  version?: number;
   [key: string]: unknown;
 }
 
@@ -165,7 +168,7 @@ function loadConnector(businessId: string, type: string): { connector: Connector
 
 // ─── Action handlers ──────────────────────────────────────────────────────────
 
-function buildIssueBody(task: Task): string {
+function buildIssueBody(task: Task, marker?: string): string {
   const lines: (string | null)[] = [
     '## Auto-created by Blueprint',
     '',
@@ -184,10 +187,15 @@ function buildIssueBody(task: Task): string {
     lines.push('', '---', '', '## Estimated impact', '', task.estimated_impact);
   }
   lines.push('', '---', '', `_Created automatically by Blueprint on ${new Date().toISOString()}_`);
+  // Idempotency marker (execution-safety.ts) — invisible in rendered
+  // Markdown, greppable via the GitHub Search API so a retry after a
+  // crash can verify whether this exact create call already succeeded
+  // before creating a duplicate.
+  if (marker) lines.push('', `<!-- ${marker} -->`);
   return lines.filter((l): l is string => l !== null).join('\n');
 }
 
-async function executeGithubIssue(task: Task): Promise<ExecuteResult> {
+async function executeGithubIssue(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   const { credentials, config } = loadConnector(task.business_id, 'github');
 
@@ -203,9 +211,30 @@ async function executeGithubIssue(task: Task): Promise<ExecuteResult> {
   if (!repo) throw new Error('GitHub repo is required (in task action_payload.repo or connector config.repos).');
 
   const { default: github } = await import('../connectors/github/index.js') as typeof GithubModule;
+
+  // External-write safety pre-flight (execution-safety.ts): if Blueprint's
+  // own job record already has a reference, or the provider already has
+  // an issue bearing this task's idempotency marker (e.g. the create call
+  // succeeded just before a crash, before Blueprint could persist the
+  // reference), adopt it instead of creating a second issue.
+  const marker = buildIdempotencyMarker(task.id, task.version ?? 1);
+  const existingRef = job?.external_reference;
+  if (existingRef?.issue_number) {
+    return {
+      outcome: `GitHub issue #${existingRef.issue_number} already created in ${existingRef.repo} (recovered from prior attempt)`,
+      outcome_data: existingRef,
+    };
+  }
+  const found = await (github as unknown as { searchByMarker: (c: unknown, o: string, r: string, m: string, t: 'issue' | 'pr') => Promise<{ number: number; html_url: string; state: string } | null> })
+    .searchByMarker(credentials, owner, repo, marker, 'issue').catch(() => null);
+  if (found?.number) {
+    const recovered = { issue_number: found.number, issue_url: found.html_url, repo: `${owner}/${repo}`, state: found.state };
+    return { outcome: `GitHub issue #${found.number} already exists in ${owner}/${repo} (verified via marker, not re-created)`, outcome_data: recovered };
+  }
+
   const issue = await github.createIssue(credentials, owner, repo, {
     title: (payload.title ?? task.title) as string,
-    body: (payload.body as string | undefined) ?? buildIssueBody(task),
+    body: (payload.body as string | undefined) ?? buildIssueBody(task, marker),
     labels: (payload.labels as string[] | undefined) ?? [
       'blueprint/auto-created',
       `blueprint/agent-${task.proposed_by}`,
@@ -228,7 +257,7 @@ async function executeGithubIssue(task: Task): Promise<ExecuteResult> {
   };
 }
 
-async function executeGithubPR(task: Task): Promise<ExecuteResult> {
+async function executeGithubPR(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   if (!payload.head) throw new Error('github_pr requires action_payload.head (branch with changes).');
 
@@ -238,9 +267,25 @@ async function executeGithubPR(task: Task): Promise<ExecuteResult> {
   if (!owner || !repo) throw new Error('github_pr requires owner + repo (in action_payload or connector config).');
 
   const { default: github } = await import('../connectors/github/index.js') as typeof GithubModule;
+
+  const marker = buildIdempotencyMarker(task.id, task.version ?? 1);
+  const existingRef = job?.external_reference;
+  if (existingRef?.pr_number) {
+    return {
+      outcome: `GitHub PR #${existingRef.pr_number} already created in ${existingRef.repo} (recovered from prior attempt)`,
+      outcome_data: existingRef,
+    };
+  }
+  const found = await (github as unknown as { searchByMarker: (c: unknown, o: string, r: string, m: string, t: 'issue' | 'pr') => Promise<{ number: number; html_url: string; state: string } | null> })
+    .searchByMarker(credentials, owner, repo, marker, 'pr').catch(() => null);
+  if (found?.number) {
+    const recovered = { pr_number: found.number, pr_url: found.html_url, repo: `${owner}/${repo}`, state: found.state };
+    return { outcome: `GitHub PR #${found.number} already exists in ${owner}/${repo} (verified via marker, not re-created)`, outcome_data: recovered };
+  }
+
   const pr = await github.createPR(credentials, owner, repo, {
     title: (payload.title ?? task.title) as string,
-    body:  (payload.body as string | undefined) ?? buildIssueBody(task),
+    body:  (payload.body as string | undefined) ?? buildIssueBody(task, marker),
     head:  payload.head as string,
     base:  (payload.base as string | undefined) ?? 'main',
     draft: (payload.draft as boolean | undefined) ?? true, // always draft — human reviews
@@ -779,13 +824,25 @@ async function getShopify(task: Task): Promise<{ shopify: Record<string, unknown
   return { shopify: shopify as unknown as Record<string, unknown>, credentials, config };
 }
 
-async function executeShopifyProductCreate(task: Task): Promise<ExecuteResult> {
+async function executeShopifyProductCreate(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   const { shopify, credentials, config } = await getShopify(task);
 
+  const marker = buildIdempotencyMarker(task.id, task.version ?? 1);
+  const existingRef = job?.external_reference;
+  if (existingRef?.product_id) {
+    return { outcome: `Shopify product already created (recovered from prior attempt): ${existingRef.product_id}`, outcome_data: existingRef };
+  }
+  const recovered = await (shopify as Record<string, unknown> & { findRecentByMarker(creds: Record<string, string>, path: string, field: 'body_html', marker: string): Promise<{ id: number } | null> })
+    .findRecentByMarker(credentials, 'products', 'body_html', marker).catch(() => null);
+  if (recovered?.id) {
+    const ref = { product_id: String(recovered.id), admin_url: `https://${credentials.shopDomain}/admin/products/${recovered.id}`, status: 'draft' };
+    return { outcome: `Shopify product already exists (verified via marker, not re-created): ${recovered.id}`, outcome_data: ref };
+  }
+
   const result = await (shopify as Record<string, unknown> & { createProduct(creds: Record<string, string>, config: Record<string, unknown>, data: Record<string, unknown>): Promise<{ product?: { id: string; title: string } }> }).createProduct(credentials, config, {
     title: (payload.title ?? task.title) as string,
-    body_html: (payload.description ?? payload.body_html ?? task.description ?? '') as string,
+    body_html: `${(payload.description ?? payload.body_html ?? task.description ?? '') as string}\n<!-- ${marker} -->`,
     product_type: (payload.product_type as string | undefined) ?? null,
     tags: Array.isArray(payload.tags) ? (payload.tags as string[]).join(', ') : (payload.tags as string | undefined) ?? '',
     variants: (payload.variants as unknown[] | undefined) ?? [{ price: (payload.price as string | undefined) ?? '0.00' }],
@@ -858,13 +915,25 @@ async function executeShopifyProductUpdate(task: Task): Promise<ExecuteResult> {
   };
 }
 
-async function executeShopifyPageCreate(task: Task): Promise<ExecuteResult> {
+async function executeShopifyPageCreate(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   const { shopify, credentials, config } = await getShopify(task);
 
+  const marker = buildIdempotencyMarker(task.id, task.version ?? 1);
+  const existingRef = job?.external_reference;
+  if (existingRef?.page_id) {
+    return { outcome: `Shopify page already created (recovered from prior attempt): ${existingRef.page_id}`, outcome_data: existingRef };
+  }
+  const recovered = await (shopify as Record<string, unknown> & { findRecentByMarker(creds: Record<string, string>, path: string, field: 'body_html', marker: string): Promise<{ id: number } | null> })
+    .findRecentByMarker(credentials, 'pages', 'body_html', marker).catch(() => null);
+  if (recovered?.id) {
+    const ref = { page_id: String(recovered.id), admin_url: `https://${credentials.shopDomain}/admin/pages/${recovered.id}`, status: 'draft' };
+    return { outcome: `Shopify page already exists (verified via marker, not re-created): ${recovered.id}`, outcome_data: ref };
+  }
+
   const result = await (shopify as Record<string, unknown> & { createPage(creds: Record<string, string>, config: Record<string, unknown>, data: Record<string, unknown>): Promise<{ page?: { id: string; title: string } }> }).createPage(credentials, config, {
     title: (payload.title ?? task.title) as string,
-    body_html: (payload.body_html ?? task.description ?? '') as string,
+    body_html: `${(payload.body_html ?? task.description ?? '') as string}\n<!-- ${marker} -->`,
     handle: (payload.handle as string | undefined) ?? null,
     author: 'Blueprint',
   });
@@ -910,15 +979,27 @@ async function executeShopifyPageUpdate(task: Task): Promise<ExecuteResult> {
   };
 }
 
-async function executeShopifyBlogPostCreate(task: Task): Promise<ExecuteResult> {
+async function executeShopifyBlogPostCreate(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   const { shopify, credentials, config } = await getShopify(task);
   const blogId = payload.blog_id as string | undefined;
   if (!blogId) throw new Error('blog_id is required in action_payload.');
 
+  const marker = buildIdempotencyMarker(task.id, task.version ?? 1);
+  const existingRef = job?.external_reference;
+  if (existingRef?.article_id) {
+    return { outcome: `Shopify blog post already created (recovered from prior attempt): ${existingRef.article_id}`, outcome_data: existingRef };
+  }
+  const recovered = await (shopify as Record<string, unknown> & { findRecentByMarker(creds: Record<string, string>, path: string, field: 'body_html', marker: string): Promise<{ id: number } | null> })
+    .findRecentByMarker(credentials, `blogs/${blogId}/articles`, 'body_html', marker).catch(() => null);
+  if (recovered?.id) {
+    const ref = { article_id: String(recovered.id), blog_id: blogId, status: 'draft' };
+    return { outcome: `Shopify blog post already exists (verified via marker, not re-created): ${recovered.id}`, outcome_data: ref };
+  }
+
   const result = await (shopify as Record<string, unknown> & { createBlogPost(creds: Record<string, string>, config: Record<string, unknown>, blogId: string, data: Record<string, unknown>): Promise<{ article?: { id: string; title?: string } }> }).createBlogPost(credentials, config, blogId, {
     title: (payload.title ?? task.title) as string,
-    body_html: (payload.body_html ?? task.description ?? '') as string,
+    body_html: `${(payload.body_html ?? task.description ?? '') as string}\n<!-- ${marker} -->`,
     author: (payload.author as string | undefined) ?? 'Blueprint',
     tags: (payload.tags as string | undefined) ?? '',
   });
@@ -1139,7 +1220,7 @@ async function executeHireAgent(task: Task): Promise<ExecuteResult> {
  * @param taskId
  * @returns {{ ok: boolean, outcome?: string, error?: string }}
  */
-export async function executeTask(taskId: string): Promise<{ ok: boolean; outcome?: string; outcome_data?: Record<string, unknown>; error?: string }> {
+export async function executeTask(taskId: string, job: ExecutionJobRow | null = null): Promise<{ ok: boolean; outcome?: string; outcome_data?: Record<string, unknown>; error?: string }> {
   const taskRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | null;
   if (!taskRow) {
     return { ok: false, error: `Task '${taskId}' not found` };
@@ -1182,19 +1263,19 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
   let result: ExecuteResult;
   try {
     switch (task.action_type) {
-      case 'github_issue':             result = await executeGithubIssue(task); break;
-      case 'github_pr':                result = await executeGithubPR(task);    break;
+      case 'github_issue':             result = await executeGithubIssue(task, job); break;
+      case 'github_pr':                result = await executeGithubPR(task, job);    break;
       case 'investigation':            result = await executeInvestigation(task);  break;
       case 'deep_investigation':       result = await executeDeepInvestigation(task); break;
       case 'content_draft':            result = await executeContentDraft(task);  break;
       case 'meta_update':              result = await executeMetaUpdate(task);    break;
-      case 'shopify_product_create':   result = await executeShopifyProductCreate(task); break;
+      case 'shopify_product_create':   result = await executeShopifyProductCreate(task, job); break;
       case 'shopify_product_update':
       case 'shopify_description_update':
       case 'shopify_meta_update':      result = await executeShopifyProductUpdate(task); break;
-      case 'shopify_page_create':      result = await executeShopifyPageCreate(task); break;
+      case 'shopify_page_create':      result = await executeShopifyPageCreate(task, job); break;
       case 'shopify_page_update':      result = await executeShopifyPageUpdate(task); break;
-      case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task); break;
+      case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task, job); break;
       case 'shopify_collection_update': result = await executeShopifyCollectionUpdate(task); break;
       case 'shopify_tag_update':        result = await executeShopifyTagUpdate(task); break;
       case 'shopify_theme_edit':        result = await executeShopifyThemeEdit(task); break;
@@ -1209,6 +1290,17 @@ export async function executeTask(taskId: string): Promise<{ ok: boolean; outcom
       case 'research_connector':        result = await executeResearchConnector(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
+    }
+
+    // Persist the external reference (if any) immediately — as its own
+    // durable write, separate from and *before* the task-status transition
+    // below. This is what makes external-write-safety actually work: if
+    // the process crashes between here and the 'complete' transition, the
+    // reference is already saved, so a recovery/retry sees it and skips
+    // re-creating the external object (see execute*Create handlers above
+    // and execution-jobs.ts's crash-recovery sweep).
+    if (job && classifyAction(task.action_type) === 'external_verifiable' && result.outcome_data) {
+      try { setExternalReference(job.id, result.outcome_data); } catch {}
     }
   } catch (err) {
     // A missing connector means the task is blocked waiting for setup —

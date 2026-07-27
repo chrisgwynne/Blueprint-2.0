@@ -16,6 +16,10 @@
  *   GET    /businesses/:bid/tasks             — read tasks
  *   POST   /businesses/:bid/tasks             — propose task
  *   PATCH  /tasks/:id                         — approve/reject
+ *   GET    /businesses/:bid/execution-jobs    — list execution jobs
+ *   GET    /execution-jobs/:id                — execution job detail
+ *   POST   /execution-jobs/:id/retry          — retry a stuck/dead-lettered job
+ *   POST   /execution-jobs/:id/cancel         — cancel a queued/manual-review job
  *   GET    /businesses/:bid/kb/file/*         — read KB file
  *   GET    /businesses/:bid/kb/search         — search KB
  *   POST   /businesses/:bid/kb/query          — LLM query
@@ -42,6 +46,7 @@ import { bapRateLimit } from '../bap/rate-limiter.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { assertSafeWebhookUrl, UnsafeWebhookUrlError } from '../lib/ssrf-guard.js';
 import { KBPathError } from '../kb/kb-engine.js';
+import { withIdempotency, IdempotencyConflictError, IdempotencyInProgressError } from '../lib/idempotency.js';
 
 const router = Router();
 
@@ -51,6 +56,42 @@ function safeJSON(val: unknown, fallback: unknown = []): unknown {
   if (Array.isArray(val) || (typeof val === 'object' && val !== null)) return val;
   if (!val) return fallback;
   try { return JSON.parse(val as string); } catch { return fallback; }
+}
+
+/**
+ * Every mutating BAP endpoint (create/approve/write) requires an
+ * `Idempotency-Key` header and runs its handler through
+ * lib/idempotency.ts's claim-then-execute pattern — this is what lets an
+ * agent safely retry a timed-out or connection-dropped request (the
+ * dominant failure mode for an autonomous caller) without risking a
+ * duplicate signal, task, or KB write. `scope` distinguishes key
+ * namespaces per endpoint so the same key string reused for a different
+ * operation by the same agent can't collide.
+ */
+async function withRequiredIdempotency(
+  req: Request, res: Response, scope: string,
+  handler: () => Promise<{ status: number; body: unknown }>,
+): Promise<void> {
+  const key = req.header('Idempotency-Key');
+  if (!key) {
+    res.status(400).json({ error: 'Idempotency-Key header is required for this endpoint.' });
+    return;
+  }
+  const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+  try {
+    const result = await withIdempotency(bapAgent.id as string, scope, key, req.body, handler);
+    res.status(result.status).json(result.body);
+  } catch (err) {
+    if (err instanceof IdempotencyConflictError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
+    if (err instanceof IdempotencyInProgressError) {
+      res.status(409).json({ error: err.message, retryable: true });
+      return;
+    }
+    throw err;
+  }
 }
 
 // Strip <think>...</think> reasoning blocks from content posted by external agents
@@ -228,6 +269,8 @@ router.get('/capabilities', (_req: Request, res: Response) => {
       'GET /businesses/:id/health',
       'GET|POST /businesses/:id/signals', 'PATCH /signals/:id',
       'GET|POST /businesses/:id/tasks', 'PATCH /tasks/:id',
+      'GET /businesses/:id/execution-jobs', 'GET /execution-jobs/:id',
+      'POST /execution-jobs/:id/retry', 'POST /execution-jobs/:id/cancel',
       'GET /businesses/:id/kb/file/*', 'GET /businesses/:id/kb/search',
       'POST /businesses/:id/kb/query', 'POST /businesses/:id/kb/write',
       'GET /businesses/:id/metrics', 'GET /businesses/:id/metrics/snapshot',
@@ -379,41 +422,44 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
       return res.status(400).json({ error: 'type, severity, and title are required.' });
     }
 
-    const id = generateId();
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
-    db.prepare(`
-      INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity,
-                           title, description, data, status, confidence, agent_id, created_at)
-      VALUES (?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
-    `).run(
-      id, businessId, connector_id ?? null,
-      type, severity, stripThink(title) ?? title, stripThink(description),
-      JSON.stringify(data ?? {}), confidence ?? null,
-      bapAgent.id as string
-    );
 
-    // Dispatch webhook for signal.created
-    try {
-      const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js') as unknown as {
-        dispatchWebhookEvent: (event: string, payload: Record<string, unknown>) => void;
-      };
-      dispatchWebhookEvent('signal.created', {
-        signal_id: id, business_id: businessId, type, severity, title, confidence,
-      });
-      if (severity === 'critical') {
-        dispatchWebhookEvent('signal.critical', {
+    await withRequiredIdempotency(req, res, 'signals:create', async () => {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity,
+                             title, description, data, status, confidence, agent_id, created_at)
+        VALUES (?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
+      `).run(
+        id, businessId, connector_id ?? null,
+        type, severity, stripThink(title) ?? title, stripThink(description),
+        JSON.stringify(data ?? {}), confidence ?? null,
+        bapAgent.id as string
+      );
+
+      // Dispatch webhook for signal.created
+      try {
+        const { dispatchWebhookEvent } = await import('../bap/webhook-dispatcher.js') as unknown as {
+          dispatchWebhookEvent: (event: string, payload: Record<string, unknown>) => void;
+        };
+        dispatchWebhookEvent('signal.created', {
           signal_id: id, business_id: businessId, type, severity, title, confidence,
         });
-      }
-    } catch {}
+        if (severity === 'critical') {
+          dispatchWebhookEvent('signal.critical', {
+            signal_id: id, business_id: businessId, type, severity, title, confidence,
+          });
+        }
+      } catch {}
 
-    return res.status(201).json({ signal_id: id, created: true });
+      return { status: 201, body: { signal_id: id, created: true } };
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
 });
 
-router.patch('/signals/:signalId', requirePermission('signals:read'), (req: Request, res: Response) => {
+router.patch('/signals/:signalId', requirePermission('signals:read'), async (req: Request, res: Response) => {
   try {
     const signalId = String(req.params.signalId);
     const { status, note } = req.body as { status?: string; note?: string };
@@ -432,13 +478,15 @@ router.patch('/signals/:signalId', requirePermission('signals:read'), (req: Requ
 
     if (!status) return res.status(400).json({ error: 'status is required.' });
 
-    const updates = ['status = ?'];
-    const values: any[] = [status];
-    if (status === 'resolved') updates.push('resolved_at = CURRENT_TIMESTAMP');
-    values.push(signalId);
-    db.prepare(`UPDATE signals SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+    await withRequiredIdempotency(req, res, 'signals:update', async () => {
+      const updates = ['status = ?'];
+      const values: any[] = [status];
+      if (status === 'resolved') updates.push('resolved_at = CURRENT_TIMESTAMP');
+      values.push(signalId);
+      db.prepare(`UPDATE signals SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-    return res.json({ signal_id: signalId, status, updated: true });
+      return { status: 200, body: { signal_id: signalId, status, updated: true } };
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
@@ -500,41 +548,42 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
 
     if (!title) return res.status(400).json({ error: 'title is required.' });
 
-    const { createTask } = await import('../tasks/task-queue.js') as unknown as {
-      createTask: (opts: Record<string, unknown>) => Record<string, unknown>;
-    };
-    const { createTaskEvent } = await import('../tasks/task-events.js') as unknown as {
-      createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
-    };
-
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
-    const task = createTask({
-      business_id: businessId,
-      signal_id: signal_id ?? null,
-      title: stripThink(title) ?? title,
-      description: stripThink(description),
-      proposed_by: `bap:${bapAgent.id as string}`,
-      assigned_to: assigned_to ?? null,
-      action_type: action_type ?? null,
-      action_payload: action_payload ?? {},
-      trust_tier: (bapAgent.default_trust_tier as string | undefined) ?? 'yellow',
-      priority,
-      confidence: confidence ?? null,
-      estimated_impact: estimated_impact ?? null,
-      approval_mode: 'requires_approval',
-    });
 
-    createTaskEvent(
-      task.id as string, 'created', `bap:${bapAgent.id as string}`,
-      `Task proposed by external agent "${bapAgent.name as string}"`,
-      { source: 'bap', agent_id: bapAgent.id }
-    );
+    await withRequiredIdempotency(req, res, 'tasks:propose', async () => {
+      const { createTask } = await import('../tasks/task-queue.js') as unknown as {
+        createTask: (opts: Record<string, unknown>) => Record<string, unknown>;
+      };
+      const { createTaskEvent } = await import('../tasks/task-events.js') as unknown as {
+        createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
+      };
 
-    return res.status(201).json({
-      task_id: task.id,
-      status: task.status,
-      trust_tier: task.trust_tier,
-      approval_required: true,
+      const task = createTask({
+        business_id: businessId,
+        signal_id: signal_id ?? null,
+        title: stripThink(title) ?? title,
+        description: stripThink(description),
+        proposed_by: `bap:${bapAgent.id as string}`,
+        assigned_to: assigned_to ?? null,
+        action_type: action_type ?? null,
+        action_payload: action_payload ?? {},
+        trust_tier: (bapAgent.default_trust_tier as string | undefined) ?? 'yellow',
+        priority,
+        confidence: confidence ?? null,
+        estimated_impact: estimated_impact ?? null,
+        approval_mode: 'requires_approval',
+      });
+
+      createTaskEvent(
+        task.id as string, 'created', `bap:${bapAgent.id as string}`,
+        `Task proposed by external agent "${bapAgent.name as string}"`,
+        { source: 'bap', agent_id: bapAgent.id }
+      );
+
+      return {
+        status: 201,
+        body: { task_id: task.id, status: task.status, trust_tier: task.trust_tier, approval_required: true },
+      };
     });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
@@ -561,36 +610,144 @@ router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: R
       return res.status(403).json({ error: 'Permission denied: task does not belong to an authorized business.' });
     }
 
-    const { approveTask, rejectTask } = await import('../tasks/task-queue.js') as unknown as {
-      approveTask: (id: string, actor: string) => Record<string, unknown>;
-      rejectTask: (id: string, actor: string, reason: string) => Record<string, unknown>;
-    };
-    const { createTaskEvent } = await import('../tasks/task-events.js') as unknown as {
-      createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
-    };
-
-    let task: Record<string, unknown>;
-    if (action === 'approve') {
-      task = approveTask(taskId, `bap:${bapAgent.id as string}`);
-      createTaskEvent(taskId, 'approved', `bap:${bapAgent.id as string}`, note ?? 'Approved via BAP', {});
-
-      // Fire executor for executable types
-      const { executeTask, isExecutable } = await import('../tasks/executor.js') as unknown as {
-        executeTask: (id: string) => Promise<unknown>;
-        isExecutable: (actionType: string | undefined) => boolean;
+    await withRequiredIdempotency(req, res, 'tasks:approve', async () => {
+      const { approveTask, rejectTask } = await import('../tasks/task-queue.js') as unknown as {
+        approveTask: (id: string, actor: string) => Record<string, unknown>;
+        rejectTask: (id: string, actor: string, reason: string) => Record<string, unknown>;
       };
-      if (task && isExecutable(task.action_type as string | undefined)) {
-        executeTask(task.id as string).catch(() => {});
-      }
-    } else {
-      task = rejectTask(taskId, `bap:${bapAgent.id as string}`, note ?? '');
-      createTaskEvent(taskId, 'rejected', `bap:${bapAgent.id as string}`, note ?? 'Rejected via BAP', {});
-    }
+      const { createTaskEvent } = await import('../tasks/task-events.js') as unknown as {
+        createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
+      };
 
-    return res.json({ task_id: taskId, status: task.status, action });
+      let task: Record<string, unknown>;
+      if (action === 'approve') {
+        // approveTask() atomically enqueues a durable execution job and
+        // wakes the worker itself — no separate executeTask() call here.
+        // This is the same function the dashboard and Telegram call; see
+        // task-queue.ts's approveTask docstring for why that unification
+        // matters (it's what makes Telegram approvals actually execute).
+        task = approveTask(taskId, `bap:${bapAgent.id as string}`);
+        createTaskEvent(taskId, 'approved', `bap:${bapAgent.id as string}`, note ?? 'Approved via BAP', {});
+      } else {
+        task = rejectTask(taskId, `bap:${bapAgent.id as string}`, note ?? '');
+        createTaskEvent(taskId, 'rejected', `bap:${bapAgent.id as string}`, note ?? 'Rejected via BAP', {});
+      }
+
+      return { status: 200, body: { task_id: taskId, status: task.status, action } };
+    });
   } catch (err) {
     if ((err as Error).message.includes('not found')) return res.status(404).json({ error: (err as Error).message });
     if ((err as Error).message.includes('Cannot')) return res.status(422).json({ error: (err as Error).message });
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// ─── EXECUTION JOBS (operational visibility/control over approved-task runs) ─
+
+router.get('/businesses/:businessId/execution-jobs', requirePermission('tasks:read'), async (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    const { status, limit, page } = req.query;
+
+    const { listExecutionJobs } = await import('../tasks/execution-jobs.js') as unknown as {
+      listExecutionJobs: (businessId: string, filters: { status?: string[]; limit?: number; page?: number }) =>
+        { jobs: unknown[]; total: number; page: number; limit: number; pages: number };
+    };
+
+    const result = listExecutionJobs(businessId, {
+      status: status ? String(status).split(',') : undefined,
+      limit: limit ? parseInt(String(limit), 10) : undefined,
+      page: page ? parseInt(String(page), 10) : undefined,
+    });
+
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/execution-jobs/:jobId', requirePermission('tasks:read'), async (req: Request, res: Response) => {
+  try {
+    const jobId = String(req.params.jobId);
+    const { getExecutionJob } = await import('../tasks/execution-jobs.js') as unknown as {
+      getExecutionJob: (id: string) => Record<string, unknown> | null;
+    };
+    const job = getExecutionJob(jobId);
+    if (!job) return res.status(404).json({ error: `Execution job '${jobId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:read', job.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: execution job does not belong to an authorized business.' });
+    }
+
+    return res.json({ job });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/execution-jobs/:jobId/retry', requirePermission('tasks:approve'), async (req: Request, res: Response) => {
+  try {
+    const jobId = String(req.params.jobId);
+    const { getExecutionJob, retryJob } = await import('../tasks/execution-jobs.js') as unknown as {
+      getExecutionJob: (id: string) => Record<string, unknown> | null;
+      retryJob: (id: string) => boolean;
+    };
+    const job = getExecutionJob(jobId);
+    if (!job) return res.status(404).json({ error: `Execution job '${jobId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:approve', job.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: execution job does not belong to an authorized business.' });
+    }
+
+    await withRequiredIdempotency(req, res, 'execution-jobs:retry', async () => {
+      const retried = retryJob(jobId);
+      if (!retried) {
+        return {
+          status: 409,
+          body: { error: `Job '${jobId}' is not in a retryable state (dead_letter, manual_review, or cancelled).` },
+        };
+      }
+      // Wake the worker immediately rather than waiting for the next cron
+      // tick — same lazy-import pattern as task-queue.ts's approveTask, to
+      // avoid a circular dependency at module load time.
+      import('../jobs/scheduler.js')
+        .then((m) => { (m as unknown as { runExecutionWorkerTickNow?: () => void }).runExecutionWorkerTickNow?.(); })
+        .catch(() => {});
+      return { status: 200, body: { job_id: jobId, status: 'queued', retried: true } };
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/execution-jobs/:jobId/cancel', requirePermission('tasks:approve'), async (req: Request, res: Response) => {
+  try {
+    const jobId = String(req.params.jobId);
+    const { getExecutionJob, cancelJob } = await import('../tasks/execution-jobs.js') as unknown as {
+      getExecutionJob: (id: string) => Record<string, unknown> | null;
+      cancelJob: (id: string) => boolean;
+    };
+    const job = getExecutionJob(jobId);
+    if (!job) return res.status(404).json({ error: `Execution job '${jobId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:approve', job.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: execution job does not belong to an authorized business.' });
+    }
+
+    await withRequiredIdempotency(req, res, 'execution-jobs:cancel', async () => {
+      const cancelled = cancelJob(jobId);
+      if (!cancelled) {
+        return {
+          status: 409,
+          body: { error: `Job '${jobId}' is not in a cancellable state (queued or manual_review).` },
+        };
+      }
+      return { status: 200, body: { job_id: jobId, status: 'cancelled', cancelled: true } };
+    });
+  } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
 });
@@ -695,13 +852,15 @@ router.post('/businesses/:businessId/kb/write',
       }
 
       const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
-      const written = await result.engine.writeFile(
-        filePath, content,
-        frontmatter ?? null,
-        commit_message ?? `bap: ${bapAgent.name as string} wrote ${filePath}`
-      );
 
-      return res.json({ ...written });
+      await withRequiredIdempotency(req, res, 'kb:write', async () => {
+        const written = await result.engine.writeFile(
+          filePath, content,
+          frontmatter ?? null,
+          commit_message ?? `bap: ${bapAgent.name as string} wrote ${filePath}`
+        );
+        return { status: 200, body: { ...written } };
+      });
     } catch (err) {
       if (err instanceof KBPathError) return res.status(400).json({ error: err.message });
       return res.status(500).json({ error: (err as Error).message });
