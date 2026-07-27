@@ -13,19 +13,19 @@ interface NotificationLike {
   entity_id?: string | null;
 }
 
-interface TelegramFrom {
+export interface TelegramFrom {
   id?: number;
   username?: string;
 }
 
-interface TelegramMessage {
+export interface TelegramMessage {
   text?: string;
   chat: { id: string | number };
   message_id?: number;
   from?: TelegramFrom;
 }
 
-interface TelegramCallbackQuery {
+export interface TelegramCallbackQuery {
   id: string;
   data?: string;
   from?: TelegramFrom;
@@ -185,22 +185,41 @@ async function pollBot({ botToken, chatId, businessId, businessName }: { botToke
     updateOffsets.set(botToken, update.update_id);
 
     if (update.callback_query) {
-      await handleCallbackInternal(update.callback_query, botToken);
+      await handleCallbackInternal(update.callback_query, botToken, chatId);
     } else if (update.message?.text) {
       await handleCommandInternal(update.message, botToken, chatId, businessId);
     }
   }
 }
 
-async function handleCallbackInternal(callbackQuery: TelegramCallbackQuery, botToken: string): Promise<void> {
+/**
+ * Only the configured chat may issue approval commands/callbacks. Fails
+ * closed: if no chat is configured at all, nothing is authorized.
+ */
+export function isAuthorizedChat(actualChatId: string | number | null | undefined, expectedChatId: string | null): boolean {
+  if (!expectedChatId) return false;
+  if (actualChatId === null || actualChatId === undefined) return false;
+  return String(actualChatId) === String(expectedChatId);
+}
+
+export async function handleCallbackInternal(callbackQuery: TelegramCallbackQuery, botToken: string, expectedChatId: string | null = null): Promise<void> {
   const { id: callbackId, data, from, message } = callbackQuery;
 
-  // Ack immediately
+  // Ack immediately — this just stops the Telegram client's loading
+  // spinner and must happen regardless of authorization.
   await fetch(`${TELEGRAM_API}${botToken}/answerCallbackQuery`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ callback_query_id: callbackId }),
   }).catch(() => {});
+
+  if (!isAuthorizedChat(message?.chat?.id, expectedChatId)) {
+    console.warn(
+      `[telegram] Ignoring callback_query from unauthorized chat ${message?.chat?.id} ` +
+      `(user ${from?.username ?? from?.id ?? 'unknown'})`
+    );
+    return;
+  }
 
   if (!data) return;
 
@@ -229,7 +248,15 @@ async function handleCallbackInternal(callbackQuery: TelegramCallbackQuery, botT
   }
 }
 
-async function handleCommandInternal(message: TelegramMessage, botToken: string, chatId: string | null, businessId: string | null): Promise<void> {
+export async function handleCommandInternal(message: TelegramMessage, botToken: string, chatId: string | null, businessId: string | null): Promise<void> {
+  if (!isAuthorizedChat(message.chat?.id, chatId)) {
+    console.warn(
+      `[telegram] Ignoring command from unauthorized chat ${message.chat?.id} ` +
+      `(user ${message.from?.username ?? message.from?.id ?? 'unknown'})`
+    );
+    return;
+  }
+
   const text = (message.text || '').trim();
   const [cmd, arg] = text.split(/\s+/);
 
@@ -418,7 +445,7 @@ export async function webhookHandler(req: Request, res: Response): Promise<void>
   const { botToken, chatId } = getTelegramConfig(null);
 
   if (update.callback_query) {
-    await handleCallbackInternal(update.callback_query, botToken!).catch((err: any) => {
+    await handleCallbackInternal(update.callback_query, botToken!, chatId).catch((err: any) => {
       console.error('[telegram] webhook callback error:', err.message);
     });
   } else if (update.message) {

@@ -11,13 +11,26 @@
  */
 import crypto from 'crypto';
 import db from '../db/db.js';
+import { assertSafeWebhookUrl } from '../lib/ssrf-guard.js';
 
 interface BapAgent {
   id: string;
   webhook_url: string;
   webhook_secret: string | null;
   webhook_events: unknown;
+  business_access?: unknown;
   status?: string;
+}
+
+/**
+ * Whether an agent is authorized to receive an event for the given
+ * business. Events without a business_id (e.g. `system.*`) are instance-
+ * wide and are not filtered.
+ */
+function agentCanReceiveEvent(agent: BapAgent, businessId: unknown): boolean {
+  if (!businessId || typeof businessId !== 'string') return true;
+  const access = safeJSON<string[]>(agent.business_access);
+  return access.includes('*') || access.includes(businessId);
 }
 
 /**
@@ -41,6 +54,10 @@ export function dispatchWebhookEvent(eventType: string, payload: unknown): void 
     return;
   }
 
+  const businessId = (payload && typeof payload === 'object')
+    ? (payload as Record<string, unknown>).business_id
+    : undefined;
+
   for (const agent of agents) {
     const events = safeJSON<string[]>(agent.webhook_events);
     const subscribed =
@@ -50,6 +67,11 @@ export function dispatchWebhookEvent(eventType: string, payload: unknown): void 
       (eventType.startsWith('signal.') && events.includes('signal.*'));
 
     if (!subscribed) continue;
+
+    // Cross-tenant guard: never fan out a business-scoped event to an
+    // agent that isn't authorized for that business, even if it's
+    // subscribed to the event type in general.
+    if (!agentCanReceiveEvent(agent, businessId)) continue;
 
     // Queue a delivery record
     const deliveryId = crypto.randomUUID();
@@ -80,6 +102,23 @@ async function attemptDelivery(
   payload: unknown,
   maxAttempts = 3
 ): Promise<void> {
+  // SSRF guard — re-checked on every delivery attempt (not just at
+  // registration time) so a hostname that later resolves to a private/
+  // internal address (DNS rebinding, or a re-pointed DNS record) is still
+  // caught before Blueprint's server makes the request.
+  try {
+    await assertSafeWebhookUrl(agent.webhook_url);
+  } catch (err) {
+    db.prepare(`
+      UPDATE bap_webhook_deliveries
+      SET delivery_status = 'failed', attempts = ?, last_attempt = CURRENT_TIMESTAMP,
+          response_body = ?
+      WHERE id = ?
+    `).run(maxAttempts, `Blocked: ${(err as Error).message}`.slice(0, 500), deliveryId);
+    console.warn(`[BAP Webhook] Delivery ${deliveryId} blocked — unsafe URL:`, (err as Error).message);
+    return;
+  }
+
   const body = JSON.stringify({
     id: deliveryId,
     event: eventType,
@@ -106,14 +145,23 @@ async function attemptDelivery(
   while (attempt < maxAttempts) {
     attempt++;
     try {
+      // redirect: 'manual' — a validated, safe webhook_url could otherwise
+      // 3xx-redirect to a private/internal address and have that followed
+      // automatically, silently defeating the SSRF guard above. Any
+      // redirect is treated as a delivery failure rather than followed;
+      // if the receiver genuinely needs to move endpoints, the agent
+      // should update its webhook_url directly via PUT /me/webhook
+      // (which re-validates), not rely on an HTTP redirect.
       const res = await fetch(agent.webhook_url, {
         method: 'POST',
         headers,
         body,
+        redirect: 'manual',
         signal: AbortSignal.timeout(10_000),
       });
 
-      const resBody = await res.text().catch(() => '');
+      const isRedirect = res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400);
+      const resBody = isRedirect ? '' : await res.text().catch(() => '');
 
       db.prepare(`
         UPDATE bap_webhook_deliveries
@@ -121,12 +169,17 @@ async function attemptDelivery(
             response_code = ?, response_body = ?
         WHERE id = ?
       `).run(
-        res.ok ? 'delivered' : 'failed',
+        res.ok && !isRedirect ? 'delivered' : 'failed',
         attempt,
-        res.status,
-        resBody.slice(0, 500),
+        isRedirect ? 0 : res.status,
+        isRedirect ? 'Blocked: webhook endpoint returned a redirect, which is not followed (SSRF hardening).' : resBody.slice(0, 500),
         deliveryId
       );
+
+      if (isRedirect) {
+        console.warn(`[BAP Webhook] Delivery ${deliveryId} blocked — endpoint attempted a redirect.`);
+        return; // do not retry — a redirecting endpoint won't stop redirecting
+      }
 
       if (res.ok) return; // success
     } catch (err) {

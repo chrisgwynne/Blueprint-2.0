@@ -9,6 +9,84 @@ import crypto from 'crypto';
 import db from '../db/db.js';
 import type { Request, Response, NextFunction } from 'express';
 
+// ─── Registration authorization ──────────────────────────────────────────────
+//
+// POST /register used to be fully open — anyone who could reach the HTTP
+// port could self-register a BAP key with arbitrary requested permissions.
+// It now requires ONE of:
+//   (a) an authenticated dashboard session (the operator registering an
+//       agent on their own behalf), or
+//   (b) a shared `X-Registration-Secret` header matching the operator-
+//       configured BAP_REGISTRATION_SECRET env var, for bootstrapping a
+//       fully external agent (e.g. Hermes) that has no browser session.
+// If BAP_REGISTRATION_SECRET is unset, only path (a) is available — this
+// is the safe-by-default state with zero extra configuration.
+
+export function isRegistrationAuthorized(req: Request): boolean {
+  const sessionAuthed = Boolean((req.session as { userId?: unknown } | undefined)?.userId);
+  if (sessionAuthed) return true;
+
+  const configuredSecret = process.env.BAP_REGISTRATION_SECRET;
+  if (!configuredSecret) return false;
+
+  const provided = req.headers['x-registration-secret'];
+  if (typeof provided !== 'string' || provided.length === 0) return false;
+
+  const a = Buffer.from(provided);
+  const b = Buffer.from(configuredSecret);
+  if (a.length !== b.length) return false; // avoid throwing in timingSafeEqual
+  return crypto.timingSafeEqual(a, b);
+}
+
+export function requireRegistrationAuth(req: Request, res: Response, next: NextFunction): void {
+  if (isRegistrationAuthorized(req)) return next();
+  res.status(401).json({
+    error:
+      'Registration requires an authenticated dashboard session, or a valid X-Registration-Secret ' +
+      'header matching the operator-configured BAP_REGISTRATION_SECRET. Self-service, unauthenticated ' +
+      'registration is no longer permitted.',
+  });
+}
+
+// ─── Grantable permissions ───────────────────────────────────────────────────
+//
+// Self-registration can never grant a wildcard permission (`*:*`,
+// `resource:*`) or wildcard business access (`*`), regardless of what the
+// caller requests or how they authenticated to /register. This is a hard
+// floor, not a default — an operator who wants to grant broader access to
+// a highly trusted agent already has full database/dashboard access to do
+// so directly; the self-registration endpoint itself never grants it.
+export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
+  'signals:read', 'signals:create',
+  'tasks:read', 'tasks:propose', 'tasks:approve',
+  'kb:read', 'kb:write',
+  'metrics:read',
+  'agents:read', 'agents:trigger',
+];
+
+export function filterGrantablePermissions(requested: unknown): string[] {
+  if (!Array.isArray(requested)) return [];
+  const allow = new Set(GRANTABLE_BAP_PERMISSIONS);
+  return Array.from(new Set(requested.filter((p): p is string => typeof p === 'string' && allow.has(p))));
+}
+
+/**
+ * Filter caller-supplied business IDs down to businesses that actually
+ * exist. Silently drops '*' (wildcard business access is never granted by
+ * self-registration) and unknown IDs. Returns [] (no access yet) rather
+ * than erroring, so registration always succeeds — an operator can grant
+ * access afterwards.
+ */
+export function filterValidBusinessIds(requested: unknown): string[] {
+  if (!Array.isArray(requested)) return [];
+  const ids = Array.from(new Set(requested.filter((b): b is string => typeof b === 'string' && b !== '*')));
+  if (ids.length === 0) return [];
+  const placeholders = ids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT id FROM businesses WHERE id IN (${placeholders})`).all(...ids) as Array<{ id: string }>;
+  const valid = new Set(rows.map((r) => r.id));
+  return ids.filter((id) => valid.has(id));
+}
+
 // ─── Key generation ─────────────────────────────────────────────────────────
 
 export function generateApiKey(): string {

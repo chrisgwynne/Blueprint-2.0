@@ -362,12 +362,17 @@ For the technical API reference, see [server/bap/AGENT-GUIDE.md](server/bap/AGEN
 
 ## External Agents (BAP)
 
-Any agent that speaks HTTP can connect via the Blueprint Agent Protocol:
+Any agent that speaks HTTP can connect via the Blueprint Agent Protocol.
+Registration requires a logged-in dashboard session or an operator-issued
+`BAP_REGISTRATION_SECRET` (see `.env.example`) — self-service, unauthenticated
+registration is not permitted, and wildcard permissions/business access are
+never granted automatically:
 
 ```bash
 curl -X POST http://localhost:4000/api/bap/v1/register \
   -H "Content-Type: application/json" \
-  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose","kb:read"],"business_access":["*"]}'
+  -H "X-Registration-Secret: $BAP_REGISTRATION_SECRET" \
+  -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose","kb:read"],"business_access":["biz_xxxxxxxx"]}'
 ```
 
 See [SKILL.md](SKILL.md) for the complete tool reference.

@@ -15,13 +15,144 @@
  */
 import git from 'isomorphic-git';
 import fs from 'fs';
-import { resolve, join, relative, dirname, basename, sep } from 'path';
+import { resolve, join, relative, dirname, basename, sep, isAbsolute } from 'path';
 import {
   mkdirSync, existsSync, readdirSync, statSync, readFileSync,
-  writeFileSync, unlinkSync,
+  writeFileSync, unlinkSync, realpathSync,
+  openSync, writeSync, closeSync, constants as fsConstants,
 } from 'fs';
 import matter from 'gray-matter';
 import { scanForSensitiveData } from '../lib/content-sanitiser.js';
+
+// ─── Race-free leaf-level file I/O ───────────────────────────────────────────
+//
+// containPath() validates a path string-wise and, defensively, by resolving
+// symlinks on the deepest *existing* ancestor. But between that check and a
+// later plain writeFileSync()/readFileSync() call re-resolving the same path,
+// something could in principle swap the leaf component for a symlink pointing
+// outside the KB root (classic TOCTOU). These helpers close that specific
+// window using O_NOFOLLOW, an OS-level primitive that makes open(2) fail
+// atomically if the final path component is a symlink — there is no gap
+// between "check" and "use" because the check *is* the open. This does not
+// (and structurally cannot, via O_NOFOLLOW alone) protect against an
+// *intermediate* directory component being swapped to a symlink mid-request;
+// that narrower case is still covered by containPath()'s ancestor-directory
+// realpath check, just not race-free the same way. Reaching full immunity
+// there would require walking the path component-by-component with
+// openat-style relative opens, which Node's fs module doesn't expose —
+// judged disproportionate for this fix given the realistic threat model
+// (a single local server process, no untrusted concurrent filesystem writer).
+export function openNoFollow(path: string, flags: number, mode?: number): number {
+  try {
+    return mode === undefined ? openSync(path, flags) : openSync(path, flags, mode);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new KBPathError('Invalid KB path: refusing to follow a symlink at the target path.');
+    }
+    throw err;
+  }
+}
+
+export function writeFileNoFollowSync(path: string, content: string | Buffer): void {
+  const fd = openNoFollow(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW, 0o644);
+  try {
+    writeSync(fd, Buffer.isBuffer(content) ? content : Buffer.from(content, 'utf8'));
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function readFileNoFollowSync(path: string): string {
+  const fd = openNoFollow(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+  try {
+    return readFileSync(fd, 'utf8');
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// ─── Path containment guard ──────────────────────────────────────────────────
+//
+// Every caller-supplied relative path (from BAP, the dashboard API, or an
+// agent tool call) must resolve to a location strictly inside the KB root.
+// This guards against:
+//   - `../../` traversal and absolute-path injection (string-level check)
+//   - null bytes
+//   - symlink escapes: a symlink planted inside the KB root (e.g. an
+//     imported Obsidian vault, or a pre-existing directory entry) that
+//     points outside root — checked via realpathSync on the deepest
+//     existing ancestor directory, and on the target itself if it already
+//     exists, so a symlinked leaf can't be used to write/read through to
+//     an external location even though the string path looks contained.
+export class KBPathError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'KBPathError';
+  }
+}
+
+function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+export function containPath(root: string, relativePath: unknown): string {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new KBPathError('Invalid KB path.');
+  }
+  if (relativePath.includes('\0')) {
+    throw new KBPathError('Invalid KB path: null byte.');
+  }
+  if (isAbsolute(relativePath)) {
+    throw new KBPathError('Invalid KB path: absolute paths are not allowed.');
+  }
+
+  const resolvedRoot = resolve(root);
+  const resolvedTarget = resolve(resolvedRoot, relativePath);
+
+  // String-level containment (catches ../ traversal).
+  if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + sep)) {
+    throw new KBPathError('Invalid KB path: escapes the knowledge base root.');
+  }
+
+  // Reserved Windows device names, defensively (deploy target is Linux,
+  // but the KB can be pointed at a synced/mounted Windows filesystem).
+  const base = basename(resolvedTarget).replace(/\.[^.]*$/, '').toUpperCase();
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(base)) {
+    throw new KBPathError(`Invalid KB path: reserved device name "${base}".`);
+  }
+
+  // Symlink-escape defense: resolve the real filesystem path of the
+  // deepest already-existing ancestor directory and re-check containment.
+  let dirToCheck = dirname(resolvedTarget);
+  while (dirToCheck.length >= resolvedRoot.length && !existsSync(dirToCheck)) {
+    const parent = dirname(dirToCheck);
+    if (parent === dirToCheck) break;
+    dirToCheck = parent;
+  }
+  if (dirToCheck.length >= resolvedRoot.length && existsSync(dirToCheck)) {
+    const realDir = realpathOrSelf(dirToCheck);
+    const realRoot = realpathOrSelf(resolvedRoot);
+    if (realDir !== realRoot && !realDir.startsWith(realRoot + sep)) {
+      throw new KBPathError('Invalid KB path: escapes the knowledge base root (symlink).');
+    }
+  }
+
+  // If the target itself already exists (e.g. an existing symlink being
+  // overwritten, or a read of an existing file), check its own real path.
+  if (existsSync(resolvedTarget)) {
+    const realTarget = realpathOrSelf(resolvedTarget);
+    const realRoot = realpathOrSelf(resolvedRoot);
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
+      throw new KBPathError('Invalid KB path: escapes the knowledge base root (symlink).');
+    }
+  }
+
+  return resolvedTarget;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -321,11 +452,11 @@ export class KBEngine {
    * Read a file (markdown or any text), parse YAML frontmatter via gray-matter.
    */
   async readFile(relativePath: string): Promise<KBFileResult> {
-    const full = join(this.root, relativePath);
+    const full = containPath(this.root, relativePath);
     if (!existsSync(full)) {
       throw new Error(`File not found: ${relativePath}`);
     }
-    const raw = readFileSync(full, 'utf8');
+    const raw = readFileNoFollowSync(full);
     let parsed: { content: string; data: Record<string, unknown> };
     try {
       parsed = matter(raw) as unknown as { content: string; data: Record<string, unknown> };
@@ -387,6 +518,15 @@ export class KBEngine {
       for (const entry of entries) {
         if (isHidden(entry.name)) continue;
         if (entry.name === '_archived') continue;
+        // Dirent.isDirectory()/isFile() follow symlinks — a symlinked
+        // directory or file planted inside the KB root (e.g. a stray
+        // entry in an imported Obsidian vault, or leftover from before
+        // this hardening) would otherwise be silently walked/read through
+        // by search()/getBacklinks()/lint()/getRecentlyModified(), none of
+        // which go through containPath() since they discover paths
+        // themselves rather than taking a caller-supplied path. Skip any
+        // symlink entirely rather than following it.
+        if (entry.isSymbolicLink()) continue;
         const full = join(dir, entry.name);
         if (entry.isDirectory()) {
           walk(full);
@@ -455,12 +595,13 @@ export class KBEngine {
     frontmatter: Record<string, unknown> | null = null,
     commitMessage: string | null = null
   ): Promise<KBWriteResult> {
+    const full = containPath(this.root, relativePath);
+
     // Block writes to forbidden locations
     if (relativePath.startsWith('raw/')) {
       throw new Error('Agents cannot write to raw/ — that directory is for user-uploaded sources only.');
     }
 
-    const full = join(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
 
     // ─── Sensitive-data scan ──────────────────────────────────────────────
@@ -502,7 +643,21 @@ export class KBEngine {
       });
     }
 
-    writeFileSync(full, fileContent, 'utf8');
+    // O_NOFOLLOW makes this atomic against a leaf-symlink swap — see the
+    // comment on writeFileNoFollowSync above.
+    writeFileNoFollowSync(full, fileContent);
+
+    // Belt-and-suspenders: confirm the file we just wrote actually landed
+    // inside the KB root. O_NOFOLLOW already makes this structurally
+    // unreachable for a leaf-symlink swap; kept as defense-in-depth for
+    // the narrower intermediate-directory-swap case containPath() can't
+    // fully close race-free (see containPath()'s docstring).
+    const realWritten = realpathOrSelf(full);
+    const realRoot = realpathOrSelf(resolve(this.root));
+    if (realWritten !== realRoot && !realWritten.startsWith(realRoot + sep)) {
+      try { unlinkSync(full); } catch {}
+      throw new KBPathError('Invalid KB path: write escaped the knowledge base root (symlink).');
+    }
 
     const message = commitMessage ?? `update: ${relativePath}`;
     await this._commit(message, [relativePath]);
@@ -560,16 +715,16 @@ export class KBEngine {
     if (SPECIAL_FILES.has(relativePath)) {
       throw new Error(`Cannot archive special file: ${relativePath}`);
     }
-    const full = join(this.root, relativePath);
+    const full = containPath(this.root, relativePath);
     if (!existsSync(full)) throw new Error(`File not found: ${relativePath}`);
 
     const archivedRel = join('_archived', relativePath).split(sep).join('/');
-    const archivedFull = join(this.root, archivedRel);
+    const archivedFull = containPath(this.root, archivedRel);
     mkdirSync(dirname(archivedFull), { recursive: true });
 
-    const content = readFileSync(full, 'utf8');
+    const content = readFileNoFollowSync(full);
     const banner = `> [!archived] Archived on ${new Date().toISOString()}\n\n`;
-    writeFileSync(archivedFull, banner + content, 'utf8');
+    writeFileNoFollowSync(archivedFull, banner + content);
     unlinkSync(full);
 
     try {
@@ -589,9 +744,9 @@ export class KBEngine {
     const safeName = slugify(filename.replace(/\.[^.]+$/, '')) +
       (filename.match(/\.[^.]+$/)?.[0] ?? '.md');
     const relativePath = `raw/${safeName}`;
-    const full = join(this.root, relativePath);
+    const full = containPath(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, content);
+    writeFileNoFollowSync(full, content);
     await this._commit(`upload: ${relativePath}`, [relativePath]);
     return { path: relativePath };
   }
@@ -676,9 +831,9 @@ export class KBEngine {
    */
   async restoreVersion(relativePath: string, commitHash: string): Promise<{ restored: boolean; commit: string }> {
     const content = await this.getFileAtCommit(relativePath, commitHash);
-    const full = join(this.root, relativePath);
+    const full = containPath(this.root, relativePath);
     mkdirSync(dirname(full), { recursive: true });
-    writeFileSync(full, content, 'utf8');
+    writeFileNoFollowSync(full, content);
     await this._commit(`restore: ${relativePath} to ${commitHash.slice(0, 7)}`, [relativePath]);
     return { restored: true, commit: commitHash };
   }

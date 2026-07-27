@@ -22,7 +22,10 @@ Or: `Authorization: Bearer bap_xxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
 POST /api/bap/v1/register
 ```
 
-No auth required. Body:
+Requires **either** an authenticated dashboard session **or** an
+`X-Registration-Secret` header matching the operator-configured
+`BAP_REGISTRATION_SECRET` environment variable. Unauthenticated
+self-service registration is not permitted. Body:
 
 ```json
 {
@@ -35,11 +38,17 @@ No auth required. Body:
     "kb:read", "kb:write",
     "metrics:read", "agents:trigger"
   ],
-  "business_access": ["*"],
+  "business_access": ["biz_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
   "webhook_url": "https://optional-webhook-endpoint/",
   "webhook_events": ["signal.critical", "task.approved"]
 }
 ```
+
+`requested_permissions` and `business_access` are filtered server-side:
+wildcard permissions (`*:*`, `resource:*`) and wildcard business access
+(`"*"`) are never granted by this endpoint, regardless of what's
+requested — only the specific, valid permissions/business IDs you ask for
+are granted. An operator can widen access afterwards via the dashboard.
 
 Returns `api_key` once. Store it securely.
 
