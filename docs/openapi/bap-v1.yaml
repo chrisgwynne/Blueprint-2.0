@@ -1,0 +1,1335 @@
+openapi: 3.0.3
+info:
+  title: Blueprint Agent Protocol (BAP) v1
+  version: "2.0.0"
+  description: |
+    The API surface external autonomous agents (e.g. Hermes) use to operate
+    Blueprint without the web dashboard. Mounted at `/api/bap/v1`.
+
+    ## Authentication
+
+    Every route except `POST /register` and `GET /discover` requires a
+    `BAP-Key` header (or `Authorization: Bearer <key>`) with a key issued
+    by `POST /register`. Keys look like `bap_<36 random base64url chars>`.
+
+    `POST /register` itself requires **either** an authenticated dashboard
+    session cookie, **or** a shared `X-Registration-Secret` header matching
+    the operator-configured `BAP_REGISTRATION_SECRET` environment variable.
+    It is never open to unauthenticated callers.
+
+    Three `GET /agents-admin/*` routes use the dashboard's own session
+    cookie instead of `BAP-Key` — they're operator-only and are documented
+    separately at the bottom of this spec with the `sessionAuth` scheme.
+
+    ## Idempotency
+
+    Every mutating endpoint (`POST`/`PATCH` that creates or changes state)
+    **requires** an `Idempotency-Key` header. Reusing the same key with an
+    identical request body replays the original response instead of
+    re-running the handler; reusing it with a different body returns `409`.
+    A request with no `Idempotency-Key` header on a route that requires one
+    returns `400`. See the `IdempotencyKey` parameter and `Conflict`
+    response, referenced on every mutating operation below.
+
+    ## Pagination
+
+    Every list endpoint accepts `page` (default `1`) and `limit` (default
+    `50`, max `200`) query parameters and returns a `pagination` object:
+    `{page, limit, total, pages}`. Some endpoints additionally return a
+    top-level `total` field for backward compatibility with earlier,
+    pre-Phase-2 response shapes — both always agree.
+
+    ## Timestamps
+
+    Every timestamp in every response is normalized to ISO-8601
+    (`Date.toISOString()` format, e.g. `2026-01-15T07:23:41.000Z`) at the
+    API boundary, regardless of how the underlying column stores it.
+
+    ## Request / correlation IDs
+
+    Every response carries an `X-Request-Id` header (unique per call) and
+    an `X-Correlation-Id` header (defaults to the request ID; supply your
+    own via a request `X-Correlation-Id` header to tie a multi-call
+    workflow together for debugging). Both are persisted in the
+    `bap_audit` table server-side.
+
+    ## Errors
+
+    Every error response has the shape `{error, code, request_id}` at
+    minimum (`error` is a human-readable string; `code` is one of
+    `validation_error | not_found | permission_denied | conflict |
+    rate_limited | internal_error`, new as of Phase 2 — treat as
+    best-effort/additive, some older routes may omit `code`/`request_id`).
+
+  contact:
+    name: Blueprint
+servers:
+  - url: /api/bap/v1
+    description: Relative to your Blueprint instance's base URL (BLUEPRINT_URL)
+
+security:
+  - bapKey: []
+
+# ─────────────────────────────────────────────────────────────────────────
+components:
+  securitySchemes:
+    bapKey:
+      type: apiKey
+      in: header
+      name: BAP-Key
+      description: A key issued by POST /register. Authorization Bearer <key> is also accepted.
+    registrationSecret:
+      type: apiKey
+      in: header
+      name: X-Registration-Secret
+      description: Shared secret configured via BAP_REGISTRATION_SECRET. Only required if not using a dashboard session.
+    sessionAuth:
+      type: apiKey
+      in: cookie
+      name: connect.sid
+      description: Dashboard session cookie — operator-only routes (/agents-admin/*), not part of the external-agent BAP surface.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema: { type: string }
+      description: Required on every mutating endpoint. See the top-level Idempotency section.
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string }
+      description: Optional — ties this call to others in the same logical workflow. Echoed back and persisted.
+    BusinessIdPath:
+      name: businessId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    NotFound:
+      description: The resource does not exist.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: "Task 'tsk_xxx' not found.", code: not_found, request_id: "..." }
+    PermissionDenied:
+      description: The caller's key lacks the required permission, or the resource belongs to a business outside the key's business_access.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: "Permission denied: task does not belong to an authorized business.", code: permission_denied, request_id: "..." }
+    ValidationError:
+      description: The request body or query parameters are invalid.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    IdempotencyKeyRequired:
+      description: The Idempotency-Key header was missing.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+          example: { error: "Idempotency-Key header is required for this endpoint." }
+    Conflict:
+      description: |
+        Either the same Idempotency-Key was reused with a different request
+        body, or a request with the same key is still being processed
+        (retryable: true in the body), or the resource is not in a state
+        that allows this action.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    RateLimited:
+      description: Too many requests. See Retry-After.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [validation_error, not_found, permission_denied, conflict, rate_limited, internal_error] }
+        request_id: { type: string, nullable: true }
+        retryable: { type: boolean }
+
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        limit: { type: integer }
+        total: { type: integer }
+        pages: { type: integer }
+
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        signal_id: { type: string, nullable: true }
+        mission_id: { type: string, nullable: true }
+        project_id: { type: string, nullable: true }
+        parent_task_id: { type: string, nullable: true }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        proposed_by: { type: string }
+        assigned_to: { type: string, nullable: true }
+        action_type: { type: string, nullable: true }
+        action_payload: { type: object }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        trust_tier: { type: string, enum: [green, yellow, red] }
+        priority: { type: string, enum: [p1, p2, p3] }
+        confidence: { type: number, nullable: true }
+        estimated_impact: { type: string, nullable: true }
+        outcome: { type: string, nullable: true }
+        outcome_data: { type: object, nullable: true }
+        target_metric: { type: string, nullable: true }
+        target_metric_baseline: { type: number, nullable: true }
+        version: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        approved_at: { type: string, format: date-time, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        completed_at: { type: string, format: date-time, nullable: true }
+
+    TaskStatus:
+      type: string
+      enum: [proposed, approved, executing, complete, verified, failed, blocked, rejected, cancelled, manual_review, deferred, draft_ready]
+
+    TaskDetail:
+      type: object
+      properties:
+        task: { $ref: '#/components/schemas/Task' }
+        approval:
+          type: object
+          properties:
+            status: { type: string }
+            approved_by: { type: string, nullable: true }
+            approved_at: { type: string, format: date-time, nullable: true }
+            rejection_reason: { type: string, nullable: true }
+            trust_tier: { type: string }
+            approval_mode: { type: string }
+        execution:
+          type: object
+          properties:
+            status: { type: string }
+            started_at: { type: string, format: date-time, nullable: true }
+            completed_at: { type: string, format: date-time, nullable: true }
+            active_job_id: { type: string, nullable: true }
+            jobs: { type: array, items: { $ref: '#/components/schemas/ExecutionJob' } }
+        linked_signal: { type: object, nullable: true }
+        linked_goals: { type: array, items: { type: object } }
+        dependencies:
+          type: object
+          properties:
+            parent_task: { type: object, nullable: true }
+            child_tasks: { type: array, items: { type: object } }
+        outcome:
+          type: object
+          properties:
+            target_metric: { type: string, nullable: true }
+            target_metric_baseline: { type: number, nullable: true }
+            checks: { type: array, items: { type: object } }
+            status: { $ref: '#/components/schemas/OutcomeStatus' }
+            is_final: { type: boolean }
+        audit_summary:
+          type: object
+          properties:
+            total_events: { type: integer }
+            last_action: { type: object, nullable: true }
+
+    ExecutionJob:
+      type: object
+      properties:
+        id: { type: string }
+        task_id: { type: string }
+        business_id: { type: string }
+        action_type: { type: string, nullable: true }
+        status: { type: string, enum: [queued, leased, executing, succeeded, failed, dead_letter, manual_review, cancelled] }
+        attempt_count: { type: integer }
+        max_attempts: { type: integer }
+        lease_owner: { type: string, nullable: true }
+        lease_expires_at: { type: string, format: date-time, nullable: true }
+        external_reference: { type: object, nullable: true }
+        last_error: { type: string, nullable: true }
+        result: { type: object, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Signal:
+      type: object
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        connector_id: { type: string, nullable: true }
+        rule_id: { type: string }
+        type: { type: string, enum: [anomaly, opportunity, risk, correlation] }
+        severity: { type: string, enum: [info, warning, alert, critical] }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        data: { type: object }
+        status: { type: string, enum: [open, resolved, snoozed] }
+        confidence: { type: number, nullable: true }
+        attribution_primary_cause: { type: string, nullable: true }
+        attribution_primary_confidence: { type: number, nullable: true }
+        attribution_recommendation: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+
+    SignalDetail:
+      type: object
+      properties:
+        signal: { $ref: '#/components/schemas/Signal' }
+        evidence: { type: object, description: "Alias for signal.data" }
+        attribution:
+          type: object
+          properties:
+            primary_cause: { type: string, nullable: true }
+            primary_confidence: { type: number, nullable: true }
+            recommendation: { type: string, nullable: true }
+            analysis: { type: object, nullable: true }
+        related_signals:
+          type: array
+          items:
+            allOf:
+              - type: object
+                properties: { relation: { type: string, enum: [cluster, same_detector] }, cluster_id: { type: string } }
+              - { type: object }
+        related_tasks: { type: array, items: { type: object } }
+        connector_freshness: { type: object, nullable: true }
+        resolution_history: { type: array, items: { type: object } }
+
+    Goal:
+      type: object
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        status: { type: string, enum: [active, paused, achieved, missed, cancelled] }
+        created_by: { type: string }
+        assigned_agents: { type: array, items: { type: string } }
+        deadline: { type: string, format: date-time, nullable: true }
+        metric_name: { type: string, nullable: true }
+        metric_baseline: { type: number, nullable: true }
+        metric_target: { type: number, nullable: true }
+        metric_current: { type: number, nullable: true }
+        metric_unit: { type: string, nullable: true }
+        progress_pct: { type: number }
+        last_checked: { type: string, format: date-time, nullable: true }
+        achieved_at: { type: string, format: date-time, nullable: true }
+        strategy: { type: string, nullable: true }
+        milestones: { type: array, items: { type: object } }
+        notes: { type: array, items: { type: object } }
+        tags: { type: array, items: { type: string } }
+        project_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Conflict:
+      type: object
+      properties:
+        id: { type: string }
+        conflict_type: { type: string }
+        severity: { type: string }
+        entity_a_type: { type: string }
+        entity_a_id: { type: string }
+        entity_a_title: { type: string, nullable: true }
+        entity_b_type: { type: string }
+        entity_b_id: { type: string }
+        entity_b_title: { type: string, nullable: true }
+        description: { type: string }
+        recommendation: { type: string, nullable: true }
+        status: { type: string, enum: [open, resolved] }
+        detected_at: { type: string, format: date-time }
+        resolved_at: { type: string, format: date-time, nullable: true }
+
+    Connector:
+      type: object
+      description: credentials is never included in any BAP response, at the SQL level (never selected).
+      properties:
+        id: { type: string }
+        business_id: { type: string }
+        type: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [live, stale, error, disconnected], description: "Live-computed freshness status — see raw_status for the underlying DB column." }
+        raw_status: { type: string, description: "The unprocessed connectors.status DB column value." }
+        last_sync: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
+        config_summary: { type: object, description: "Whitelisted non-secret config fields only." }
+        hours_since_sync: { type: number, nullable: true }
+        next_sync_in_minutes: { type: integer, nullable: true }
+        stale_threshold_hours: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    OutcomeStatus:
+      type: string
+      nullable: true
+      enum: [pending, measuring, successful, neutral, unsuccessful, abandoned]
+      description: |
+        Mapped from the underlying task_outcomes.verdict vocabulary
+        (improved/worsened/no_change) — null means the task was never
+        eligible for outcome tracking (no target_metric).
+
+    Outcome:
+      type: object
+      properties:
+        task_id: { type: string }
+        task_title: { type: string }
+        action_type: { type: string, nullable: true }
+        proposed_by: { type: string }
+        status: { $ref: '#/components/schemas/OutcomeStatus' }
+        is_final: { type: boolean, description: "True once a 4-week (or later) check exists." }
+        target_metric: { type: string, nullable: true }
+        baseline: { type: number, nullable: true }
+        checks: { type: array, items: { type: object } }
+        latest: { type: object, nullable: true }
+
+    AgentRun:
+      type: object
+      properties:
+        id: { type: string }
+        agent_id: { type: string }
+        business_id: { type: string }
+        trigger: { type: string }
+        trigger_id: { type: string, nullable: true }
+        status: { type: string, enum: [running, complete, failed, skipped, cancelled] }
+        cost_usd: { type: number, nullable: true }
+        signals_detected: { type: integer }
+        tasks_proposed: { type: integer }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time, nullable: true }
+        error: { type: string, nullable: true }
+
+    AuditEntry:
+      type: object
+      properties:
+        id: { type: string }
+        entity_type: { type: string, enum: [task, signal, business, connector, agent, agent_file, server_file] }
+        entity_id: { type: string }
+        action: { type: string }
+        actor: { type: string }
+        before_state: { type: object, nullable: true, description: "Key-shaped redaction applied — see spec description." }
+        after_state: { type: object, nullable: true }
+        metadata: { type: object, nullable: true }
+        created_at: { type: string, format: date-time }
+
+# ─────────────────────────────────────────────────────────────────────────
+paths:
+  /register:
+    post:
+      operationId: register
+      summary: Register a new BAP agent and issue an API key
+      security:
+        - registrationSecret: []
+        - sessionAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+                owner: { type: string }
+                requested_permissions: { type: array, items: { type: string }, description: "Filtered server-side against a grantable allow-list; wildcards (*:*, resource:*) are never granted." }
+                business_access: { type: array, items: { type: string }, description: "Filtered to businesses that exist; '*' is never granted." }
+                webhook_url: { type: string }
+                webhook_events: { type: array, items: { type: string } }
+      responses:
+        '201':
+          description: Agent registered.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  agent_id: { type: string }
+                  api_key: { type: string, description: "Shown once only." }
+                  api_key_prefix: { type: string }
+                  permissions: { type: array, items: { type: string } }
+                  business_access: { type: array, items: { type: string } }
+                  webhook_secret: { type: string, nullable: true }
+        '401': { description: Unauthenticated — no session and no valid X-Registration-Secret. }
+
+  /discover:
+    get:
+      operationId: discover
+      summary: Public instance capability discovery (no auth)
+      security: []
+      responses:
+        '200': { description: Instance name, businesses, connectors, capabilities. }
+        '404': { description: Discovery disabled by the operator. }
+
+  /me:
+    get:
+      operationId: whoami
+      summary: Current agent's identity, permissions, and accessible businesses
+      responses:
+        '200': { description: OK }
+
+  /capabilities:
+    get:
+      operationId: capabilities
+      summary: Instance-wide capability info (connected connectors, active internal agents)
+      responses:
+        '200': { description: OK }
+
+  /businesses/{businessId}/health:
+    get:
+      operationId: getBusinessHealth
+      summary: Full business health snapshot (score, signals, tasks, metrics, agent activity)
+      x-bap-permission: signals:read
+      parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /businesses/{businessId}/signals:
+    get:
+      operationId: listSignals
+      summary: List signals — search, filter, paginate
+      x-bap-permission: signals:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: q, in: query, schema: { type: string }, description: "Full-text search over title/description." }
+        - { name: severity, in: query, schema: { type: string }, description: "CSV: info,warning,alert,critical" }
+        - { name: status, in: query, schema: { type: string, default: open }, description: "CSV, or 'all'." }
+        - { name: connector, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string }, description: "CSV: anomaly,opportunity,risk,correlation" }
+        - { name: created_from, in: query, schema: { type: string, format: date-time } }
+        - { name: created_to, in: query, schema: { type: string, format: date-time } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, resolved_at, severity, confidence], default: created_at } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc], default: desc } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  signals: { type: array, items: { $ref: '#/components/schemas/Signal' } }
+                  total: { type: integer, description: "Backward-compat alias for pagination.total" }
+                  filters_applied: { type: object }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+    post:
+      operationId: createSignal
+      summary: Create a signal (tell Blueprint about something detected externally)
+      x-bap-permission: signals:create
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, severity, title]
+              properties:
+                type: { type: string, enum: [anomaly, opportunity, risk, correlation] }
+                severity: { type: string, enum: [info, warning, alert, critical] }
+                title: { type: string }
+                description: { type: string }
+                data: { type: object }
+                confidence: { type: number }
+                connector_id: { type: string }
+      responses:
+        '201': { description: "Created. { signal_id, created: true }" }
+        '400': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /signals/{signalId}:
+    get:
+      operationId: getSignalDetail
+      summary: Signal detail — evidence, attribution, related signals/tasks, connector freshness, resolution history
+      x-bap-permission: signals:read
+      parameters: [{ name: signalId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SignalDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+    patch:
+      operationId: patchSignalStatus
+      summary: Update a signal's status (e.g. acknowledge, resolve, snooze, dismiss)
+      x-bap-permission: signals:read
+      description: >-
+        Despite mutating state, this route is gated by `signals:read` (not a
+        `signals:update` permission, which does not exist) — this matches the
+        actual server implementation exactly. The idempotency store keys on
+        the internal scope string `"signals:update"`, but that is not a
+        checked permission.
+      parameters:
+        - { name: signalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, description: "e.g. open, acknowledged, resolved, snoozed, dismissed. Setting 'resolved' also stamps resolved_at." }
+                note: { type: string }
+      responses:
+        '200': { description: "{ signal_id, status, updated: true }" }
+        '400':
+          description: Missing status, or missing Idempotency-Key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /tasks/{taskId}:
+    get:
+      operationId: getTaskDetail
+      summary: Task detail — approval status, execution state, linked signal/goals/jobs, outcome, audit summary
+      x-bap-permission: tasks:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TaskDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+    patch:
+      operationId: patchTask
+      summary: Approve, reject, or cancel a task
+      x-bap-permission: tasks:approve
+      parameters:
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [approve, reject, cancel] }
+                note: { type: string }
+                reason: { type: string, description: "Used for cancel; note is used for approve/reject." }
+      responses:
+        '200': { description: "{ task_id, status, action }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '422': { description: "Task is not in a state that allows this action (e.g. cancelling an executing task)." }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /tasks/{taskId}/history:
+    get:
+      operationId: getTaskHistory
+      summary: Task narrative timeline (task_events)
+      x-bap-permission: tasks:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ task_id, events: [...] }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /tasks/{taskId}/outcome:
+    get:
+      operationId: getTaskOutcome
+      summary: Single-task outcome detail — baseline, checks, confidence, recommendation
+      x-bap-permission: outcomes:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/Outcome' }
+                  - type: object
+                    properties:
+                      linked_task: { type: string }
+                      confidence:
+                        type: object
+                        properties:
+                          stated: { type: number, nullable: true }
+                          calibrated: { type: number, nullable: true }
+                          agent_calibration: { type: object, nullable: true }
+                      recommendation:
+                        type: object
+                        nullable: true
+                        properties:
+                          action_type: { type: string }
+                          sample_size: { type: integer }
+                          success_rate: { type: number, nullable: true }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/tasks:
+    get:
+      operationId: listTasks
+      summary: List tasks — search, filter, sort, paginate
+      x-bap-permission: tasks:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: priority, in: query, schema: { type: string } }
+        - { name: action_type, in: query, schema: { type: string } }
+        - { name: created_by, in: query, schema: { type: string } }
+        - { name: assigned_agent, in: query, schema: { type: string } }
+        - { name: signal_id, in: query, schema: { type: string } }
+        - { name: goal_id, in: query, schema: { type: string }, description: "Best-effort: resolved via the goal's project_id, not a direct FK." }
+        - { name: created_from, in: query, schema: { type: string, format: date-time } }
+        - { name: created_to, in: query, schema: { type: string, format: date-time } }
+        - { name: sort, in: query, schema: { type: string, enum: [created_at, updated_at, priority, status, confidence] } }
+        - { name: order, in: query, schema: { type: string, enum: [asc, desc] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks: { type: array, items: { $ref: '#/components/schemas/Task' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+    post:
+      operationId: proposeTask
+      summary: Propose a task for human approval
+      x-bap-permission: tasks:propose
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                action_type: { type: string }
+                priority: { type: string, enum: [p1, p2, p3], default: p2 }
+                confidence: { type: number }
+                estimated_impact: { type: string }
+                signal_id: { type: string }
+                assigned_to: { type: string }
+                action_payload: { type: object }
+      responses:
+        '201': { description: "{ task_id, status, trust_tier, approval_required: true }" }
+        '400': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /businesses/{businessId}/execution-jobs:
+    get:
+      operationId: listExecutionJobs
+      summary: List durable execution jobs (Phase 1 — approval → job → worker)
+      x-bap-permission: tasks:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobs: { type: array, items: { $ref: '#/components/schemas/ExecutionJob' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /execution-jobs/{jobId}:
+    get:
+      operationId: getExecutionJob
+      summary: Execution job detail
+      x-bap-permission: tasks:read
+      parameters: [{ name: jobId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ job }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /execution-jobs/{jobId}/retry:
+    post:
+      operationId: retryExecutionJob
+      summary: Retry a dead-lettered/manual-review/cancelled execution job
+      x-bap-permission: tasks:approve
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ job_id, status: 'queued', retried: true }" }
+        '409': { description: "Job is not in a retryable state." }
+
+  /execution-jobs/{jobId}/cancel:
+    post:
+      operationId: cancelExecutionJob
+      summary: Cancel a queued/manual-review execution job
+      x-bap-permission: tasks:approve
+      parameters:
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ job_id, status: 'cancelled', cancelled: true }" }
+        '409': { description: "Job is not in a cancellable state." }
+
+  /businesses/{businessId}/kb/file/{+path}:
+    get:
+      operationId: readKbFile
+      summary: Read a knowledge-base file by path
+      x-bap-permission: kb:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: path, in: path, required: true, schema: { type: string }, description: "Wildcard — the KB-relative file path." }
+      responses:
+        '200': { description: File content + frontmatter + backlinks. }
+        '400': { description: "Path escapes the KB root — see containPath() in kb-engine.ts." }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /businesses/{businessId}/kb/search:
+    get:
+      operationId: searchKb
+      summary: Keyword search over KB documents
+      x-bap-permission: kb:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200': { description: "{ results, query }" }
+
+  /businesses/{businessId}/kb/query:
+    post:
+      operationId: queryKb
+      summary: Ask a question, grounded and answered from the KB (LLM)
+      x-bap-permission: kb:read
+      parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question]
+              properties:
+                question: { type: string }
+                file_result: { type: boolean }
+                context: { type: string }
+      responses:
+        '200': { description: "{ answer, sources_read, filed_as }" }
+
+  /businesses/{businessId}/kb/write:
+    post:
+      operationId: writeKb
+      summary: Write/create a knowledge-base page
+      x-bap-permission: kb:write
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, content]
+              properties:
+                path: { type: string }
+                content: { type: string }
+                frontmatter: { type: object }
+                commit_message: { type: string }
+      responses:
+        '200': { description: Written file metadata. }
+        '400': { description: "Path escapes the KB root, or Idempotency-Key missing." }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /businesses/{businessId}/metrics:
+    get:
+      operationId: listMetrics
+      summary: Raw connector metrics
+      x-bap-permission: metrics:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: connector, in: query, schema: { type: string } }
+        - { name: metric, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 10 } }
+      responses:
+        '200': { description: "{ metrics: [...] }" }
+
+  /businesses/{businessId}/metrics/snapshot:
+    get:
+      operationId: metricsSnapshot
+      summary: Latest metric value per connector
+      x-bap-permission: metrics:read
+      parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
+      responses:
+        '200': { description: "{ snapshot_at, connectors: {...} }" }
+
+  /businesses/{businessId}/agents:
+    get:
+      operationId: listInternalAgents
+      summary: List Blueprint's internal agents (business-scoped stats)
+      x-bap-permission: agents:read
+      parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
+      responses:
+        '200': { description: "{ agents: [...] }" }
+
+  /businesses/{businessId}/agents/{agentId}/run:
+    post:
+      operationId: triggerAgentRun
+      summary: Trigger an internal agent to run now
+      x-bap-permission: agents:trigger
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { name: agentId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string } } }
+      responses:
+        '202': { description: "{ run_id, agent_id, status: 'queued', estimated_start: 'immediate' }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /runs/{runId}:
+    get:
+      operationId: getRunDetail
+      summary: Single agent-run detail
+      x-bap-permission: agents:read
+      parameters: [{ name: runId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: Curated run detail (reasoning, cost, tasks_proposed, signals_detected). }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/runs:
+    get:
+      operationId: listAgentRuns
+      summary: List agent runs — filter by agent_id/status/trigger, paginated
+      x-bap-permission: agents:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: agent_id, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: trigger, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs: { type: array, items: { $ref: '#/components/schemas/AgentRun' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /runs/{runId}/cancel:
+    post:
+      operationId: cancelRun
+      summary: Mark a running agent run as cancelled (DB-status flip only — see description)
+      description: |
+        This does NOT interrupt an in-flight LLM call or task creation
+        already under way — server/agents/agent-runner.ts's runAgent() has
+        no abort signal or mid-run checkpoint. It stops Blueprint from
+        treating the run as active for tracking/cost-cap purposes.
+      x-bap-permission: agents:trigger
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ run_id, status: 'cancelled', note }" }
+        '409': { description: "Run is not in 'running' status." }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /runs/{runId}/retry:
+    post:
+      operationId: retryRun
+      summary: Re-trigger a failed run (same agent_id/business_id — a fresh run, not a true replay)
+      x-bap-permission: agents:trigger
+      parameters:
+        - { name: runId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { description: "{ run_id (new), retried_from, agent_id, status: 'queued' }" }
+        '422': { description: "Run is not 'failed' — only failed runs can be retried." }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/webhook:
+    put:
+      operationId: setWebhook
+      summary: Configure or update this agent's webhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                webhook_url: { type: string, nullable: true }
+                webhook_events: { type: array, items: { type: string } }
+      responses:
+        '200': { description: OK }
+        '400': { description: "URL resolves to a private/reserved address (SSRF guard) or another validation failure." }
+
+  /me/webhook/deliveries:
+    get:
+      operationId: listWebhookDeliveries
+      summary: List this agent's webhook delivery attempts
+      responses:
+        '200': { description: "{ deliveries: [...] }" }
+
+  /me/webhook/deliveries/{deliveryId}/retry:
+    post:
+      operationId: retryWebhookDelivery
+      summary: Retry a failed webhook delivery
+      parameters: [{ name: deliveryId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Phase 2: Goals ──────────────────────────────────────────────────────
+  /businesses/{businessId}/goals:
+    get:
+      operationId: listGoals
+      summary: List goals — search, filter, paginate
+      x-bap-permission: goals:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: q, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string }, description: "CSV; defaults to all non-cancelled goals." }
+        - { name: tags, in: query, schema: { type: string }, description: "CSV." }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  goals: { type: array, items: { $ref: '#/components/schemas/Goal' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+    post:
+      operationId: proposeGoal
+      summary: Propose (create) a new goal
+      x-bap-permission: goals:propose
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                description: { type: string }
+                deadline: { type: string, format: date-time }
+                metric_name: { type: string, description: "If set with no metric_baseline, auto-filled from the latest matching metrics row." }
+                metric_baseline: { type: number }
+                metric_target: { type: number }
+                metric_unit: { type: string }
+                strategy: { type: string }
+                project_id: { type: string }
+                assigned_agents: { type: array, items: { type: string } }
+                milestones: { type: array, items: { type: object } }
+                tags: { type: array, items: { type: string } }
+      responses:
+        '201': { description: "{ goal }" }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /goals/{goalId}:
+    get:
+      operationId: getGoalDetail
+      summary: Goal detail — progress, linked metrics/tasks/signals, blockers, conflicts
+      x-bap-permission: goals:read
+      parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  goal: { $ref: '#/components/schemas/Goal' }
+                  linked_metrics: { type: object, nullable: true }
+                  linked_tasks: { type: array, items: { type: object } }
+                  linked_signals: { type: array, items: { type: object } }
+                  progress:
+                    type: object
+                    properties:
+                      progress_pct: { type: number }
+                      last_checked: { type: string, format: date-time, nullable: true }
+                      checks: { type: array, items: { type: object } }
+                  blockers:
+                    type: object
+                    properties:
+                      open_conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
+                      deadline_at_risk: { type: boolean }
+                  conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+    patch:
+      operationId: updateGoal
+      summary: Update a goal (progress/status/metric/strategy/tags/etc)
+      x-bap-permission: goals:update
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                description: { type: string }
+                status: { type: string, enum: [active, paused, achieved, missed, cancelled] }
+                deadline: { type: string, format: date-time }
+                metric_name: { type: string }
+                metric_baseline: { type: number }
+                metric_target: { type: number }
+                metric_unit: { type: string }
+                strategy: { type: string }
+                project_id: { type: string }
+                assigned_agents: { type: array, items: { type: string } }
+                milestones: { type: array, items: { type: object } }
+                notes: { type: array, items: { type: object } }
+                tags: { type: array, items: { type: string } }
+      responses:
+        '200': { description: "{ goal }" }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /goals/{goalId}/archive:
+    post:
+      operationId: archiveGoal
+      summary: Soft-cancel a goal (status -> cancelled)
+      x-bap-permission: goals:update
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ goal_id, status: 'cancelled' }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /goals/{goalId}/check:
+    post:
+      operationId: checkGoal
+      summary: Recompute a goal's progress against its current metric value now
+      x-bap-permission: goals:update
+      parameters:
+        - { name: goalId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200': { description: "{ goal, check_result }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /goals/{goalId}/conflicts:
+    get:
+      operationId: getGoalConflicts
+      summary: Conflicts referencing this goal (goal-vs-goal, task-vs-goal)
+      x-bap-permission: goals:read
+      parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ conflicts }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ── Phase 2: Connectors ─────────────────────────────────────────────────
+  /businesses/{businessId}/connectors:
+    get:
+      operationId: listConnectors
+      summary: List connectors — status, freshness, config summary (no secrets)
+      x-bap-permission: connectors:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connectors: { type: array, items: { $ref: '#/components/schemas/Connector' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  /connectors/{connectorId}:
+    get:
+      operationId: getConnectorDetail
+      summary: Connector detail — health, sync stats
+      x-bap-permission: connectors:read
+      parameters: [{ name: connectorId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ connector, sync_stats, metrics_stored }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /connectors/{connectorId}/syncs:
+    get:
+      operationId: listConnectorSyncs
+      summary: Sync history — filterable, paginated
+      x-bap-permission: connectors:read
+      parameters:
+        - { name: connectorId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string }, description: "CSV: running,complete,failed" }
+      responses:
+        '200': { description: "{ syncs, total, pagination }" }
+
+  /connectors/{connectorId}/sync:
+    post:
+      operationId: triggerConnectorSync
+      summary: Trigger a sync now
+      x-bap-permission: connectors:sync
+      parameters:
+        - { name: connectorId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202': { description: "{ connector_id, status: 'syncing', message }" }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  # ── Phase 2: Outcomes ───────────────────────────────────────────────────
+  /businesses/{businessId}/outcomes:
+    get:
+      operationId: listOutcomes
+      summary: List outcomes across tasks with a target_metric — filterable by mapped status, action_type, proposed_by
+      x-bap-permission: outcomes:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/OutcomeStatus' } }
+        - { name: action_type, in: query, schema: { type: string } }
+        - { name: proposed_by, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outcomes: { type: array, items: { $ref: '#/components/schemas/Outcome' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+
+  # ── Phase 2: Audit ──────────────────────────────────────────────────────
+  /businesses/{businessId}/audit:
+    get:
+      operationId: listAuditEntries
+      summary: Filterable, paginated audit trail (task/signal/business/connector/agent actions)
+      x-bap-permission: audit:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: entity_type, in: query, schema: { type: string }, description: "CSV, whitelisted: task,signal,business,connector,agent,agent_file,server_file" }
+        - { name: entity_id, in: query, schema: { type: string } }
+        - { name: action, in: query, schema: { type: string }, description: "CSV" }
+        - { name: actor, in: query, schema: { type: string }, description: "CSV" }
+        - { name: date_from, in: query, schema: { type: string, format: date-time } }
+        - { name: date_to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { description: "entity_type contains a value outside the whitelist." }
+
+  # ── Operator-only (session auth, not part of the external-agent surface) ─
+  /agents-admin:
+    get:
+      operationId: listBapAgentsAdmin
+      summary: "[Operator only] List all registered BAP agents"
+      security: [{ sessionAuth: [] }]
+      responses:
+        '200': { description: OK }
+
+  /agents-admin/{agentId}/revoke:
+    post:
+      operationId: revokeBapAgent
+      summary: "[Operator only] Revoke a BAP agent's key"
+      security: [{ sessionAuth: [] }]
+      parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK }
+
+  /agents-admin/{agentId}/audit:
+    get:
+      operationId: getBapAgentAuditAdmin
+      summary: "[Operator only] An agent's own bap_audit call log"
+      security: [{ sessionAuth: [] }]
+      parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ calls }" }
+
+  /agents-admin/{agentId}/deliveries:
+    get:
+      operationId: getBapAgentDeliveriesAdmin
+      summary: "[Operator only] An agent's webhook delivery history"
+      security: [{ sessionAuth: [] }]
+      parameters: [{ name: agentId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ deliveries }" }

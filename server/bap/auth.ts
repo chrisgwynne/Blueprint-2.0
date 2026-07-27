@@ -8,6 +8,7 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import type { Request, Response, NextFunction } from 'express';
+import { getBapContext } from './route-helpers.js';
 
 // ─── Registration authorization ──────────────────────────────────────────────
 //
@@ -62,6 +63,14 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'kb:read', 'kb:write',
   'metrics:read',
   'agents:read', 'agents:trigger',
+  // Phase 2 — BAP completeness. tasks:approve already covers task cancel
+  // and execution-job retry/cancel (Phase 1 precedent: those are the same
+  // trust tier as approve/reject, not a separate grant); agents:trigger
+  // already covers agent-run retry/cancel for the same reason.
+  'goals:read', 'goals:propose', 'goals:update',
+  'connectors:read', 'connectors:sync',
+  'outcomes:read',
+  'audit:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {
@@ -204,8 +213,8 @@ export async function bapAuth(req: Request, res: Response, next: NextFunction): 
     try {
       db.prepare(`
         INSERT INTO bap_audit (id, agent_id, method, endpoint, business_id,
-                               status_code, duration_ms, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                               status_code, duration_ms, request_id, correlation_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
       `).run(
         auditId,
         agent.id as string,
@@ -213,7 +222,9 @@ export async function bapAuth(req: Request, res: Response, next: NextFunction): 
         req.path,
         (req.params as Record<string, string>)?.businessId ?? null,
         res.statusCode,
-        Date.now() - start
+        Date.now() - start,
+        getBapContext(req)?.requestId ?? null,
+        getBapContext(req)?.correlationId ?? null,
       );
     } catch {}
   });

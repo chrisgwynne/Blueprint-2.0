@@ -46,9 +46,19 @@ import { bapRateLimit } from '../bap/rate-limiter.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { assertSafeWebhookUrl, UnsafeWebhookUrlError } from '../lib/ssrf-guard.js';
 import { KBPathError } from '../kb/kb-engine.js';
-import { withIdempotency, IdempotencyConflictError, IdempotencyInProgressError } from '../lib/idempotency.js';
+import { bapRequestContext, parsePagination, paginationMeta, toIso, normalizeTimestamps, withRequiredIdempotency } from '../bap/route-helpers.js';
+import { computeOutcomeStatus } from '../tasks/outcome-status.js';
+import bapGoalsRouter from './bap-goals.js';
+import bapConnectorsRouter from './bap-connectors.js';
+import bapOutcomesRouter from './bap-outcomes.js';
+import bapRunsRouter from './bap-runs.js';
+import bapAuditRouter from './bap-audit.js';
 
 const router = Router();
+// Every BAP call — including /register, before bapAuth even runs — gets a
+// request/correlation ID (see route-helpers.ts). Mounted first so it's
+// available to every route below, and to bapAuth's own audit-log insert.
+router.use(bapRequestContext);
 
 // ─── Helper ─────────────────────────────────────────────────────────────────
 
@@ -56,42 +66,6 @@ function safeJSON(val: unknown, fallback: unknown = []): unknown {
   if (Array.isArray(val) || (typeof val === 'object' && val !== null)) return val;
   if (!val) return fallback;
   try { return JSON.parse(val as string); } catch { return fallback; }
-}
-
-/**
- * Every mutating BAP endpoint (create/approve/write) requires an
- * `Idempotency-Key` header and runs its handler through
- * lib/idempotency.ts's claim-then-execute pattern — this is what lets an
- * agent safely retry a timed-out or connection-dropped request (the
- * dominant failure mode for an autonomous caller) without risking a
- * duplicate signal, task, or KB write. `scope` distinguishes key
- * namespaces per endpoint so the same key string reused for a different
- * operation by the same agent can't collide.
- */
-async function withRequiredIdempotency(
-  req: Request, res: Response, scope: string,
-  handler: () => Promise<{ status: number; body: unknown }>,
-): Promise<void> {
-  const key = req.header('Idempotency-Key');
-  if (!key) {
-    res.status(400).json({ error: 'Idempotency-Key header is required for this endpoint.' });
-    return;
-  }
-  const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
-  try {
-    const result = await withIdempotency(bapAgent.id as string, scope, key, req.body, handler);
-    res.status(result.status).json(result.body);
-  } catch (err) {
-    if (err instanceof IdempotencyConflictError) {
-      res.status(409).json({ error: err.message });
-      return;
-    }
-    if (err instanceof IdempotencyInProgressError) {
-      res.status(409).json({ error: err.message, retryable: true });
-      return;
-    }
-    throw err;
-  }
 }
 
 // Strip <think>...</think> reasoning blocks from content posted by external agents
@@ -231,6 +205,23 @@ router.get('/discover', (_req: Request, res: Response) => {
 router.use(bapAuth);
 router.use(bapRateLimit('default'));
 
+// Phase 2 subsystems — split into separate files purely to keep this one
+// from growing unboundedly (see each file's docstring), mounted here as
+// sub-routers rather than independently in server/index.ts: mounting them
+// independently at the same '/api/bap/v1' prefix would mean every one of
+// their own bapAuth/rate-limit middleware re-runs (re-validating the key,
+// writing a second bap_audit row) whenever a request falls through this
+// router's own routes to reach one of theirs — Express runs a mounted
+// router's unconditional middleware for every request under its prefix,
+// not just ones matching its own routes. Mounting them here, after this
+// router's own bapAuth has already run, means exactly one auth pass per
+// request regardless of which subsystem ultimately handles it.
+router.use(bapGoalsRouter);
+router.use(bapConnectorsRouter);
+router.use(bapOutcomesRouter);
+router.use(bapRunsRouter);
+router.use(bapAuditRouter);
+
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
 router.get('/me', (req: Request, res: Response) => {
@@ -267,16 +258,23 @@ router.get('/capabilities', (_req: Request, res: Response) => {
     endpoints: [
       'POST /register', 'GET /me', 'GET /capabilities',
       'GET /businesses/:id/health',
-      'GET|POST /businesses/:id/signals', 'PATCH /signals/:id',
-      'GET|POST /businesses/:id/tasks', 'PATCH /tasks/:id',
+      'GET|POST /businesses/:id/signals', 'GET|PATCH /signals/:id',
+      'GET|POST /businesses/:id/tasks', 'GET /tasks/:id', 'GET /tasks/:id/history', 'PATCH /tasks/:id',
       'GET /businesses/:id/execution-jobs', 'GET /execution-jobs/:id',
       'POST /execution-jobs/:id/retry', 'POST /execution-jobs/:id/cancel',
+      'GET|POST /businesses/:id/goals', 'GET|PATCH /goals/:id',
+      'POST /goals/:id/archive', 'POST /goals/:id/check', 'GET /goals/:id/conflicts',
+      'GET /businesses/:id/connectors', 'GET /connectors/:id',
+      'GET /connectors/:id/syncs', 'POST /connectors/:id/sync',
+      'GET /businesses/:id/outcomes', 'GET /tasks/:id/outcome',
+      'GET /businesses/:id/runs', 'POST /runs/:id/cancel', 'POST /runs/:id/retry',
+      'GET /businesses/:id/audit',
       'GET /businesses/:id/kb/file/*', 'GET /businesses/:id/kb/search',
       'POST /businesses/:id/kb/query', 'POST /businesses/:id/kb/write',
       'GET /businesses/:id/metrics', 'GET /businesses/:id/metrics/snapshot',
       'GET /businesses/:id/agents', 'POST /businesses/:id/agents/:id/run',
       'GET /runs/:id',
-      'PUT /me/webhook', 'GET /me/webhook/deliveries',
+      'PUT /me/webhook', 'GET /me/webhook/deliveries', 'POST /me/webhook/deliveries/:id/retry',
     ],
     connectors_connected: connectors,
     internal_agents: agents.map((a) => ({ id: a.id, name: a.name, status: a.status })),
@@ -375,31 +373,137 @@ router.get('/businesses/:businessId/health', requirePermission('signals:read'), 
 
 // ─── SIGNALS ────────────────────────────────────────────────────────────────
 
+const SIGNAL_SORT_COLUMNS = new Set(['created_at', 'resolved_at', 'severity', 'confidence']);
+
 router.get('/businesses/:businessId/signals', requirePermission('signals:read'), (req: Request, res: Response) => {
   try {
     const businessId = String(req.params.businessId);
-    const { severity, status = 'open', limit = '50', connector } = req.query;
+    const {
+      q, severity, status = 'open', connector, type,
+      created_from, created_to, sort = 'created_at', order = 'desc',
+    } = req.query;
 
     const conditions = ['business_id = ?'];
     const params: any[] = [businessId];
+    if (q) {
+      conditions.push('(title LIKE ? ESCAPE \'\\\' OR description LIKE ? ESCAPE \'\\\')');
+      const term = likeTerm(String(q));
+      params.push(term, term);
+    }
     if (severity) {
       const sevArr = String(severity).split(',');
       conditions.push(`severity IN (${sevArr.map(() => '?').join(',')})`);
       params.push(...sevArr);
     }
+    // Preserves the original default (open-only unless status=all is
+    // explicitly requested) — additive filters below don't change this.
     if (status && status !== 'all') { conditions.push('status = ?'); params.push(String(status)); }
     if (connector) { conditions.push('connector_id = ?'); params.push(String(connector)); }
+    if (type) {
+      const arr = String(type).split(',');
+      conditions.push(`type IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
+    }
+    if (created_from) { conditions.push('created_at >= ?'); params.push(String(created_from)); }
+    if (created_to) { conditions.push('created_at <= ?'); params.push(String(created_to)); }
 
     const where = conditions.join(' AND ');
-    const lim = Math.min(parseInt(String(limit), 10) || 50, 200);
-
-    const signals = (db.prepare(
-      `SELECT * FROM signals WHERE ${where} ORDER BY created_at DESC LIMIT ?`
-    ).all(...params, lim) as Array<Record<string, unknown>>).map((s) => ({ ...s, data: safeJSON(s.data, {}) }));
+    const sortCol = SIGNAL_SORT_COLUMNS.has(String(sort)) ? String(sort) : 'created_at';
+    const sortDir = String(order).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const { page, limit, offset } = parsePagination(req.query as Record<string, unknown>);
 
     const total = (db.prepare(`SELECT COUNT(*) as n FROM signals WHERE ${where}`).get(...params) as { n: number } | undefined)?.n ?? 0;
+    const signals = (db.prepare(
+      `SELECT * FROM signals WHERE ${where} ORDER BY ${sortCol} ${sortDir}, id ${sortDir} LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset) as Array<Record<string, unknown>>).map((s) => normalizeTimestamps({
+      ...s, data: safeJSON(s.data, {}), attribution_analysis: safeJSON(s.attribution_analysis, null),
+    }, ['created_at', 'resolved_at', 'snoozed_until', 'do_not_act_until']));
 
-    return res.json({ signals, total, filters_applied: { severity, status, connector } });
+    return res.json({
+      signals, total, filters_applied: { severity, status, connector, type, q },
+      pagination: paginationMeta(total, page, limit),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /signals/:signalId — single-signal detail: evidence (the raw `data`
+ * payload), attribution (the attribution_* columns, populated by
+ * signals/ai-analysis.ts for some signal types), related signals (same
+ * signal_clusters row, falling back to same connector+rule_id siblings),
+ * related tasks, the source connector's freshness, and a resolution
+ * history (audit_log entries for this signal).
+ */
+router.get('/signals/:signalId', requirePermission('signals:read'), (req: Request, res: Response) => {
+  try {
+    const signalId = String(req.params.signalId);
+    const row = db.prepare('SELECT * FROM signals WHERE id = ?').get(signalId) as Record<string, unknown> | undefined;
+    if (!row) return res.status(404).json({ error: `Signal '${signalId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'signals:read', row.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: signal does not belong to an authorized business.' });
+    }
+
+    const signal = normalizeTimestamps({
+      ...row, data: safeJSON(row.data, {}), attribution_analysis: safeJSON(row.attribution_analysis, null),
+    }, ['created_at', 'resolved_at', 'snoozed_until', 'do_not_act_until']);
+
+    const cluster = db.prepare(
+      "SELECT id, signal_ids, likely_cause, recommendation FROM signal_clusters WHERE business_id = ? AND signal_ids LIKE ?"
+    ).get(row.business_id as string, `%"${signalId}"%`) as { id: string; signal_ids: string; likely_cause: string | null; recommendation: string | null } | undefined;
+
+    let relatedSignals: Array<Record<string, unknown>>;
+    if (cluster) {
+      const ids = (safeJSON(cluster.signal_ids, []) as string[]).filter((id) => id !== signalId);
+      relatedSignals = ids.length
+        ? db.prepare(`SELECT id, title, severity, status, created_at FROM signals WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) as Array<Record<string, unknown>>
+        : [];
+    } else {
+      // Fallback heuristic: other open signals from the same connector +
+      // rule (i.e. the same underlying detector), most recent first.
+      relatedSignals = db.prepare(
+        `SELECT id, title, severity, status, created_at FROM signals
+         WHERE business_id = ? AND rule_id = ? AND connector_id IS ? AND id != ?
+         ORDER BY created_at DESC LIMIT 10`
+      ).all(row.business_id as string, row.rule_id as string, row.connector_id as string | null, signalId) as Array<Record<string, unknown>>;
+    }
+
+    const relatedTasks = db.prepare(
+      'SELECT id, title, status, action_type, created_at FROM tasks WHERE signal_id = ? ORDER BY created_at DESC'
+    ).all(signalId) as Array<Record<string, unknown>>;
+
+    const connector = row.connector_id
+      ? db.prepare('SELECT id, type, status, last_sync, last_error FROM connectors WHERE id = ?').get(row.connector_id as string) as Record<string, unknown> | undefined
+      : null;
+
+    const resolutionHistory = (db.prepare(
+      "SELECT action, actor, before_state, after_state, created_at FROM audit_log WHERE entity_type = 'signal' AND entity_id = ? ORDER BY created_at ASC"
+    ).all(signalId) as Array<Record<string, unknown>>).map((r) => normalizeTimestamps({
+      action: r.action, actor: r.actor, created_at: r.created_at,
+      from_status: safeJSON(r.before_state, null) ? (safeJSON(r.before_state, {}) as Record<string, unknown>).status ?? null : null,
+      to_status: safeJSON(r.after_state, null) ? (safeJSON(r.after_state, {}) as Record<string, unknown>).status ?? null : null,
+    }, ['created_at']));
+
+    return res.json({
+      signal,
+      evidence: signal.data,
+      attribution: {
+        primary_cause: row.attribution_primary_cause ?? null,
+        primary_confidence: row.attribution_primary_confidence ?? null,
+        recommendation: row.attribution_recommendation ?? null,
+        analysis: signal.attribution_analysis,
+      },
+      related_signals: (cluster
+        ? relatedSignals.map((s) => ({ ...s, relation: 'cluster', cluster_id: cluster.id }))
+        : relatedSignals.map((s) => ({ ...s, relation: 'same_detector' }))
+      ).map((s) => normalizeTimestamps(s, ['created_at'])),
+      related_tasks: relatedTasks.map((t) => normalizeTimestamps(t, ['created_at'])),
+      connector_freshness: connector ? normalizeTimestamps(connector, ['last_sync']) : null,
+      resolution_history: resolutionHistory,
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
@@ -494,35 +598,214 @@ router.patch('/signals/:signalId', requirePermission('signals:read'), async (req
 
 // ─── TASKS ──────────────────────────────────────────────────────────────────
 
-router.get('/businesses/:businessId/tasks', requirePermission('tasks:read'), (req: Request, res: Response) => {
+const TASK_SORT_COLUMNS = new Set(['created_at', 'updated_at', 'priority', 'status', 'confidence']);
+
+/**
+ * Escape SQLite LIKE wildcards (`%`, `_`) in caller-supplied search text so
+ * a title containing e.g. "50% off" doesn't silently behave as a wildcard
+ * match — not a security issue (parameterized either way), just correctness.
+ */
+function likeTerm(raw: string): string {
+  return `%${raw.replace(/[%_]/g, (c) => `\\${c}`)}%`;
+}
+
+router.get('/businesses/:businessId/tasks', requirePermission('tasks:read'), async (req: Request, res: Response) => {
   try {
     const businessId = String(req.params.businessId);
-    const { status, priority, limit = '50' } = req.query;
+    const {
+      q, status, priority, action_type, created_by, assigned_agent,
+      signal_id, goal_id, created_from, created_to,
+      sort = 'created_at', order = 'desc',
+    } = req.query;
 
     const conditions = ['business_id = ?'];
     const params: any[] = [businessId];
+
+    if (q) {
+      conditions.push('(title LIKE ? ESCAPE \'\\\' OR description LIKE ? ESCAPE \'\\\')');
+      const term = likeTerm(String(q));
+      params.push(term, term);
+    }
     if (status) {
-      const statusArr = String(status).split(',');
-      conditions.push(`status IN (${statusArr.map(() => '?').join(',')})`);
-      params.push(...statusArr);
+      const arr = String(status).split(',');
+      conditions.push(`status IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
     }
     if (priority) {
-      const priorityArr = String(priority).split(',');
-      conditions.push(`priority IN (${priorityArr.map(() => '?').join(',')})`);
-      params.push(...priorityArr);
+      const arr = String(priority).split(',');
+      conditions.push(`priority IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
+    }
+    if (action_type) {
+      const arr = String(action_type).split(',');
+      conditions.push(`action_type IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
+    }
+    if (created_by) {
+      const arr = String(created_by).split(',');
+      conditions.push(`proposed_by IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
+    }
+    if (assigned_agent) {
+      const arr = String(assigned_agent).split(',');
+      conditions.push(`assigned_to IN (${arr.map(() => '?').join(',')})`);
+      params.push(...arr);
+    }
+    if (signal_id) { conditions.push('signal_id = ?'); params.push(String(signal_id)); }
+    if (created_from) { conditions.push('created_at >= ?'); params.push(String(created_from)); }
+    if (created_to) { conditions.push('created_at <= ?'); params.push(String(created_to)); }
+
+    // goal_id: tasks have no direct goal_id column (see PHASE2.md — goals
+    // and tasks only share an optional project_id today). Best-effort
+    // proxy: resolve the goal's project_id and filter tasks by that,
+    // rather than silently ignoring the filter or erroring.
+    if (goal_id) {
+      const goal = db.prepare('SELECT project_id FROM goals WHERE id = ? AND business_id = ?').get(String(goal_id), businessId) as { project_id: string | null } | undefined;
+      if (!goal || !goal.project_id) {
+        conditions.push('1 = 0'); // goal not found, or has no project linkage — no tasks can match
+      } else {
+        conditions.push('project_id = ?');
+        params.push(goal.project_id);
+      }
     }
 
     const where = conditions.join(' AND ');
-    const lim = Math.min(parseInt(String(limit), 10) || 50, 200);
-    const tasks = (db.prepare(
-      `SELECT * FROM tasks WHERE ${where} ORDER BY created_at DESC LIMIT ?`
-    ).all(...params, lim) as Array<Record<string, unknown>>).map((t) => ({
+    const sortCol = TASK_SORT_COLUMNS.has(String(sort)) ? String(sort) : 'created_at';
+    const sortDir = String(order).toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+    const { page, limit, offset } = parsePagination(req.query as Record<string, unknown>);
+
+    const total = (db.prepare(`SELECT COUNT(*) as n FROM tasks WHERE ${where}`).get(...params) as { n: number }).n;
+    const rows = (db.prepare(
+      `SELECT * FROM tasks WHERE ${where} ORDER BY ${sortCol} ${sortDir}, id ${sortDir} LIMIT ? OFFSET ?`
+    ).all(...params, limit, offset) as Array<Record<string, unknown>>).map((t) => normalizeTimestamps({
       ...t,
       action_payload: safeJSON(t.action_payload, {}),
       outcome_data: safeJSON(t.outcome_data, null),
-    }));
+    }, ['created_at', 'updated_at', 'approved_at', 'started_at', 'completed_at']));
 
-    return res.json({ tasks });
+    return res.json({ tasks: rows, total, pagination: paginationMeta(total, page, limit) });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /tasks/:taskId — single-task detail. No :businessId in the path (a
+ * task ID is already globally unique), so ownership is re-derived from the
+ * fetched row and checked against the caller's business_access, same
+ * pattern as PATCH /tasks/:taskId.
+ */
+router.get('/tasks/:taskId', requirePermission('tasks:read'), (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
+    if (!row) return res.status(404).json({ error: `Task '${taskId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:read', row.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: task does not belong to an authorized business.' });
+    }
+
+    const task = normalizeTimestamps({
+      ...row,
+      action_payload: safeJSON(row.action_payload, {}),
+      outcome_data: safeJSON(row.outcome_data, null),
+      rollback_data: safeJSON(row.rollback_data, null),
+    }, ['created_at', 'updated_at', 'approved_at', 'started_at', 'completed_at']);
+
+    const linkedSignal = row.signal_id
+      ? db.prepare('SELECT id, type, severity, title, status, confidence, created_at FROM signals WHERE id = ?').get(row.signal_id as string) ?? null
+      : null;
+
+    // Best-effort goal linkage via shared project_id (see the list route's
+    // goal_id filter comment — no direct tasks.goal_id column exists).
+    const linkedGoals = row.project_id
+      ? db.prepare("SELECT id, title, status, progress_pct FROM goals WHERE project_id = ? AND business_id = ? AND status != 'cancelled'").all(row.project_id as string, row.business_id as string)
+      : [];
+
+    const jobs = (db.prepare(
+      `SELECT id, status, attempt_count, max_attempts, lease_owner, lease_expires_at,
+              external_reference, last_error, result, created_at, updated_at
+       FROM execution_jobs WHERE task_id = ? ORDER BY created_at DESC`
+    ).all(taskId) as Array<Record<string, unknown>>).map((j) => normalizeTimestamps({
+      ...j,
+      external_reference: safeJSON(j.external_reference, null),
+      result: safeJSON(j.result, null),
+    }, ['created_at', 'updated_at', 'lease_expires_at']) as Record<string, unknown>);
+
+    const outcomeChecks = db.prepare(
+      'SELECT check_date, weeks_after, metric_value, baseline_value, change_pct, verdict, verdict_detail FROM task_outcomes WHERE task_id = ? ORDER BY weeks_after ASC'
+    ).all(taskId) as Array<Record<string, unknown>>;
+
+    const auditCount = (db.prepare(
+      "SELECT COUNT(*) as n FROM audit_log WHERE entity_type = 'task' AND entity_id = ?"
+    ).get(taskId) as { n: number }).n;
+    const lastAudit = db.prepare(
+      "SELECT action, actor, created_at FROM audit_log WHERE entity_type = 'task' AND entity_id = ? ORDER BY created_at DESC LIMIT 1"
+    ).get(taskId) as { action: string; actor: string; created_at: string } | undefined;
+
+    const childTasks = db.prepare(
+      'SELECT id, title, status, action_type FROM tasks WHERE parent_task_id = ?'
+    ).all(taskId) as Array<Record<string, unknown>>;
+    const parentTask = row.parent_task_id
+      ? db.prepare('SELECT id, title, status FROM tasks WHERE id = ?').get(row.parent_task_id as string) ?? null
+      : null;
+
+    return res.json({
+      task,
+      approval: {
+        status: row.status,
+        approved_by: row.approved_by ?? null,
+        approved_at: toIso(row.approved_at),
+        rejection_reason: row.rejection_reason ?? null,
+        trust_tier: row.trust_tier,
+        approval_mode: row.approval_mode,
+      },
+      execution: {
+        status: row.status,
+        started_at: toIso(row.started_at),
+        completed_at: toIso(row.completed_at),
+        active_job_id: jobs.find((j) => ['queued', 'leased', 'executing', 'manual_review'].includes(String(j.status)))?.id ?? null,
+        jobs,
+      },
+      linked_signal: linkedSignal,
+      linked_goals: linkedGoals,
+      dependencies: { parent_task: parentTask, child_tasks: childTasks },
+      outcome: {
+        target_metric: row.target_metric ?? null,
+        target_metric_baseline: row.target_metric_baseline ?? null,
+        checks: outcomeChecks,
+        ...computeOutcomeStatus({
+          task_status: row.status as string,
+          target_metric: (row.target_metric as string | null) ?? null,
+          completed_at: (row.completed_at as string | null) ?? null,
+          checks: outcomeChecks as unknown as Array<{ weeks_after: number; verdict: string | null }>,
+        }),
+      },
+      audit_summary: { total_events: auditCount, last_action: lastAudit ? { action: lastAudit.action, actor: lastAudit.actor, at: toIso(lastAudit.created_at) } : null },
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/** GET /tasks/:taskId/history — the task_events narrative timeline (same data the dashboard task-detail page shows). */
+router.get('/tasks/:taskId/history', requirePermission('tasks:read'), async (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const taskRow = db.prepare('SELECT business_id FROM tasks WHERE id = ?').get(taskId) as { business_id: string } | undefined;
+    if (!taskRow) return res.status(404).json({ error: `Task '${taskId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:read', taskRow.business_id)) {
+      return res.status(403).json({ error: 'Permission denied: task does not belong to an authorized business.' });
+    }
+
+    const { getTaskEvents } = await import('../tasks/task-events.js') as unknown as {
+      getTaskEvents: (taskId: string) => Array<Record<string, unknown>>;
+    };
+    const events = getTaskEvents(taskId).map((e) => normalizeTimestamps(e, ['created_at']));
+    return res.json({ task_id: taskId, events });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
@@ -593,9 +876,9 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
 router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: Request, res: Response) => {
   try {
     const taskId = String(req.params.taskId);
-    const { action, note } = req.body as { action?: string; note?: string };
-    if (!action || !['approve', 'reject'].includes(action)) {
-      return res.status(400).json({ error: 'action must be "approve" or "reject".' });
+    const { action, note, reason } = req.body as { action?: string; note?: string; reason?: string };
+    if (!action || !['approve', 'reject', 'cancel'].includes(action)) {
+      return res.status(400).json({ error: 'action must be "approve", "reject", or "cancel".' });
     }
 
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
@@ -611,9 +894,10 @@ router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: R
     }
 
     await withRequiredIdempotency(req, res, 'tasks:approve', async () => {
-      const { approveTask, rejectTask } = await import('../tasks/task-queue.js') as unknown as {
+      const { approveTask, rejectTask, cancelTask } = await import('../tasks/task-queue.js') as unknown as {
         approveTask: (id: string, actor: string) => Record<string, unknown>;
         rejectTask: (id: string, actor: string, reason: string) => Record<string, unknown>;
+        cancelTask: (id: string, actor: string, reason?: string) => Record<string, unknown>;
       };
       const { createTaskEvent } = await import('../tasks/task-events.js') as unknown as {
         createTaskEvent: (taskId: string, type: string, actor: string, msg: string, meta: Record<string, unknown>) => void;
@@ -628,9 +912,14 @@ router.patch('/tasks/:taskId', requirePermission('tasks:approve'), async (req: R
         // matters (it's what makes Telegram approvals actually execute).
         task = approveTask(taskId, `bap:${bapAgent.id as string}`);
         createTaskEvent(taskId, 'approved', `bap:${bapAgent.id as string}`, note ?? 'Approved via BAP', {});
-      } else {
+      } else if (action === 'reject') {
         task = rejectTask(taskId, `bap:${bapAgent.id as string}`, note ?? '');
         createTaskEvent(taskId, 'rejected', `bap:${bapAgent.id as string}`, note ?? 'Rejected via BAP', {});
+      } else {
+        // cancel — only valid from proposed/approved/manual_review (see
+        // task-queue.ts:cancelTask); also cancels any active execution job.
+        task = cancelTask(taskId, `bap:${bapAgent.id as string}`, reason ?? note ?? '');
+        createTaskEvent(taskId, 'status_changed', `bap:${bapAgent.id as string}`, note ?? reason ?? 'Cancelled via BAP', { new_status: 'cancelled' });
       }
 
       return { status: 200, body: { task_id: taskId, status: task.status, action } };

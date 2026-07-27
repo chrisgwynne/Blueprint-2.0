@@ -28,7 +28,7 @@ function scheduleWithLock(pattern: string, fn: () => void | Promise<void>, optio
 /**
  * Sync a single connector by loading its implementation and running fetch.
  */
-async function syncConnector(connector: Connector): Promise<{ ok: boolean; newSignals?: unknown[]; error?: string }> {
+export async function syncConnector(connector: Connector): Promise<{ ok: boolean; newSignals?: unknown[]; error?: string }> {
   const syncId = crypto.randomUUID();
   const syncStart = Date.now();
   try {
