@@ -1238,6 +1238,18 @@ const STARTUP_MIGRATIONS: string[] = [
     ('github_review_deploy', 'Review a code change and stage it for deployment — creates a draft PR or review issue only, never a blind merge/deploy.', '["github"]', '[]', 'external_verifiable', 'high', 0, 1)
   `,
   `UPDATE action_registry SET dispatched_by_executor = 1 WHERE action_type = 'github_review_deploy'`,
+
+  // ─── Issue #29 fix: research_connector requires action_payload.description ──
+  // executor.ts's executeResearchConnector() already threw 'research_connector
+  // requires action_payload.description' — but only at execution time, after
+  // the task had already been approved and queued, turning an operator/agent
+  // mistake into a dead-lettered execution job instead of a validation
+  // rejection at approval. research_connector's payload_schema was seeded as
+  // '{}' (matches-anything), so full-enforcement's payload-schema check (see
+  // the full-enforcement follow-up above) never caught this. Guarded on the
+  // schema still being the seed default so an operator's own edit is never
+  // silently overwritten.
+  `UPDATE action_registry SET payload_schema = '{"type":"object","required":["description"],"properties":{"description":{"type":"string","minLength":3}}}' WHERE action_type = 'research_connector' AND payload_schema = '{}'`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

@@ -1793,13 +1793,13 @@ Produce a connector proposal as JSON:
     max_tokens: 2000,
   });
 
-  // Parse spec
-  let spec: Record<string, unknown>;
-  try {
-    const raw = llmResult.content ?? '';
-    const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/(\{[\s\S]*\})/);
-    spec = JSON.parse((m?.[1] ?? raw).trim()) as Record<string, unknown>;
-  } catch {
+  // Parse spec — reuses extractInvestigationJSON()'s truncation-repair
+  // logic (issue #29) rather than a plain regex + JSON.parse with no
+  // fallback, so a response cut short by a max_tokens limit (the same
+  // failure mode investigation/deep_investigation already handle) doesn't
+  // dead-letter the job outright.
+  const spec = extractInvestigationJSON(llmResult.content ?? '');
+  if (!spec) {
     throw new Error('LLM could not produce a valid connector spec JSON');
   }
 
