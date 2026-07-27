@@ -76,6 +76,7 @@ afterEach(() => {
   db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM system_issues WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(BIZ);
+  db.prepare(`DELETE FROM outcome_measurement_runs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
 });
 

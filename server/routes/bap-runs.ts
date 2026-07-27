@@ -33,6 +33,7 @@ import db, { generateId } from '../db/db.js';
 import { requirePermission, hasPermission } from '../bap/auth.js';
 import { bapRateLimit } from '../bap/rate-limiter.js';
 import { parsePagination, paginationMeta, normalizeTimestamps, withRequiredIdempotency, sendError } from '../bap/route-helpers.js';
+import { requestRunCancellation } from '../trust/trust-engine.js';
 
 // No blanket auth/rate-limit middleware here — see bap-goals.ts's
 // docstring on this file's mounting inside bap.ts's already-authenticated
@@ -92,19 +93,11 @@ router.post('/runs/:runId/cancel', requirePermission('agents:trigger'), async (r
     if (!row) return;
 
     await withRequiredIdempotency(req, res, 'runs:cancel', async () => {
-      const result = db.prepare(
-        "UPDATE agent_runs SET status = 'cancelled', completed_at = CURRENT_TIMESTAMP, error = 'Cancelled via BAP' WHERE id = ? AND status = 'running'"
-      ).run(runId);
-      if (!result.changes) {
-        return { status: 409, body: { error: `Run '${runId}' is not in 'running' status (already finished or cancelled).` } };
+      const result = requestRunCancellation(runId, `bap:${((req as any).bapAgent?.id ?? 'agent')}`);
+      if (!result.changed) {
+        return { status: 409, body: { error: `Run '${runId}' is not cancellable from status '${result.status}'.` } };
       }
-      return {
-        status: 200,
-        body: {
-          run_id: runId, status: 'cancelled',
-          note: 'This marks the run as cancelled for tracking/cost-cap purposes. It does not interrupt an in-flight LLM call or task creation already under way — see route docstring.',
-        },
-      };
+      return { status: 202, body: { run_id: runId, status: 'cancellation_requested', note: 'Cancellation is cooperative; Blueprint will stop at the next safe abort point and will not start new side effects after acknowledgement.' } };
     });
   } catch (err) {
     return sendError(req, res, 500, 'internal_error', (err as Error).message);

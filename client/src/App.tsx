@@ -31,6 +31,7 @@ const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
 const RelationshipGraph = lazy(() => import('./pages/RelationshipGraph.tsx'))
 const LoginPage      = lazy(() => import('./pages/LoginPage.tsx'))
 const Onboarding     = lazy(() => import('./pages/Onboarding.tsx'))
+const TrustOps       = lazy(() => import('./pages/TrustOps.tsx'))
 
 // Minimal fallback shown while a page chunk is loading for the first time.
 function PageFallback() {
@@ -176,6 +177,7 @@ function App() {
           <Route path="recommendations" element={<Recommendations />} />
           <Route path="calibration" element={<Calibration />} />
           <Route path="graph" element={<RelationshipGraph />} />
+          <Route path="trust" element={<TrustOps />} />
           <Route path="settings" element={<Settings />} />
         </Route>
 

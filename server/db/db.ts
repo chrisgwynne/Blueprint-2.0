@@ -9,7 +9,7 @@ const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
 
 // ':memory:' (and bun:sqlite's other in-memory sentinels, e.g.
 // 'file::memory:?cache=shared') must be passed through to Database()
-// verbatim — resolve()ing it turns the special string into a literal
+// verbatim â€” resolve()ing it turns the special string into a literal
 // relative-path file (e.g. "<cwd>/:memory:"), silently defeating the
 // "ephemeral, never touches disk" guarantee test-setup.ts relies on and
 // leaving a real, ever-growing file that persists across every process
@@ -40,10 +40,10 @@ const needsSchema = !db.prepare(
 if (needsSchema) {
   const schema = readFileSync(resolve(__dbdir, 'schema.sql'), 'utf8');
   db.exec(schema);
-  console.log('[db] Fresh database — base schema applied automatically.');
+  console.log('[db] Fresh database â€” base schema applied automatically.');
 }
 
-// ─── Idempotent additive migrations (safe on every startup) ──────────────────
+// â”€â”€â”€ Idempotent additive migrations (safe on every startup) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const STARTUP_MIGRATIONS: string[] = [
   `CREATE TABLE IF NOT EXISTS signal_clusters (
@@ -199,7 +199,7 @@ const STARTUP_MIGRATIONS: string[] = [
     description TEXT,
     status TEXT DEFAULT 'active',
     color TEXT DEFAULT '#3b82f6',
-    icon TEXT DEFAULT '📁',
+    icon TEXT DEFAULT 'ðŸ“',
     created_by TEXT DEFAULT 'human',
     assigned_agents JSON DEFAULT '[]',
     goals JSON DEFAULT '[]',
@@ -578,7 +578,7 @@ const STARTUP_MIGRATIONS: string[] = [
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_kb_scan_enabled',      'true', CURRENT_TIMESTAMP)`,
   `INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES ('security_output_monitor_enabled', 'true', CURRENT_TIMESTAMP)`,
 
-  // ─── Agent lifecycle redesign (structured hiring / activation model) ────────
+  // â”€â”€â”€ Agent lifecycle redesign (structured hiring / activation model) â”€â”€â”€â”€â”€â”€â”€â”€
   // Additive columns on `agents`. lifecycle_state is the structured source of
   // truth that runs in parallel with the legacy free-text `status` column
   // (which run-gates in conductor/readiness/agent-runner still read). See
@@ -632,11 +632,11 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_agent_lifecycle_events_agent ON agent_lifecycle_events(agent_id, created_at DESC)`,
 
-  // ─── Autonomous execution reliability (idempotency, atomic queueing,
-  // leases, crash recovery) ─────────────────────────────────────────────────
+  // â”€â”€â”€ Autonomous execution reliability (idempotency, atomic queueing,
+  // leases, crash recovery) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   // Generic BAP request-idempotency store. Scoped by (agent_id, scope,
-  // idempotency_key) — the same key from two different agents, or reused
+  // idempotency_key) â€” the same key from two different agents, or reused
   // for two different operation types, are different claims.
   `CREATE TABLE IF NOT EXISTS idempotency_keys (
     id TEXT PRIMARY KEY,
@@ -655,11 +655,11 @@ const STARTUP_MIGRATIONS: string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_idempotency_claim ON idempotency_keys(agent_id, scope, idempotency_key)`,
   `CREATE INDEX IF NOT EXISTS idx_idempotency_expires ON idempotency_keys(expires_at)`,
 
-  // Durable execution jobs — the single record of "this approved task
+  // Durable execution jobs â€” the single record of "this approved task
   // needs to be executed" / "is being executed" / "was executed". Created
   // atomically with approval (task-queue.ts:approveTask), claimed by a
   // worker via a leased compare-and-swap, and the sole trigger for
-  // executor.ts:executeTask() — see jobs/scheduler.ts's execution worker.
+  // executor.ts:executeTask() â€” see jobs/scheduler.ts's execution worker.
   `CREATE TABLE IF NOT EXISTS execution_jobs (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES tasks(id),
@@ -678,7 +678,7 @@ const STARTUP_MIGRATIONS: string[] = [
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
-  // At most one *active* (non-terminal) job per task at a time — this is
+  // At most one *active* (non-terminal) job per task at a time â€” this is
   // the "exactly one execution job per approved task/version" guarantee.
   // Terminal jobs (succeeded/failed/dead_letter/cancelled) are excluded so
   // history can accumulate (e.g. after a manual retry creates a fresh job).
@@ -691,7 +691,7 @@ const STARTUP_MIGRATIONS: string[] = [
   // Task table additions: a monotonic version bumped on every approval (so
   // an execution job can be bound to the exact approval it came from), and
   // an immutable snapshot of action_payload taken at approval time (so a
-  // later mutation of the live task row — if one were ever added — can
+  // later mutation of the live task row â€” if one were ever added â€” can
   // never change what an already-approved job executes).
   `ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
   `ALTER TABLE tasks ADD COLUMN approved_payload_snapshot JSON`,
@@ -699,7 +699,7 @@ const STARTUP_MIGRATIONS: string[] = [
   // Single global renewable leader lease. Every scheduled job (cron
   // callback or the execution-job worker tick) checks this before doing
   // any work; only the current holder proceeds. TTL-based, so a crashed
-  // holder's lease simply expires and another instance takes over — no
+  // holder's lease simply expires and another instance takes over â€” no
   // manual intervention needed. See jobs/scheduler-lock.ts.
   `CREATE TABLE IF NOT EXISTS scheduler_locks (
     lock_name TEXT PRIMARY KEY,
@@ -708,10 +708,10 @@ const STARTUP_MIGRATIONS: string[] = [
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
 
-  // ─── Phase 2: BAP completeness (request/correlation IDs) ──────────────────
+  // â”€â”€â”€ Phase 2: BAP completeness (request/correlation IDs) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Every BAP call is tagged with a request_id (unique per call) and a
   // correlation_id (defaults to request_id, but a caller can supply its own
-  // via X-Correlation-Id to tie a multi-call workflow together) — see
+  // via X-Correlation-Id to tie a multi-call workflow together) â€” see
   // server/bap/route-helpers.ts. Persisting both onto the existing
   // per-call bap_audit row (rather than a new table) keeps one row per BAP
   // call as the source of truth for both timing/status and now traceability.
@@ -719,11 +719,11 @@ const STARTUP_MIGRATIONS: string[] = [
   `ALTER TABLE bap_audit ADD COLUMN correlation_id TEXT`,
   `CREATE INDEX IF NOT EXISTS idx_bap_audit_correlation ON bap_audit(correlation_id)`,
 
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // Phase 3: Strategic Intelligence & Autonomous Business Reasoning
-  // ═══════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  // ─── 3.1 Goal Engine — real foreign keys, replacing the project_id proxy ──
+  // â”€â”€â”€ 3.1 Goal Engine â€” real foreign keys, replacing the project_id proxy â”€â”€
   // goals/tasks/signals previously only shared an optional project_id
   // column (see PHASE2.md). These are the real relationships Phase 2
   // documented as a gap. Additive: project_id is left in place (nothing
@@ -749,7 +749,7 @@ const STARTUP_MIGRATIONS: string[] = [
 
   // Goal model additions the spec calls for that had no column at all.
   // milestones/dependencies get real relational tables below instead of
-  // joining the existing milestones/notes/tags JSON columns — those three
+  // joining the existing milestones/notes/tags JSON columns â€” those three
   // stay JSON (small, free-form, non-relational lists); milestones and
   // dependencies are the two that are genuinely relational (a growing,
   // independently-queried collection, and a goal-to-goal edge).
@@ -785,9 +785,9 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_goal_dependencies_unique ON goal_dependencies(goal_id, depends_on_goal_id)`,
 
-  // ─── 3.2 Strategic Planning Engine — durable, versioned assessments ───────
+  // â”€â”€â”€ 3.2 Strategic Planning Engine â€” durable, versioned assessments â”€â”€â”€â”€â”€â”€â”€
   // One row per reasoning pass (goal-reasoner.ts), so "update it over time"
-  // (the spec's words) means append, not overwrite — the goal's assessment
+  // (the spec's words) means append, not overwrite â€” the goal's assessment
   // history is itself part of its timeline.
   `CREATE TABLE IF NOT EXISTS goal_assessments (
     id TEXT PRIMARY KEY,
@@ -810,11 +810,11 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_goal_assessments_goal ON goal_assessments(goal_id, created_at)`,
 
-  // ─── 3.3 Multi-Strategy Planning — comparable candidate strategies ────────
+  // â”€â”€â”€ 3.3 Multi-Strategy Planning â€” comparable candidate strategies â”€â”€â”€â”€â”€â”€â”€â”€
   // goal-reasoner.ts already asks the LLM for multiple "paths"; this table
   // is where each path becomes a durable, individually comparable object
   // (previously they only existed inside a JSON blob in the reasoning
-  // response and a rendered KB markdown page — never queryable by BAP).
+  // response and a rendered KB markdown page â€” never queryable by BAP).
   `CREATE TABLE IF NOT EXISTS goal_strategies (
     id TEXT PRIMARY KEY,
     goal_id TEXT NOT NULL REFERENCES goals(id),
@@ -838,7 +838,7 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_goal_strategies_goal ON goal_strategies(goal_id, status)`,
 
-  // ─── 3.4 Conflict Engine — a category dimension orthogonal to conflict_type ─
+  // â”€â”€â”€ 3.4 Conflict Engine â€” a category dimension orthogonal to conflict_type â”€
   // conflict_type already distinguishes *which entities* are in conflict
   // (goal_vs_goal, task_vs_window, task_vs_goal, and the new types added in
   // conflict-engine.ts this phase). category distinguishes *what kind* of
@@ -847,18 +847,18 @@ const STARTUP_MIGRATIONS: string[] = [
   `ALTER TABLE conflicts ADD COLUMN category TEXT DEFAULT 'direct'`,
   `UPDATE conflicts SET category = 'timing' WHERE conflict_type = 'task_vs_window' AND category = 'direct'`,
 
-  // ─── 3.5 Decision Memory ───────────────────────────────────────────────────
+  // â”€â”€â”€ 3.5 Decision Memory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Every "why did we decide X" question Hermes can ask should be
-  // answerable from this table alone — evidence and reasoning captured at
+  // answerable from this table alone â€” evidence and reasoning captured at
   // decision time, not reconstructed later from scattered rows.
-  // related_*_id columns are deliberately plain TEXT — NOT foreign keys —
+  // related_*_id columns are deliberately plain TEXT â€” NOT foreign keys â€”
   // same "soft reference" pattern as audit_log.entity_id. A decision is a
   // durable historical record; it must remain readable (and its FK-owning
   // row must remain deletable) even after the goal/task/signal/outcome/
   // conflict it references is gone. A hard FK here would mean deleting a
   // task could never fail loudly (good) but would then make deleting a
   // long-completed task impossible for as long as any decision ever
-  // mentioned it (bad) — audit-log-style logs accept dangling references
+  // mentioned it (bad) â€” audit-log-style logs accept dangling references
   // for exactly this reason.
   `CREATE TABLE IF NOT EXISTS decisions (
     id TEXT PRIMARY KEY,
@@ -882,7 +882,7 @@ const STARTUP_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_decisions_goal ON decisions(related_goal_id)`,
   `CREATE INDEX IF NOT EXISTS idx_decisions_task ON decisions(related_task_id)`,
 
-  // ─── 3.6 Agent Calibration — proper calibration, not a single average ─────
+  // â”€â”€â”€ 3.6 Agent Calibration â€” proper calibration, not a single average â”€â”€â”€â”€â”€
   // Additive columns; existing rows default calibration_method to
   // 'simple_average' so old and new rows are honestly distinguishable in
   // the same table rather than silently reinterpreted.
@@ -896,9 +896,9 @@ const STARTUP_MIGRATIONS: string[] = [
   `ALTER TABLE agent_calibration ADD COLUMN conservatism_factor REAL DEFAULT 1.0`,
   `ALTER TABLE agent_calibration ADD COLUMN bins JSON`,
 
-  // ─── 3.9 Knowledge Graph ───────────────────────────────────────────────────
+  // â”€â”€â”€ 3.9 Knowledge Graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // business_id is nullable to allow shared/abstract nodes (e.g. a
-  // cross-business "tactic" entity) that don't belong to one tenant —
+  // cross-business "tactic" entity) that don't belong to one tenant â€”
   // everything tenant-scoped sets it. ref_table/ref_id link back to the
   // row this node represents (a task, goal, signal, decision, ...) so the
   // graph never duplicates data, only relationships.
@@ -929,7 +929,7 @@ const STARTUP_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_kg_edges_to ON kg_edges(to_entity_id, edge_type)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_edges_unique ON kg_edges(from_entity_id, to_entity_id, edge_type)`,
 
-  // ─── 3.10 Opportunity Engine — extend goal_suggestions, don't fork it ────
+  // â”€â”€â”€ 3.10 Opportunity Engine â€” extend goal_suggestions, don't fork it â”€â”€â”€â”€
   // goal_suggestions (Brain feature 6, server/brain/goal-suggester.ts) is
   // already exactly this: a quantified-opportunity scanner over connector
   // data. These columns add the remaining fields the spec asks an
@@ -939,9 +939,9 @@ const STARTUP_MIGRATIONS: string[] = [
   `ALTER TABLE goal_suggestions ADD COLUMN related_risks JSON DEFAULT '[]'`,
   `ALTER TABLE goal_suggestions ADD COLUMN why_it_matters TEXT`,
 
-  // ─── 3.12 Cross-Business Learning — abstracted patterns, no business_id ──
+  // â”€â”€â”€ 3.12 Cross-Business Learning â€” abstracted patterns, no business_id â”€â”€
   // Deliberately has no business_id, business name, URL, or any other
-  // tenant-identifying column — enforced by omission, not by a redaction
+  // tenant-identifying column â€” enforced by omission, not by a redaction
   // pass. pattern_key is a stable abstract key (e.g.
   // "seo.meta_rewrite.low_ctr_high_impressions"), not a business-specific
   // string.
@@ -960,7 +960,7 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_cross_business_patterns_key ON cross_business_patterns(pattern_key)`,
 
-  // ─── 3.14 Constraint Engine ────────────────────────────────────────────────
+  // â”€â”€â”€ 3.14 Constraint Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // restraint.ts already enforces one constraint type (measurement
   // windows) implicitly via action_memory. This table generalizes to the
   // other types the spec lists (budgets, hours, resource limits, campaign
@@ -984,10 +984,10 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_constraints_business_active ON constraints(business_id, active)`,
 
-  // ─── Phase 2-INT.1 Business Truth Layer ──────────────────────────────────
+  // â”€â”€â”€ Phase 2-INT.1 Business Truth Layer â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Canonical per-business profile. Nothing should infer business identity
   // or capability (type, allowed connectors/agents/actions, policies) from
-  // connector data or free-text fields — everything consults this row.
+  // connector data or free-text fields â€” everything consults this row.
   `CREATE TABLE IF NOT EXISTS business_profiles (
     id TEXT PRIMARY KEY,
     business_id TEXT NOT NULL UNIQUE REFERENCES businesses(id),
@@ -1019,7 +1019,7 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_business_profiles_business ON business_profiles(business_id)`,
 
-  // ─── Phase 2-INT.2 Typed Action & Executor Registry ──────────────────────
+  // â”€â”€â”€ Phase 2-INT.2 Typed Action & Executor Registry â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Consolidates the 3 previously-drifting hand-maintained action-type
   // lists (executor.ts EXECUTABLE_ACTION_TYPES, action-payloads.ts
   // ActionType union, execution-safety.ts EXTERNAL_VERIFIABLE_ACTIONS) into
@@ -1053,7 +1053,7 @@ const STARTUP_MIGRATIONS: string[] = [
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
 
-  // ─── Phase 2-INT.3 Connector Confidence & Identity Verification ──────────
+  // â”€â”€â”€ Phase 2-INT.3 Connector Confidence & Identity Verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   `CREATE TABLE IF NOT EXISTS connector_confidence (
     id TEXT PRIMARY KEY,
     connector_id TEXT NOT NULL UNIQUE REFERENCES connectors(id),
@@ -1076,7 +1076,7 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_connector_confidence_business ON connector_confidence(business_id)`,
 
-  // ─── Phase 2-INT.4 World Model ────────────────────────────────────────────
+  // â”€â”€â”€ Phase 2-INT.4 World Model â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Timestamped, attributable snapshots so reasoning can compare
   // before/after states. The "current" world model for a business is
   // simply its most recent snapshot row (ORDER BY created_at DESC LIMIT 1).
@@ -1089,10 +1089,10 @@ const STARTUP_MIGRATIONS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_world_model_snapshots_business_time ON world_model_snapshots(business_id, created_at DESC)`,
 
-  // ─── Phase 2-INT — Blueprint System Issues ────────────────────────────────
+  // â”€â”€â”€ Phase 2-INT â€” Blueprint System Issues â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Raised when validation fails (registry/business-type/connector checks)
   // instead of silently creating or executing a task. related_task_id /
-  // related_connector_id are soft references (no REFERENCES clause) — a
+  // related_connector_id are soft references (no REFERENCES clause) â€” a
   // system issue is a historical/audit record and must survive deletion of
   // the task or connector it references (same lesson learned the hard way
   // on the `decisions` table in Phase 3).
@@ -1115,11 +1115,11 @@ const STARTUP_MIGRATIONS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_system_issues_business_status ON system_issues(business_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_system_issues_related_task ON system_issues(related_task_id)`,
 
-  // ─── Phase 2-INT.2 (cont.) Seed the registry with every action_type in ────
-  // real use today (executor.ts EXECUTABLE_ACTION_TYPES ∪ agentActivation-
+  // â”€â”€â”€ Phase 2-INT.2 (cont.) Seed the registry with every action_type in â”€â”€â”€â”€
+  // real use today (executor.ts EXECUTABLE_ACTION_TYPES âˆª agentActivation-
   // Rules.ts ROLE_SPECS task_types). INSERT OR IGNORE so this never
   // clobbers an operator's own edits, and re-runs harmlessly on every
-  // startup (safe to extend this list in a later deploy — new rows just
+  // startup (safe to extend this list in a later deploy â€” new rows just
   // get inserted, existing ones are left alone). Without this seed,
   // turning on registry validation (task-queue.ts approveTask()) would
   // immediately block every action type currently in production use.
@@ -1149,25 +1149,25 @@ const STARTUP_MIGRATIONS: string[] = [
     ('meta_ads_update', 'Update a Meta Ads campaign.', '["meta-ads"]', '[]', 'internal_idempotent', 'medium', 0, 1),
     ('connect_connector', 'Prompt connecting a new connector.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
     ('research_connector', 'Research/evaluate a candidate connector.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
-    ('notification', 'Send an informational notification — no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
-    ('strategic_review', 'Produce a strategic review/summary — no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('notification', 'Send an informational notification â€” no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('strategic_review', 'Produce a strategic review/summary â€” no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
     ('product_suggestion', 'Suggest a new product for an ecommerce catalog.', '[]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 0),
     ('content_brief', 'Produce a content brief for later drafting.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
     ('page_optimisation', 'Recommend on-page optimisation changes.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
     ('gbp_post', 'Publish a Google Business Profile post.', '["gbp"]', '[]', 'internal_idempotent', 'low', 0, 1),
-    ('meta-ads-change', 'Change a Meta Ads campaign (legacy alias — see server/brain/action-windows.ts).', '["meta-ads"]', '[]', 'internal_idempotent', 'medium', 0, 1)
+    ('meta-ads-change', 'Change a Meta Ads campaign (legacy alias â€” see server/brain/action-windows.ts).', '["meta-ads"]', '[]', 'internal_idempotent', 'medium', 0, 1)
   `,
 
-  // ─── Phase 2-INT.5 (cont.) Tie the registry to the existing per-action- ──
+  // â”€â”€â”€ Phase 2-INT.5 (cont.) Tie the registry to the existing per-action- â”€â”€
   // type measurement config in server/brain/action-windows.ts's
-  // ACTION_WINDOWS (min/expected/max_days + metric_types) — a pre-existing
+  // ACTION_WINDOWS (min/expected/max_days + metric_types) â€” a pre-existing
   // system this phase's research missed initially (it predates this phase
   // and already does exactly what the Outcome Learning Engine spec asks
   // for: "each action type should define a measurement window and success
   // metrics"). Rather than forking a second, competing set of numbers,
   // action_registry's fields are backfilled FROM action-windows.ts's data
   // here so the two agree; action-windows.ts itself remains the engine
-  // restraint.ts/causal.ts/conductor actually read from — consolidating
+  // restraint.ts/causal.ts/conductor actually read from â€” consolidating
   // them into one is a follow-up, not done in this phase (see PHASE2-INT.md).
   // Guarded on success_metrics = '[]' so an operator's own edit is never
   // silently overwritten by a later startup.
@@ -1182,12 +1182,12 @@ const STARTUP_MIGRATIONS: string[] = [
   `UPDATE action_registry SET measurement_window_days = '[1,7,28]', success_metrics = '["gbp.views_total","gbp.actions_website","gbp.actions_phone"]' WHERE action_type = 'gbp_post' AND success_metrics = '[]'`,
   `UPDATE action_registry SET measurement_window_days = '[7,21]', success_metrics = '["shopify.conversion_rate","ga4.bounce_rate","ga4.sessions","pagespeed.mobile.performance_score"]' WHERE action_type = 'shopify_theme_edit' AND success_metrics = '[]'`,
 
-  // ─── Full-enforcement follow-up: does a real executor.ts dispatch case ──
+  // â”€â”€â”€ Full-enforcement follow-up: does a real executor.ts dispatch case â”€â”€
   // exist for this action_type? Static registry metadata instead of a
   // runtime cross-import of executor.ts (which would create a module
-  // cycle: task-queue.ts → action-registry.ts → executor.ts →
+  // cycle: task-queue.ts â†’ action-registry.ts â†’ executor.ts â†’
   // task-queue.ts). Drives the "executor exists / is healthy" validation
-  // check — an action_type with no real dispatch case is never blocked
+  // check â€” an action_type with no real dispatch case is never blocked
   // for "unhealthy executor" (there's nothing to be unhealthy), but one
   // that IS dispatched and has recently failed repeatedly is.
   `ALTER TABLE action_registry ADD COLUMN dispatched_by_executor INTEGER NOT NULL DEFAULT 0`,
@@ -1200,16 +1200,16 @@ const STARTUP_MIGRATIONS: string[] = [
     'research_connector'
   )`,
 
-  // ─── Full-enforcement follow-up: consolidate action-windows.ts's ────────
+  // â”€â”€â”€ Full-enforcement follow-up: consolidate action-windows.ts's â”€â”€â”€â”€â”€â”€â”€â”€
   // ACTION_WINDOWS into action_registry. These 3 columns are the only
   // fields action_windows carries that action_registry didn't already
   // have (min/expected/max_days already live in measurement_window_days,
-  // metric_types already lives in success_metrics) — adding them makes
+  // metric_types already lives in success_metrics) â€” adding them makes
   // action_registry fully sufficient to seed+sync action_windows, so
   // seedActionWindows() (server/brain/action-windows.ts) now reads from
   // action_registry instead of its own hardcoded array, and
   // upsertActionRegistryEntry() (server/tasks/action-registry.ts)
-  // writes through to action_windows on every edit — one edit surface,
+  // writes through to action_windows on every edit â€” one edit surface,
   // two tables kept in agreement, instead of two independently-editable
   // copies of the same knowledge.
   `ALTER TABLE action_registry ADD COLUMN display_name TEXT`,
@@ -1220,28 +1220,28 @@ const STARTUP_MIGRATIONS: string[] = [
   `UPDATE action_registry SET display_name = 'New landing page', volatility = 'low', measurement_notes = 'New pages take time to be discovered, crawled, indexed, and ranked. Expect 4-8 weeks before meaningful ranking signals, up to 16 weeks for competitive keywords.' WHERE action_type = 'shopify_page_create' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Code change / deployment', volatility = 'low', measurement_notes = 'Code changes affect PageSpeed immediately. User behaviour metrics (bounce rate, sessions) need 1-2 weeks of data to show statistically significant change.' WHERE action_type = 'github_pr' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'New content / blog post', volatility = 'low', measurement_notes = 'Content SEO is slow. New posts typically take 3-6 months to reach peak rankings. Do not evaluate content performance before 4 weeks, and ideally measure at 3 months.' WHERE action_type = 'content_draft' AND display_name IS NULL`,
-  `UPDATE action_registry SET display_name = 'Meta Ads campaign change', volatility = 'high', measurement_notes = 'Meta algorithm needs a learning period (typically 50 conversions or 7 days). Do not evaluate or change ads during the learning phase — it resets progress.' WHERE action_type = 'meta-ads-change' AND display_name IS NULL`,
-  `UPDATE action_registry SET display_name = 'Shopify SEO title/description', volatility = 'medium', measurement_notes = 'Same as meta_update — depends on Googlebot recrawl schedule.' WHERE action_type = 'shopify_meta_update' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Meta Ads campaign change', volatility = 'high', measurement_notes = 'Meta algorithm needs a learning period (typically 50 conversions or 7 days). Do not evaluate or change ads during the learning phase â€” it resets progress.' WHERE action_type = 'meta-ads-change' AND display_name IS NULL`,
+  `UPDATE action_registry SET display_name = 'Shopify SEO title/description', volatility = 'medium', measurement_notes = 'Same as meta_update â€” depends on Googlebot recrawl schedule.' WHERE action_type = 'shopify_meta_update' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Collection page update', volatility = 'medium', measurement_notes = 'Collection pages have SEO and UX components. SEO takes weeks, conversion rate impact visible sooner with sufficient traffic.' WHERE action_type = 'shopify_collection_update' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Google Business Profile post', volatility = 'high', measurement_notes = 'GBP posts have immediate but short-lived visibility. Views peak in first week. Measure within 7-14 days.' WHERE action_type = 'gbp_post' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Shopify theme file edit', volatility = 'medium', measurement_notes = 'Theme changes take effect immediately. Conversion and UX metric changes need 7-14 days of traffic for statistical significance.' WHERE action_type = 'shopify_theme_edit' AND display_name IS NULL`,
 
-  // ─── Issue #22 fix: register github_review_deploy ────────────────────────
+  // â”€â”€â”€ Issue #22 fix: register github_review_deploy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // executor.ts already implements this action type (draft-PR-or-review-issue
-  // only, never a blind deploy — see executeGithubReviewDeploy) and
+  // only, never a blind deploy â€” see executeGithubReviewDeploy) and
   // approval.ts/execution-safety.ts already classify it as dangerous/
   // external_verifiable. It was never added to action_registry's seed list,
   // so full-enforcement validateAction() (see the full-enforcement follow-up
   // above) blocked every such task at approval with 'unknown_action_type'
   // even though the executor could run it. This closes that gap.
   `INSERT OR IGNORE INTO action_registry (action_type, description, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval) VALUES
-    ('github_review_deploy', 'Review a code change and stage it for deployment — creates a draft PR or review issue only, never a blind merge/deploy.', '["github"]', '[]', 'external_verifiable', 'high', 0, 1)
+    ('github_review_deploy', 'Review a code change and stage it for deployment â€” creates a draft PR or review issue only, never a blind merge/deploy.', '["github"]', '[]', 'external_verifiable', 'high', 0, 1)
   `,
   `UPDATE action_registry SET dispatched_by_executor = 1 WHERE action_type = 'github_review_deploy'`,
 
-  // ─── Issue #29 fix: research_connector requires action_payload.description ──
+  // â”€â”€â”€ Issue #29 fix: research_connector requires action_payload.description â”€â”€
   // executor.ts's executeResearchConnector() already threw 'research_connector
-  // requires action_payload.description' — but only at execution time, after
+  // requires action_payload.description' â€” but only at execution time, after
   // the task had already been approved and queued, turning an operator/agent
   // mistake into a dead-lettered execution job instead of a validation
   // rejection at approval. research_connector's payload_schema was seeded as
@@ -1261,7 +1261,89 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 }
 
-// ─── One-off data migration: agent lifecycle redesign ────────────────────────
+// Phase 4 trust/autonomy migrations.
+const PHASE4_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS business_capabilities (id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), capability_key TEXT NOT NULL, display_name TEXT, status TEXT NOT NULL DEFAULT 'unknown', evidence_source TEXT, verified_at DATETIME, last_checked_at DATETIME, verification_method TEXT, connector_id TEXT REFERENCES connectors(id) ON DELETE SET NULL, limitations TEXT, allowed_actions JSON DEFAULT '[]', prohibited_actions JSON DEFAULT '[]', confidence REAL DEFAULT 0.5, corrected_by TEXT, correction_id TEXT, review_at DATETIME, expires_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(business_id, capability_key))`,
+  `CREATE INDEX IF NOT EXISTS idx_business_capabilities_business_status ON business_capabilities(business_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_business_capabilities_connector ON business_capabilities(connector_id)`,
+  `CREATE TABLE IF NOT EXISTS applicability_suppressions (id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), source_type TEXT NOT NULL, source_id TEXT, candidate_type TEXT NOT NULL, candidate_key TEXT NOT NULL, capability_key TEXT, status TEXT NOT NULL DEFAULT 'active', reason TEXT NOT NULL, evidence_status TEXT NOT NULL DEFAULT 'observed', reconsider_after DATETIME, cleared_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_applicability_suppressions_business ON applicability_suppressions(business_id, status, candidate_type)`,
+  `CREATE TABLE IF NOT EXISTS human_corrections (id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), correction_type TEXT NOT NULL, assertion_key TEXT NOT NULL, previous_value TEXT, corrected_value TEXT NOT NULL, explanation TEXT, evidence_source TEXT, corrected_by TEXT NOT NULL, effective_at DATETIME NOT NULL, confidence REAL DEFAULT 1.0, permanence TEXT NOT NULL DEFAULT 'review_required', review_at DATETIME, affected_capability_id TEXT, suppression_behavior TEXT DEFAULT 'suppress_until_changed', audit_ref TEXT, status TEXT NOT NULL DEFAULT 'confirmed', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_human_corrections_business ON human_corrections(business_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS correction_impacts (id TEXT PRIMARY KEY, correction_id TEXT NOT NULL REFERENCES human_corrections(id), business_id TEXT NOT NULL REFERENCES businesses(id), entity_type TEXT NOT NULL, entity_id TEXT NOT NULL, previous_status TEXT, new_status TEXT NOT NULL, reason TEXT NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_correction_impacts_correction ON correction_impacts(correction_id)`,
+  `CREATE TABLE IF NOT EXISTS revenue_paths (id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), name TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'secondary', business_model_type TEXT NOT NULL, sales_channel TEXT, target_customer TEXT, offer_category TEXT, acquisition_stage TEXT, conversion_mechanism TEXT, fulfilment_mechanism TEXT, retention_mechanism TEXT, primary_metric TEXT, leading_metrics JSON DEFAULT '[]', lagging_metrics JSON DEFAULT '[]', constraints TEXT, dependencies JSON DEFAULT '[]', verified_evidence TEXT, evidence_status TEXT NOT NULL DEFAULT 'unknown', active INTEGER DEFAULT 1, priority INTEGER DEFAULT 50, target_contribution REAL, time_horizon TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_revenue_paths_business ON revenue_paths(business_id, active, priority)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_revenue_paths_one_primary ON revenue_paths(business_id, role) WHERE role = 'primary' AND active = 1`,
+  `ALTER TABLE tasks ADD COLUMN applicability_status TEXT DEFAULT 'unknown'`,
+  `ALTER TABLE tasks ADD COLUMN applicability_reason TEXT`,
+  `ALTER TABLE tasks ADD COLUMN approval_risk_evidence JSON`,
+  `ALTER TABLE tasks ADD COLUMN external_baseline_snapshot JSON`,
+  `ALTER TABLE tasks ADD COLUMN measurement_policy_id TEXT`,
+  `ALTER TABLE tasks ADD COLUMN expected_outcome TEXT`,
+  `ALTER TABLE signals ADD COLUMN lifecycle_status TEXT DEFAULT 'open'`,
+  `ALTER TABLE signals ADD COLUMN lifecycle_reason TEXT`,
+  `ALTER TABLE signals ADD COLUMN lifecycle_updated_at DATETIME`,
+  `ALTER TABLE signals ADD COLUMN superseded_by_signal_id TEXT`,
+  `ALTER TABLE signals ADD COLUMN invalidated_by_correction_id TEXT`,
+  `CREATE TABLE IF NOT EXISTS signal_lifecycle_events (id TEXT PRIMARY KEY, signal_id TEXT NOT NULL REFERENCES signals(id), business_id TEXT NOT NULL REFERENCES businesses(id), from_status TEXT, to_status TEXT NOT NULL, reason TEXT NOT NULL, evidence_status TEXT NOT NULL DEFAULT 'observed', related_signal_id TEXT, correction_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_signal_lifecycle_events_signal ON signal_lifecycle_events(signal_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS measurement_policies (id TEXT PRIMARY KEY, business_id TEXT REFERENCES businesses(id), action_type TEXT, goal_id TEXT, connector_type TEXT, metric_name TEXT, name TEXT NOT NULL, checkpoints_json JSON NOT NULL, final_day INTEGER, connector_freshness_hours INTEGER DEFAULT 24, minimum_data_volume INTEGER DEFAULT 1, minimum_meaningful_change REAL DEFAULT 0, confounding_policy TEXT DEFAULT 'mark_inconclusive', active INTEGER DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_measurement_policies_lookup ON measurement_policies(business_id, action_type, active)`,
+  `CREATE TABLE IF NOT EXISTS outcome_measurement_runs (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), business_id TEXT NOT NULL REFERENCES businesses(id), policy_id TEXT REFERENCES measurement_policies(id), checkpoint_at DATETIME NOT NULL, checkpoint_day INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending_measurement', baseline_value REAL, observed_value REAL, verdict TEXT, evidence_status TEXT DEFAULT 'unknown', diagnostic TEXT, job_id TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(task_id, checkpoint_day))`,
+  `CREATE INDEX IF NOT EXISTS idx_outcome_measurement_due ON outcome_measurement_runs(state, checkpoint_at)`,
+  `CREATE TABLE IF NOT EXISTS provider_preflight_cache (id TEXT PRIMARY KEY, provider TEXT NOT NULL, model TEXT NOT NULL, status TEXT NOT NULL, evidence JSON NOT NULL, checked_at DATETIME NOT NULL, expires_at DATETIME NOT NULL, UNIQUE(provider, model))`,
+  `ALTER TABLE agent_runs ADD COLUMN queued_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN heartbeat_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN heartbeat_expires_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN timeout_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN cancellation_requested_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN cancellation_acknowledged_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN cancellation_completed_at DATETIME`,
+  `ALTER TABLE agent_runs ADD COLUMN terminal_reason TEXT`,
+  `ALTER TABLE agent_runs ADD COLUMN actual_provider TEXT`,
+  `ALTER TABLE agent_runs ADD COLUMN actual_model TEXT`,
+  `CREATE TABLE IF NOT EXISTS agent_run_events (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE, business_id TEXT NOT NULL REFERENCES businesses(id), agent_id TEXT NOT NULL, event_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'observed', summary TEXT, request_id TEXT, correlation_id TEXT, related_resource_type TEXT, related_resource_id TEXT, duration_ms INTEGER, error_category TEXT, metadata JSON DEFAULT '{}', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(run_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS agent_scorecard_snapshots (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, business_id TEXT, action_category TEXT NOT NULL DEFAULT 'all', period_start DATETIME NOT NULL, period_end DATETIME NOT NULL, metrics_json JSON NOT NULL, calibration_json JSON NOT NULL, uncertainty_json JSON NOT NULL, policy_effects_json JSON NOT NULL, calculated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(agent_id, business_id, action_category, period_start, period_end))`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_scorecards_lookup ON agent_scorecard_snapshots(agent_id, business_id, action_category, period_end)`,
+  `INSERT OR IGNORE INTO measurement_policies (id, business_id, action_type, name, checkpoints_json, final_day, connector_freshness_hours, minimum_data_volume) VALUES ('policy_default_immediate_7_28_90', NULL, NULL, 'Default immediate, 7, 28 and 90 day checks', '[0,7,28,90]', 90, 24, 1)`
+];
+for (const sql of PHASE4_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] phase4 migration warning:', (err as Error).message);
+    }
+  }
+}
+try {
+  const runEventFk = db.prepare("PRAGMA foreign_key_list('agent_run_events')").all() as Array<Record<string, unknown>>;
+  const runFk = runEventFk.find((fk) => fk.table === 'agent_runs');
+  if (runFk && runFk.on_delete !== 'CASCADE') {
+    db.exec('ALTER TABLE agent_run_events RENAME TO agent_run_events_old');
+    db.exec(`CREATE TABLE agent_run_events (id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE, business_id TEXT NOT NULL REFERENCES businesses(id), agent_id TEXT NOT NULL, event_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'observed', summary TEXT, request_id TEXT, correlation_id TEXT, related_resource_type TEXT, related_resource_id TEXT, duration_ms INTEGER, error_category TEXT, metadata JSON DEFAULT '{}', created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+    db.exec(`INSERT INTO agent_run_events SELECT * FROM agent_run_events_old WHERE run_id IN (SELECT id FROM agent_runs)`);
+    db.exec('DROP TABLE agent_run_events_old');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_agent_run_events_run ON agent_run_events(run_id, created_at)');
+  }
+} catch (err) {
+  console.warn('[db] agent_run_events FK migration warning:', (err as Error).message);
+}
+try {
+  const capFk = db.prepare("PRAGMA foreign_key_list('business_capabilities')").all() as Array<Record<string, unknown>>;
+  const connectorFk = capFk.find((fk) => fk.table === 'connectors');
+  if (connectorFk && connectorFk.on_delete !== 'SET NULL') {
+    db.exec('ALTER TABLE business_capabilities RENAME TO business_capabilities_old');
+    db.exec(`CREATE TABLE business_capabilities (id TEXT PRIMARY KEY, business_id TEXT NOT NULL REFERENCES businesses(id), capability_key TEXT NOT NULL, display_name TEXT, status TEXT NOT NULL DEFAULT 'unknown', evidence_source TEXT, verified_at DATETIME, last_checked_at DATETIME, verification_method TEXT, connector_id TEXT REFERENCES connectors(id) ON DELETE SET NULL, limitations TEXT, allowed_actions JSON DEFAULT '[]', prohibited_actions JSON DEFAULT '[]', confidence REAL DEFAULT 0.5, corrected_by TEXT, correction_id TEXT, review_at DATETIME, expires_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(business_id, capability_key))`);
+    db.exec(`INSERT INTO business_capabilities SELECT * FROM business_capabilities_old WHERE business_id IN (SELECT id FROM businesses) AND (connector_id IS NULL OR connector_id IN (SELECT id FROM connectors))`);
+    db.exec('DROP TABLE business_capabilities_old');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_business_capabilities_business ON business_capabilities(business_id, status)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_business_capabilities_connector ON business_capabilities(connector_id)');
+  }
+} catch (err) {
+  console.warn('[db] business_capabilities FK migration warning:', (err as Error).message);
+}// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {
   try {
@@ -1301,7 +1383,7 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 })();
 
-// ─── Backfill structured lifecycle_state from legacy status (idempotent) ──────
+// â”€â”€â”€ Backfill structured lifecycle_state from legacy status (idempotent) â”€â”€â”€â”€â”€â”€
 // Maps the existing free-text `status` column onto the new structured
 // lifecycle_state for any row that hasn't been backfilled yet. Run-gating still
 // reads `status`; lifecycle_state is the structured view the new model owns.
@@ -1331,15 +1413,15 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 })();
 
-// ─── One-off data migration: strip legacy wildcard BAP grants ────────────────
+// â”€â”€â”€ One-off data migration: strip legacy wildcard BAP grants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // POST /register used to be open and granted whatever permissions/
 // business_access a caller requested, including wildcards ('*:*',
 // 'resource:*', business_access:['*']). The fix (bap/auth.ts,
 // requireRegistrationAuth + filterGrantablePermissions/filterValidBusinessIds)
-// only closes that door for *future* registrations — any bap_agents row
+// only closes that door for *future* registrations â€” any bap_agents row
 // created before the fix may still hold a wildcard grant from the old
 // behaviour, and would otherwise keep working indefinitely. This strips
-// wildcard entries (and only wildcard entries — concrete permissions like
+// wildcard entries (and only wildcard entries â€” concrete permissions like
 // 'signals:read' and concrete business IDs are left untouched) from every
 // existing row, once. Not implemented as an import from bap/auth.ts to
 // avoid a circular dependency (auth.ts imports db.ts); the "strip anything
@@ -1390,8 +1472,8 @@ for (const sql of STARTUP_MIGRATIONS) {
       console.error(
         `[db] SECURITY MIGRATION: stripped wildcard BAP permissions/business_access from ${affected.length} ` +
         `pre-existing agent(s) issued before the registration fix: ${affected.map((a) => `${a.name} (${a.id})`).join(', ')}. ` +
-        `These agents may now be under-permissioned for what they were actually doing — review them in ` +
-        `Settings → External Agents and re-grant specific (non-wildcard) permissions/business access as needed.`
+        `These agents may now be under-permissioned for what they were actually doing â€” review them in ` +
+        `Settings â†’ External Agents and re-grant specific (non-wildcard) permissions/business access as needed.`
       );
     }
   } catch (err) {
@@ -1399,11 +1481,11 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 })();
 
-// ─── One-off data migration: backfill Business Profiles ─────────────────────
+// â”€â”€â”€ One-off data migration: backfill Business Profiles â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Auto-populates a business_profiles row for every pre-existing business,
 // inferring business_type from the legacy free-text `businesses.type`
 // column via keyword matching and marking the field as inferred (not
-// human-confirmed) — see server/business/business-profile.ts for the
+// human-confirmed) â€” see server/business/business-profile.ts for the
 // shared inference logic and the same auto-create path new businesses use.
 (function backfillBusinessProfiles() {
   try {
@@ -1451,7 +1533,7 @@ for (const sql of STARTUP_MIGRATIONS) {
   }
 })();
 
-// ─── Exports ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function generateId(): string {
   return crypto.randomUUID();

@@ -3,12 +3,12 @@
   <p><strong>A personal business operating system powered by AI agents</strong></p>
 
   <p>
-    <a href="#quick-start">Quick Start</a> ·
-    <a href="#installation">Installation</a> ·
-    <a href="#connectors">Connectors</a> ·
-    <a href="#agents">Agents</a> ·
-    <a href="#knowledge-base">Knowledge Base</a> ·
-    <a href="#external-agents-bap">BAP Protocol</a> ·
+    <a href="#quick-start">Quick Start</a> Â·
+    <a href="#installation">Installation</a> Â·
+    <a href="#connectors">Connectors</a> Â·
+    <a href="#agents">Agents</a> Â·
+    <a href="#knowledge-base">Knowledge Base</a> Â·
+    <a href="#external-agents-bap">BAP Protocol</a> Â·
     <a href="http://localhost:4000/docs">Documentation</a>
   </p>
 
@@ -25,7 +25,7 @@
 
 ## What is Blueprint?
 
-Blueprint connects to your business tools, detects signals in your data, and uses AI agents to propose and execute improvements — with your approval at every step.
+Blueprint connects to your business tools, detects signals in your data, and uses AI agents to propose and execute improvements â€” with your approval at every step.
 
 **The loop:**
 
@@ -33,11 +33,15 @@ Blueprint connects to your business tools, detects signals in your data, and use
 2. **Signal rules** detect anomalies, drops, and opportunities
 3. **AI agents** analyse the data and propose specific tasks
 4. **You approve** tasks via dashboard or Telegram
-5. **Blueprint executes** — creates GitHub issues, updates Shopify products, writes content
+5. **Blueprint executes** â€” creates GitHub issues, updates Shopify products, writes content
 6. **Outcome tracking** checks whether the change actually worked, 2 and 4 weeks later
 7. A **compounding knowledge base** grows smarter with every cycle
 
 Everything is logged. Every action has a paper trail. You can roll back any change.
+
+### Trust and autonomous operations
+
+Phase 4 adds a Trust Ops layer for continuous autonomous work: business capabilities, applicability suppression, human corrections, revenue paths, signal lifecycle status, provider preflight, measurement policies, risk-tier evidence, run heartbeat/cancellation and agent scorecards. See `PHASE4.md` and `TRUST-AND-AUTONOMY.md` for the implemented surfaces and known limits.
 
 ## Quick Start
 
@@ -49,13 +53,13 @@ cd blueprint
 docker compose up -d
 ```
 
-Open **http://localhost:4000** — the onboarding wizard guides you through choosing your LLM provider and connecting your first data source. No API key required if you use [Ollama](https://ollama.ai) (free, local).
+Open **http://localhost:4000** â€” the onboarding wizard guides you through choosing your LLM provider and connecting your first data source. No API key required if you use [Ollama](https://ollama.ai) (free, local).
 
 For native development, see the platform-specific instructions below.
 
 ## Installation
 
-Blueprint runs on **Windows, macOS, and Linux**. The setup script (`bun scripts/setup.js`) is cross-platform — it handles `.env` bootstrap, key generation, dependency installs, DB initialisation, and the frontend build with no shell dependency.
+Blueprint runs on **Windows, macOS, and Linux**. The setup script (`bun scripts/setup.js`) is cross-platform â€” it handles `.env` bootstrap, key generation, dependency installs, DB initialisation, and the frontend build with no shell dependency.
 
 ### Prerequisites (all platforms)
 
@@ -65,13 +69,13 @@ Blueprint runs on **Windows, macOS, and Linux**. The setup script (`bun scripts/
 | **Bun** | 1.1+ | `bun --version` |
 | **Node.js** *(optional fallback)* | 20.0+ | `node --version` |
 
-Bun is required. Node is only used if you want to run the raw `scripts/setup.js` without Bun — everything else uses Bun.
+Bun is required. Node is only used if you want to run the raw `scripts/setup.js` without Bun â€” everything else uses Bun.
 
 ---
 
 ### Windows
 
-#### Option A — PowerShell (recommended)
+#### Option A â€” PowerShell (recommended)
 
 Open **PowerShell** (not Command Prompt) and run:
 
@@ -92,14 +96,14 @@ bun run dev
 
 Then open **http://localhost:4000**.
 
-#### Option B — WSL 2 (if you prefer a Linux environment)
+#### Option B â€” WSL 2 (if you prefer a Linux environment)
 
-If you already use WSL 2, follow the Linux instructions below inside your WSL shell. Everything works identically — Blueprint stores its database and KB inside your WSL filesystem.
+If you already use WSL 2, follow the Linux instructions below inside your WSL shell. Everything works identically â€” Blueprint stores its database and KB inside your WSL filesystem.
 
 #### Windows notes
 
-- **Git Bash works too** — you can run `bash scripts/setup.sh` from Git Bash if you prefer POSIX tooling. The `.sh` script is kept for Linux/macOS parity.
-- **Native modules**: Blueprint uses Bun's built-in SQLite — no C++ build tools needed on Windows.
+- **Git Bash works too** â€” you can run `bash scripts/setup.sh` from Git Bash if you prefer POSIX tooling. The `.sh` script is kept for Linux/macOS parity.
+- **Native modules**: Blueprint uses Bun's built-in SQLite â€” no C++ build tools needed on Windows.
 - **Antivirus**: Windows Defender occasionally slows `bun install`. Add the `blueprint` folder to exclusions if install takes over 2 minutes.
 - **Line endings**: the repo has a `.gitattributes` enforcing LF. If you see "CRLF will be replaced" warnings during clone, that's expected.
 - **Long paths**: enable Windows long path support if `bun install` errors with `ENAMETOOLONG`:
@@ -136,7 +140,7 @@ Then open **http://localhost:4000**.
 
 - **Apple Silicon (M1/M2/M3)**: fully supported. Bun ships native arm64 binaries.
 - **Homebrew alternative**: `brew install oven-sh/bun/bun`.
-- **Command Line Tools**: if `git` is missing, macOS will prompt to install Xcode CLI — accept.
+- **Command Line Tools**: if `git` is missing, macOS will prompt to install Xcode CLI â€” accept.
 
 ---
 
@@ -187,7 +191,7 @@ The container runs Linux internally, so it behaves identically on Windows, macOS
 Edit `.env`:
 
 ```bash
-# Free, fully local — no API key needed
+# Free, fully local â€” no API key needed
 LLM_DEFAULT_PROVIDER=ollama
 
 # Or paid cloud
@@ -216,7 +220,7 @@ bun run dev       # development (hot reload, Vite dev server)
 bun run start     # production (requires `bun run build` first)
 ```
 
-Open **http://localhost:4000** → the onboarding wizard handles the rest.
+Open **http://localhost:4000** â†’ the onboarding wizard handles the rest.
 
 ---
 
@@ -224,18 +228,18 @@ Open **http://localhost:4000** → the onboarding wizard handles the rest.
 
 | Command | What it does | Cross-platform |
 |---------|--------------|----------------|
-| `bun run setup` | First-time install: deps, DB, client build | ✅ |
-| `bun run dev` | Start server + Vite dev server with hot reload | ✅ |
-| `bun run build` | Build frontend for production | ✅ |
-| `bun run start` | Start production server | ✅ |
-| `bun run db:init` | Re-initialise the SQLite database | ✅ |
+| `bun run setup` | First-time install: deps, DB, client build | âœ… |
+| `bun run dev` | Start server + Vite dev server with hot reload | âœ… |
+| `bun run build` | Build frontend for production | âœ… |
+| `bun run start` | Start production server | âœ… |
+| `bun run db:init` | Re-initialise the SQLite database | âœ… |
 
 ---
 
 ## Troubleshooting
 
 ### "bun: command not found" after install
-Close and reopen your terminal. Bun adds itself to `$PATH` but the current shell won't pick it up until restart. On Windows, the installer modifies `%USERPROFILE%\.bun\bin` — open a fresh PowerShell window.
+Close and reopen your terminal. Bun adds itself to `$PATH` but the current shell won't pick it up until restart. On Windows, the installer modifies `%USERPROFILE%\.bun\bin` â€” open a fresh PowerShell window.
 
 ### Port 4000 already in use
 Change `PORT` in `.env`, or find and stop the conflicting process:
@@ -258,7 +262,7 @@ Then re-clone.
 ```bash
 chmod +x scripts/setup.sh
 ```
-Or just use `bun run setup` — it doesn't need the executable bit.
+Or just use `bun run setup` â€” it doesn't need the executable bit.
 
 ### `bun install` is slow on Windows
 Windows Defender real-time scanning inspects every file Bun writes. Exclude the `blueprint` folder from real-time protection, or run install inside WSL.
@@ -280,7 +284,7 @@ Windows Defender real-time scanning inspects every file Bun writes. Exclude the 
 | **CMS** | WordPress, Kirby |
 | **Marketing** | Stannp, Meta Ads |
 
-Building your own connector takes about 2 hours — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Building your own connector takes about 2 hours â€” see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Agents
 
@@ -288,7 +292,7 @@ Building your own connector takes about 2 hours — see [CONTRIBUTING.md](CONTRI
 
 | Agent | Role |
 |-------|------|
-| **Conductor** | Strategy & orchestration — the central brain |
+| **Conductor** | Strategy & orchestration â€” the central brain |
 | **SEO Sentinel** | Search rankings, keywords, Core Web Vitals |
 | **Quill** | Copywriting and content strategy |
 | **Trend Spotter** | Growth opportunities and market patterns |
@@ -307,29 +311,29 @@ Agents use any LLM: Claude, GPT-4, Gemini, or local models via Ollama.
 
 On top of the data-collection pipeline, Blueprint adds nine intelligence features that let agents reason strategically:
 
-- **Goal Reasoning** — every goal gets a strategic plan (feasibility, paths, milestones, agent briefings)
-- **Scenario Planning** — ask "what if?" and get 3-4 modelled scenarios side-by-side
-- **Conflict Detection** — goals, tasks, and actions that contradict each other are flagged before they damage attribution
-- **Retrospectives** — monthly self-assessment that tunes agents and files learnings to the KB
-- **Signal Attribution** — probability-weighted causes on every signal with ACT/WAIT/MONITOR recommendation
-- **Agent Calibration** — each agent's stated vs actual confidence is tracked and displayed; overconfident agents are auto-elevated to yellow tier
-- **Proactive Goal Suggestions** — Blueprint scans connector data for quantified opportunities and suggests goals with £/month estimates
-- **Shared KB** — cross-business tactics, patterns, and do-not-do entries readable by every agent
-- **Constraint-aware Scheduling** — delays agent runs when data is stale or measurement windows are active
-- **"Why is this happening?"** — one-click deep investigation with plain-English explanation
+- **Goal Reasoning** â€” every goal gets a strategic plan (feasibility, paths, milestones, agent briefings)
+- **Scenario Planning** â€” ask "what if?" and get 3-4 modelled scenarios side-by-side
+- **Conflict Detection** â€” goals, tasks, and actions that contradict each other are flagged before they damage attribution
+- **Retrospectives** â€” monthly self-assessment that tunes agents and files learnings to the KB
+- **Signal Attribution** â€” probability-weighted causes on every signal with ACT/WAIT/MONITOR recommendation
+- **Agent Calibration** â€” each agent's stated vs actual confidence is tracked and displayed; overconfident agents are auto-elevated to yellow tier
+- **Proactive Goal Suggestions** â€” Blueprint scans connector data for quantified opportunities and suggests goals with Â£/month estimates
+- **Shared KB** â€” cross-business tactics, patterns, and do-not-do entries readable by every agent
+- **Constraint-aware Scheduling** â€” delays agent runs when data is stale or measurement windows are active
+- **"Why is this happening?"** â€” one-click deep investigation with plain-English explanation
 
 ## Knowledge Base
 
-A compounding knowledge base following the [Karpathy LLM wiki pattern](https://karpathy.ai) — a persistent, file-based, git-backed wiki that grows smarter with every agent run, every signal, and every insight.
+A compounding knowledge base following the [Karpathy LLM wiki pattern](https://karpathy.ai) â€” a persistent, file-based, git-backed wiki that grows smarter with every agent run, every signal, and every insight.
 
-- **Three layers**: raw sources (immutable) → wiki pages (LLM-maintained) → schema (co-evolved)
+- **Three layers**: raw sources (immutable) â†’ wiki pages (LLM-maintained) â†’ schema (co-evolved)
 - **Wikilinks**: `[[cross-references]]` with backlink tracking
 - **Contradiction detection**: flags conflicts instead of silently overwriting
 - **Obsidian compatible**: point Blueprint at an existing vault
 
 ## Write-Back Actions
 
-Approved tasks don't just create reports — they execute real changes:
+Approved tasks don't just create reports â€” they execute real changes:
 
 - **GitHub**: create issues, open draft PRs
 - **Shopify**: create products (draft), update descriptions, manage tags, edit collections
@@ -364,7 +368,7 @@ For the technical API reference, see [server/bap/AGENT-GUIDE.md](server/bap/AGEN
 
 Any agent that speaks HTTP can connect via the Blueprint Agent Protocol.
 Registration requires a logged-in dashboard session or an operator-issued
-`BAP_REGISTRATION_SECRET` (see `.env.example`) — self-service, unauthenticated
+`BAP_REGISTRATION_SECRET` (see `.env.example`) â€” self-service, unauthenticated
 registration is not permitted, and wildcard permissions/business access are
 never granted automatically:
 
@@ -383,7 +387,7 @@ See [SKILL.md](SKILL.md) for the complete tool reference.
 |---|---|
 | Backend | TypeScript + Bun + Express + SQLite (bun:sqlite, WAL mode) |
 | Frontend | TypeScript + React 18 + Vite 5 |
-| LLM | Any provider — Ollama (free/local), Anthropic, OpenAI, Gemini, LM Studio |
+| LLM | Any provider â€” Ollama (free/local), Anthropic, OpenAI, Gemini, LM Studio |
 | KB | File-based markdown, isomorphic-git, Obsidian-compatible |
 | Deploy | Docker Compose, single container |
 
@@ -408,4 +412,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and connector build
 
 ## License
 
-[MIT](LICENSE) — use it, modify it, ship it.
+[MIT](LICENSE) â€” use it, modify it, ship it.

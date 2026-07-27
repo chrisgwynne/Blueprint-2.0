@@ -43,6 +43,8 @@ interface BapAgent {
   total_calls?: number
   last_seen?: string | null
   webhook_url?: string | null
+  webhook_events?: string[]
+  business_access?: string[]
   permissions?: string[]
 }
 

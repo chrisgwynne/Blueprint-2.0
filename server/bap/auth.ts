@@ -94,6 +94,16 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'connector_confidence:read',
   'world_model:read',
   'system_issues:read', 'system_issues:update',
+  // Phase 4 - trust and autonomous-operation accountability. Mutating
+  // business facts are split into proposal/update grants so Hermes can read
+  // and propose safely without being handed broad factual write access.
+  'capabilities:read', 'capabilities:propose', 'capabilities:update',
+  'corrections:read', 'corrections:propose',
+  'revenue_paths:read', 'revenue_paths:update',
+  'scorecards:read',
+  'approval_policies:read',
+  'measurement_policies:read',
+  'provider_preflight:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

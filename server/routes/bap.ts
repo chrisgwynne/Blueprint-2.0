@@ -63,6 +63,7 @@ import bapActionRegistryRouter from './bap-action-registry.js';
 import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
 import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
+import bapTrustRouter from './bap-trust.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -242,6 +243,7 @@ router.use(bapActionRegistryRouter);
 router.use(bapConnectorConfidenceRouter);
 router.use(bapWorldModelRouter);
 router.use(bapSystemIssuesRouter);
+router.use(bapTrustRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

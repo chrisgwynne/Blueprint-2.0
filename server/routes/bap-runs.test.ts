@@ -1,5 +1,5 @@
 /**
- * Phase 2 Agent Run API tests — server/routes/bap-runs.ts (list/cancel/retry).
+ * Phase 2 Agent Run API tests â€” server/routes/bap-runs.ts (list/cancel/retry).
  * Runs against a real Express instance mounting the actual router.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
@@ -50,6 +50,8 @@ beforeAll(async () => {
   db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'BAP Runs B', 'bap-runs-b') ON CONFLICT(id) DO NOTHING`).run(BIZ_B);
   db.prepare(`INSERT INTO agents (id, profile_path, name, status, created_at) VALUES ('conductor', 'server/agents/conductor/profile.yaml', 'Conductor', 'active', CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING`).run();
 
+  db.prepare(`DELETE FROM idempotency_keys WHERE agent_id IN ('agt_runs_read', 'agt_runs_trigger')`).run();
+  db.prepare(`DELETE FROM bap_audit WHERE agent_id IN ('agt_runs_read', 'agt_runs_trigger')`).run();
   db.prepare(`DELETE FROM bap_agents WHERE id IN ('agt_runs_read', 'agt_runs_trigger')`).run();
   keyRead = generateApiKey();
   db.prepare(`
@@ -111,10 +113,10 @@ describe('POST /runs/:runId/cancel', () => {
   test('cancels a running run', async () => {
     const runId = insertRun({ status: 'running' });
     const { status, body } = await post(`/api/bap/v1/runs/${runId}/cancel`, {}, { 'BAP-Key': keyTrigger, 'Idempotency-Key': generateId() });
-    expect(status).toBe(200);
-    expect(body.status).toBe('cancelled');
+    expect(status).toBe(202);
+    expect(body.status).toBe('cancellation_requested');
     const row = db.prepare('SELECT status FROM agent_runs WHERE id = ?').get(runId) as { status: string };
-    expect(row.status).toBe('cancelled');
+    expect(row.status).toBe('cancellation_requested');
   });
 
   test('409 for a run that already finished', async () => {
