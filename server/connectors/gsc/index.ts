@@ -263,51 +263,68 @@ async function fetchSearchAnalytics(creds: Creds, params: Record<string, unknown
   const endDatePrev = dateString(11);
 
   async function query(startDate: string, endDate: string): Promise<Array<Record<string, unknown>>> {
-    const body = {
-      startDate,
-      endDate,
-      dimensions: ['query'],
-      rowLimit: 50,
-      orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }],
-    };
+    // Paginate. GSC allows up to 25000 rows/request; the old code took only the
+    // top 50 by clicks, so avg_position / CTR / keyword-opportunity metrics were
+    // computed on a tiny slice. Page through up to MAX_ROWS keywords.
+    const PAGE = 1000;
+    const MAX_ROWS = 5000;
+    const out: Array<Record<string, unknown>> = [];
+    let startRow = 0;
 
-    const res = await fetch(
-      `${GSC_BASE}/sites/${encodeURIComponent(siteUrl!)}/searchAnalytics/query`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(body),
-      }
-    );
+    while (out.length < MAX_ROWS) {
+      const body = {
+        startDate,
+        endDate,
+        dimensions: ['query'],
+        rowLimit: PAGE,
+        startRow,
+        orderBy: [{ fieldName: 'clicks', sortOrder: 'DESCENDING' }],
+      };
 
-    if (!res.ok) {
-      const err = await res.text();
-      // 403 with "User does not have sufficient permission for site" almost
-      // always means the URL variant doesn't match what was verified in
-      // Search Console (http vs https, www vs apex, trailing slash). Help
-      // the user diagnose without reading Google's terse message.
-      if (res.status === 403 && /sufficient permission for site/i.test(err)) {
-        throw new Error(
-          `GSC: this Google account isn't verified for '${siteUrl}'. ` +
-          'Search Console treats http vs https and www vs the apex domain as separate properties. ' +
-          'Open Settings → Connectors → your GSC connector → Configure to pick from your verified sites, ' +
-          'or add a Domain property in Search Console to cover all variants.'
-        );
+      const res = await fetch(
+        `${GSC_BASE}/sites/${encodeURIComponent(siteUrl!)}/searchAnalytics/query`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${creds.accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        }
+      );
+
+      if (!res.ok) {
+        const err = await res.text();
+        // 403 "sufficient permission for site" almost always means the URL
+        // variant doesn't match what was verified in Search Console
+        // (http vs https, www vs apex, trailing slash).
+        if (res.status === 403 && /sufficient permission for site/i.test(err)) {
+          throw new Error(
+            `GSC: this Google account isn't verified for '${siteUrl}'. ` +
+            'Search Console treats http vs https and www vs the apex domain as separate properties. ' +
+            'Open Settings → Connectors → your GSC connector → Configure to pick from your verified sites, ' +
+            'or add a Domain property in Search Console to cover all variants.'
+          );
+        }
+        throw new Error(`GSC search analytics error ${res.status}: ${err.substring(0, 300)}`);
       }
-      throw new Error(`GSC search analytics error ${res.status}: ${err.substring(0, 300)}`);
+
+      const data = await res.json() as { rows?: Array<{ keys: string[]; clicks: number; impressions: number; ctr: number; position: number }> };
+      const page = data.rows ?? [];
+      for (const row of page) {
+        out.push({
+          query: row.keys[0],
+          clicks: row.clicks,
+          impressions: row.impressions,
+          ctr: row.ctr,
+          position: row.position,
+        });
+      }
+      if (page.length < PAGE) break; // last page
+      startRow += PAGE;
     }
 
-    const data = await res.json() as { rows?: Array<{ keys: string[]; clicks: number; impressions: number; ctr: number; position: number }> };
-    return (data.rows ?? []).map(row => ({
-      query: row.keys[0],
-      clicks: row.clicks,
-      impressions: row.impressions,
-      ctr: row.ctr,
-      position: row.position,
-    }));
+    return out;
   }
 
   const [current, previous] = await Promise.all([
