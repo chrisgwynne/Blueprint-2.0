@@ -24,6 +24,11 @@ const Retrospectives = lazy(() => import('./pages/Retrospectives.tsx'))
 const Projects       = lazy(() => import('./pages/Projects.tsx'))
 const Timeline       = lazy(() => import('./pages/Timeline.tsx'))
 const Settings       = lazy(() => import('./pages/Settings.tsx'))
+const Opportunities  = lazy(() => import('./pages/Opportunities.tsx'))
+const Decisions      = lazy(() => import('./pages/Decisions.tsx'))
+const Recommendations = lazy(() => import('./pages/Recommendations.tsx'))
+const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
+const RelationshipGraph = lazy(() => import('./pages/RelationshipGraph.tsx'))
 const LoginPage      = lazy(() => import('./pages/LoginPage.tsx'))
 const Onboarding     = lazy(() => import('./pages/Onboarding.tsx'))
 
@@ -166,6 +171,11 @@ function App() {
           <Route path="projects" element={<Projects />} />
           <Route path="projects/:projectId" element={<Projects />} />
           <Route path="timeline" element={<Timeline />} />
+          <Route path="opportunities" element={<Opportunities />} />
+          <Route path="decisions" element={<Decisions />} />
+          <Route path="recommendations" element={<Recommendations />} />
+          <Route path="calibration" element={<Calibration />} />
+          <Route path="graph" element={<RelationshipGraph />} />
           <Route path="settings" element={<Settings />} />
         </Route>
 

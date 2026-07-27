@@ -1,13 +1,17 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
-import { Target, Plus, Sparkles, Check, X, Pause, Edit2, RefreshCw } from 'lucide-react'
+import { Target, Plus, Sparkles, Check, X, Pause, Edit2, RefreshCw, GitBranch, Clock } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
   getGoals, createGoal, updateGoal, deleteGoal, checkGoal, proposeGoal, reasonGoal,
   getGoalSuggestions, runGoalSuggestionScan,
   acceptGoalSuggestion, dismissGoalSuggestion, snoozeGoalSuggestion,
+  getGoalAssessment, getGoalStrategies, getGoalTimeline,
 } from '../lib/api.js'
+
+const PRIORITY_LABELS: Record<string, string> = { p1: 'P1 · Critical', p2: 'P2 · Normal', p3: 'P3 · Low' }
+const PRIORITY_COLORS: Record<string, string> = { p1: 'var(--bp-red)', p2: 'var(--bp-blue)', p3: 'var(--bp-text-3)' }
 
 const AGENTS = ['conductor', 'seo-sentinel', 'quill', 'velocity', 'trend-spotter', 'merchant', 'ledger', 'sentinel', 'researcher', 'reporter', 'dev', 'outreach']
 
@@ -45,7 +49,11 @@ interface Goal {
   last_checked?: string
   notes?: any[]
   milestones?: any[]
+  dependencies?: Array<{ goal_id: string; title: string; status: string; progress_pct: number; note?: string }>
   strategy?: string
+  owner?: string | null
+  confidence?: number | null
+  priority?: string
   [key: string]: unknown
 }
 
@@ -102,6 +110,7 @@ function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: str
     ? [...goal.notes].reverse().find((n) => n && typeof n === 'object' && n.source === 'goal-reasoner')
     : null
   const [reasoning, setReasoning] = useState(false)
+  const [showStrategy, setShowStrategy] = useState(false)
   async function handleReason() {
     setReasoning(true)
     try { await reasonGoal(businessId, goal.id); await onRefresh() }
@@ -125,7 +134,18 @@ function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: str
         {isAchieved && <span style={{ fontSize: 10, color: 'var(--bp-green)', fontFamily: 'var(--bp-font-mono)' }}>✅ ACHIEVED</span>}
         {isAtRisk && !isAchieved && <span style={{ fontSize: 10, color: 'var(--bp-amber)', fontFamily: 'var(--bp-font-mono)' }}>⚠ AT RISK</span>}
         {isMissed && <span style={{ fontSize: 10, color: 'var(--bp-red)', fontFamily: 'var(--bp-font-mono)' }}>❌ MISSED</span>}
+        {goal.priority && (
+          <span className="bp-pill" style={{ marginLeft: 'auto', background: `${PRIORITY_COLORS[goal.priority] ?? 'var(--bp-text-3)'}20`, color: PRIORITY_COLORS[goal.priority] ?? 'var(--bp-text-3)', fontSize: 9 }}>
+            {PRIORITY_LABELS[goal.priority] ?? goal.priority}
+          </span>
+        )}
       </div>
+      {(goal.owner || goal.confidence != null) && (
+        <div style={{ display: 'flex', gap: 14, fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginBottom: 8 }}>
+          {goal.owner && <span>Owner: {goal.owner}</span>}
+          {goal.confidence != null && <span>Confidence: {Math.round((goal.confidence as number) * 100)}%</span>}
+        </div>
+      )}
       {goal.description && (
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginBottom: 12 }}>
           {goal.description}
@@ -174,6 +194,18 @@ function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: str
           })}
         </div>
       )}
+      {Array.isArray(goal.dependencies) && goal.dependencies.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 6 }}>
+            <GitBranch size={9} style={{ display: 'inline', marginRight: 4 }} /> Depends on
+          </div>
+          {goal.dependencies.map((d) => (
+            <div key={d.goal_id} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: d.status === 'achieved' ? 'var(--bp-green)' : 'var(--bp-text-3)', padding: '2px 0' }}>
+              {d.status === 'achieved' ? '✅' : '○'} {d.title} ({Math.round(d.progress_pct ?? 0)}%)
+            </div>
+          ))}
+        </div>
+      )}
       {reasoningNote && (
         <div style={{ marginTop: 4, marginBottom: 10, padding: 10, background: 'var(--bp-surface-2)', borderRadius: 3, borderLeft: `2px solid ${feasibilityColor}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -214,7 +246,107 @@ function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: str
         <button onClick={handlePause} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
           <Pause size={11} /> {goal.status === 'paused' ? 'Resume' : 'Pause'}
         </button>
+        <button onClick={() => setShowStrategy((s) => !s)} className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+          <Clock size={11} /> {showStrategy ? 'Hide strategy & timeline' : 'Strategy & timeline'}
+        </button>
       </div>
+      {showStrategy && <StrategyPanel businessId={businessId} goalId={goal.id} />}
+    </div>
+  )
+}
+
+interface StrategyData {
+  assessment: Record<string, any> | null
+  strategies: Array<Record<string, any>>
+  timeline: Array<{ at: string | null; type: string; summary: string }>
+}
+
+function StrategyPanel({ businessId, goalId }: { businessId: string; goalId: string }) {
+  const [data, setData] = useState<StrategyData | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      setLoading(true)
+      const [assessmentRes, strategiesRes, timelineRes] = await Promise.all([
+        getGoalAssessment(businessId, goalId).catch(() => null),
+        getGoalStrategies(businessId, goalId).catch(() => ({ strategies: [] })),
+        getGoalTimeline(businessId, goalId).catch(() => ({ events: [] })),
+      ])
+      if (cancelled) return
+      setData({
+        assessment: assessmentRes?.assessment ?? null,
+        strategies: strategiesRes?.strategies ?? [],
+        timeline: timelineRes?.events ?? [],
+      })
+      setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [businessId, goalId])
+
+  if (loading) return <div style={{ padding: 12, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>Loading…</div>
+  if (!data) return null
+
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--bp-border)' }}>
+      {data.assessment ? (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 6 }}>
+            Strategic assessment — {data.assessment.feasibility_verdict}
+            {data.assessment.feasibility_confidence != null && ` (${Math.round(data.assessment.feasibility_confidence * 100)}%)`}
+          </div>
+          {Array.isArray(data.assessment.risks) && data.assessment.risks.length > 0 && (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-amber)', marginBottom: 4 }}>
+              Risks: {data.assessment.risks.join('; ')}
+            </div>
+          )}
+          {Array.isArray(data.assessment.success_criteria) && data.assessment.success_criteria.length > 0 && (
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+              Success criteria: {data.assessment.success_criteria.join('; ')}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', marginBottom: 12 }}>No strategic assessment yet.</div>
+      )}
+
+      {data.strategies.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 6 }}>
+            Candidate strategies
+          </div>
+          {data.strategies.map((s) => (
+            <div key={s.id} style={{ padding: 8, marginBottom: 4, background: s.is_recommended ? 'rgba(59,130,246,0.08)' : 'var(--bp-surface-2)', borderRadius: 3, borderLeft: s.is_recommended ? '2px solid var(--bp-blue)' : 'none' }}>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text)', fontWeight: 600 }}>
+                {s.name}{s.is_recommended && <span style={{ color: 'var(--bp-blue)', fontWeight: 400 }}> · recommended</span>}
+              </div>
+              {s.summary && <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', marginTop: 2 }}>{s.summary}</div>}
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginTop: 4 }}>
+                {s.confidence != null && `${Math.round(s.confidence * 100)}% confidence`}
+                {s.estimated_effort && ` · ${s.estimated_effort} effort`}
+                {s.estimated_cost != null && ` · ~${s.estimated_cost} ${s.estimated_cost_unit ?? ''}`}
+                {s.historical_sample_size > 0 && ` · ${Math.round((s.historical_success_rate ?? 0) * 100)}% historical success (n=${s.historical_sample_size})`}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {data.timeline.length > 0 && (
+        <div>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', textTransform: 'uppercase', color: 'var(--bp-text-3)', marginBottom: 6 }}>
+            Timeline
+          </div>
+          {data.timeline.map((e, i) => (
+            <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', padding: '3px 0', display: 'flex', gap: 8 }}>
+              <span style={{ color: 'var(--bp-text-3)', flexShrink: 0 }}>{fmtRel(e.at)}</span>
+              <span>{e.summary}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -237,6 +369,9 @@ function GoalForm({ businessId, initial, onSaved, onCancel }: GoalFormProps) {
     assigned_agents: initial?.assigned_agents ?? [] as string[],
     strategy: initial?.strategy ?? '',
     tags: (initial as any)?.tags ?? [] as string[],
+    owner: initial?.owner ?? '',
+    confidence: initial?.confidence ?? '',
+    priority: initial?.priority ?? 'p2',
   }))
   const [saving, setSaving] = useState(false)
 
@@ -244,7 +379,12 @@ function GoalForm({ businessId, initial, onSaved, onCancel }: GoalFormProps) {
     if (!form.title.trim()) return
     setSaving(true)
     try {
-      const payload = { ...form, metric_target: form.metric_target ? Number(form.metric_target) : null }
+      const payload = {
+        ...form,
+        metric_target: form.metric_target ? Number(form.metric_target) : null,
+        confidence: form.confidence !== '' ? Number(form.confidence) : null,
+        owner: form.owner || null,
+      }
       await createGoal(businessId, payload)
       onSaved()
     } finally { setSaving(false) }
@@ -285,6 +425,16 @@ function GoalForm({ businessId, initial, onSaved, onCancel }: GoalFormProps) {
       </div>
       <textarea className="bp-input" placeholder="Strategy — how should agents approach this?" rows={2} style={{ width: '100%', fontSize: 11, marginBottom: 10 }}
         value={form.strategy} onChange={(e) => setForm(p => ({ ...p, strategy: e.target.value }))} />
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 8, marginBottom: 10 }}>
+        <input className="bp-input" placeholder="Owner (e.g. human:chris)" style={{ fontSize: 11 }}
+          value={form.owner} onChange={(e) => setForm(p => ({ ...p, owner: e.target.value }))} />
+        <input className="bp-input" placeholder="Confidence (0-1)" type="number" min={0} max={1} step={0.05} style={{ fontSize: 11 }}
+          value={form.confidence as string | number} onChange={(e) => setForm(p => ({ ...p, confidence: e.target.value }))} />
+        <select className="bp-input" style={{ fontSize: 11 }}
+          value={form.priority} onChange={(e) => setForm(p => ({ ...p, priority: e.target.value }))}>
+          {Object.entries(PRIORITY_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
+      </div>
       <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>Assigned agents</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 14 }}>
         {AGENTS.map(a => (

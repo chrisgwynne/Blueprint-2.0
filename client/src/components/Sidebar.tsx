@@ -31,7 +31,7 @@ import {
   GitBranch,
   type LucideIcon,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -90,9 +90,14 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Chat',          to: '/chat',       icon: MessageSquare },
   { label: 'Workflows',     to: '/workflows',  icon: Workflow },
   { label: 'Goals',         to: '/goals',      icon: Target },
+  { label: 'Opportunities', to: '/opportunities', icon: Lightbulb },
+  { label: 'Recommendations', to: '/recommendations', icon: ListChecks },
   { label: 'Scenarios',     to: '/scenarios',  icon: Sparkles },
   { label: 'Conflicts',     to: '/conflicts',  icon: AlertTriangle },
+  { label: 'Decisions',     to: '/decisions',  icon: History },
   { label: 'Retrospectives',to: '/retrospectives', icon: BookMarked },
+  { label: 'Calibration',   to: '/calibration', icon: Gauge },
+  { label: 'Relationship Graph', to: '/graph',  icon: Share2 },
   { label: 'Timeline',      to: '/timeline',   icon: Clock },
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },

@@ -71,6 +71,17 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'connectors:read', 'connectors:sync',
   'outcomes:read',
   'audit:read',
+  // Phase 3 — strategic intelligence. goals:read/goals:update already
+  // cover the new /goals/:id/assessment|assessments|strategies|timeline
+  // and POST /goals/:id/plan sub-routes (see bap-goals.ts) — not
+  // duplicated here.
+  'opportunities:read', 'opportunities:trigger',
+  'conflicts:read',
+  'decisions:read',
+  'graph:read', 'graph:trigger',
+  'recommendations:read',
+  'retrospectives:read', 'retrospectives:trigger',
+  'calibration:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

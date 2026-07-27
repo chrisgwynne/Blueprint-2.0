@@ -27,6 +27,7 @@ import db from '../db/db.js';
 import { requirePermission, hasPermission } from '../bap/auth.js';
 import { parsePagination, paginationMeta, normalizeTimestamps, sendError } from '../bap/route-helpers.js';
 import { computeOutcomeStatus, type OutcomeStatus } from '../tasks/outcome-status.js';
+import { actionTypeTrackRecord } from '../tasks/historical-learning.js';
 
 // No blanket auth/rate-limit middleware here — see bap-goals.ts's
 // docstring on this file's mounting inside bap.ts's already-authenticated
@@ -53,37 +54,6 @@ function checksByTask(taskIds: string[]): Map<string, CheckRow[]> {
   return map;
 }
 
-/** Historical hit-rate for an action_type across this business's already-final outcomes — the "recommendation" signal. No existing implementation to reuse (see PHASE2.md); modelled on calibration.ts's per-agent bucketing, grouped by action_type instead. */
-function actionTypeRecommendation(businessId: string, actionType: string | null): { action_type: string; sample_size: number; success_rate: number | null } | null {
-  if (!actionType) return null;
-  const rows = db.prepare(
-    `SELECT t.id, t.status, t.completed_at, o.weeks_after, o.verdict
-     FROM tasks t LEFT JOIN task_outcomes o ON o.task_id = t.id
-     WHERE t.business_id = ? AND t.action_type = ? AND t.target_metric IS NOT NULL`
-  ).all(businessId, actionType) as Array<{ id: string; status: string; completed_at: string | null; weeks_after: number | null; verdict: string | null }>;
-
-  const byTask = new Map<string, Array<{ weeks_after: number; verdict: string | null }>>();
-  const meta = new Map<string, { status: string; completed_at: string | null }>();
-  for (const r of rows) {
-    meta.set(r.id, { status: r.status, completed_at: r.completed_at });
-    if (r.weeks_after != null) {
-      if (!byTask.has(r.id)) byTask.set(r.id, []);
-      byTask.get(r.id)!.push({ weeks_after: r.weeks_after, verdict: r.verdict });
-    }
-  }
-
-  let successful = 0;
-  let finalCount = 0;
-  for (const [taskId, m] of meta) {
-    const checks = (byTask.get(taskId) ?? []).sort((a, b) => a.weeks_after - b.weeks_after);
-    const result = computeOutcomeStatus({ task_status: m.status, target_metric: 'x', completed_at: m.completed_at, checks });
-    if (!result.is_final) continue;
-    finalCount++;
-    if (result.status === 'successful') successful++;
-  }
-
-  return { action_type: actionType, sample_size: finalCount, success_rate: finalCount > 0 ? Math.round((successful / finalCount) * 1000) / 1000 : null };
-}
 
 function buildOutcomeDetail(task: TaskForOutcome, checks: CheckRow[]): Record<string, unknown> {
   const { status, is_final } = computeOutcomeStatus({
@@ -174,7 +144,7 @@ router.get('/tasks/:taskId/outcome', requirePermission('outcomes:read'), async (
         calibrated: adjustedConfidence(task.confidence, task.proposed_by, task.business_id),
         agent_calibration: calibration ? { score: calibration.calibration_score, trend: calibration.trend } : null,
       },
-      recommendation: actionTypeRecommendation(task.business_id, task.action_type),
+      recommendation: actionTypeTrackRecord(task.business_id, task.action_type),
     });
   } catch (err) {
     return sendError(req, res, 500, 'internal_error', (err as Error).message);

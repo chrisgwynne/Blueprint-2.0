@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, Link } from 'react-router-dom'
 import { BookMarked, Play, ArrowLeft, CheckCircle2, XCircle, Lightbulb } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time'
@@ -129,8 +129,13 @@ function RetroDetail({ retro, onBack }: RetroDetailProps) {
 
       {Array.isArray(retro.agent_assessments) && retro.agent_assessments.length > 0 && (
         <div className="bp-card" style={{ padding: 18, marginBottom: 14 }}>
-          <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 14, marginBottom: 12 }}>
-            Agent scorecards
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 14 }}>
+              Agent scorecards
+            </div>
+            <Link to="/calibration" style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-blue)' }}>
+              Full calibration →
+            </Link>
           </div>
           <table style={{ width: '100%', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
             <thead>

@@ -84,6 +84,15 @@ afterAll(() => {
   server?.close();
   db.prepare(`DELETE FROM conflicts WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM goal_checks WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  // Phase 3 child tables — populated only if a real LLM provider caused
+  // goal-reasoner's fire-and-forget planning pass to actually persist
+  // anything during this test run (it fails silently otherwise), but
+  // cleaned up unconditionally so this test never depends on that.
+  db.prepare(`DELETE FROM goal_strategies WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM goal_assessments WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM goal_milestones WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM goal_dependencies WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM decisions WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM goals WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM idempotency_keys WHERE agent_id IN ('agt_goals_read', 'agt_goals_full')`).run();
   db.prepare(`DELETE FROM bap_audit WHERE agent_id IN ('agt_goals_read', 'agt_goals_full')`).run();
@@ -239,5 +248,153 @@ describe('GET /goals/:goalId/conflicts', () => {
     const { status, body } = await get(`/api/bap/v1/goals/${goalId}/conflicts`, { 'BAP-Key': keyRead });
     expect(status).toBe(200);
     expect(body.conflicts.length).toBe(1);
+  });
+});
+
+describe('Phase 3: goal engine FKs — owner/confidence/priority/depends_on', () => {
+  test('POST accepts owner, confidence, priority, and depends_on', async () => {
+    const depGoalId = insertGoal({ title: 'Dependency target' });
+    const { status, body } = await post(`/api/bap/v1/businesses/${BIZ_A}/goals`, {
+      title: 'Strategic goal', owner: 'human:chris', confidence: 0.65, priority: 'p1', depends_on: [depGoalId],
+    }, { 'BAP-Key': keyFull, 'Idempotency-Key': generateId() });
+    expect(status).toBe(201);
+    expect(body.goal.owner).toBe('human:chris');
+    expect(body.goal.confidence).toBe(0.65);
+    expect(body.goal.priority).toBe('p1');
+    expect(body.goal.dependencies.some((d: any) => d.goal_id === depGoalId)).toBe(true);
+  });
+
+  test('rejects an invalid priority value', async () => {
+    const { status } = await post(`/api/bap/v1/businesses/${BIZ_A}/goals`, {
+      title: 'Bad priority', priority: 'urgent',
+    }, { 'BAP-Key': keyFull, 'Idempotency-Key': generateId() });
+    expect(status).toBe(400);
+  });
+
+  test('PATCH updates owner/confidence/priority and replaces depends_on', async () => {
+    const depGoalId = insertGoal({ title: 'New dependency target' });
+    const goalId = insertGoal({ title: 'Patchable goal' });
+    const { status, body } = await patch(`/api/bap/v1/goals/${goalId}`, {
+      owner: 'human:jamie', confidence: 0.4, priority: 'p3', depends_on: [depGoalId],
+    }, { 'BAP-Key': keyFull, 'Idempotency-Key': generateId() });
+    expect(status).toBe(200);
+    expect(body.goal.owner).toBe('human:jamie');
+    expect(body.goal.priority).toBe('p3');
+    expect(body.goal.dependencies).toHaveLength(1);
+    expect(body.goal.dependencies[0].goal_id).toBe(depGoalId);
+  });
+});
+
+describe('Phase 3: strategic assessment + strategies', () => {
+  function insertAssessment(goalId: string, overrides: Partial<Record<string, unknown>> = {}): string {
+    const id = generateId();
+    db.prepare(`
+      INSERT INTO goal_assessments (id, goal_id, business_id, feasibility_verdict, feasibility_confidence, assumptions, risks, dependencies, success_criteria, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      id, goalId, BIZ_A, (overrides.feasibility_verdict as string) ?? 'feasible', 0.7,
+      JSON.stringify(['Traffic stays stable']), JSON.stringify(['Algorithm update risk']),
+      JSON.stringify(['Content team availability']), JSON.stringify(['Reach target metric within deadline']),
+    );
+    return id;
+  }
+  function insertStrategy(goalId: string, assessmentId: string, overrides: Partial<Record<string, unknown>> = {}): string {
+    const id = generateId();
+    db.prepare(`
+      INSERT INTO goal_strategies (id, goal_id, business_id, assessment_id, name, summary, confidence, estimated_effort, is_recommended, status, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `).run(
+      id, goalId, BIZ_A, assessmentId, (overrides.name as string) ?? 'Fixture strategy',
+      'Do the thing', 0.6, 'medium', (overrides.is_recommended as number) ?? 0, 'candidate',
+    );
+    return id;
+  }
+
+  test('GET /goals/:id/assessment returns the latest, with parsed arrays', async () => {
+    const goalId = insertGoal({ title: 'Assessed goal' });
+    insertAssessment(goalId, { feasibility_verdict: 'stale' });
+    const latestId = insertAssessment(goalId, { feasibility_verdict: 'feasible' });
+    const { status, body } = await get(`/api/bap/v1/goals/${goalId}/assessment`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.assessment.id).toBe(latestId);
+    expect(Array.isArray(body.assessment.assumptions)).toBe(true);
+    expect(Array.isArray(body.assessment.success_criteria)).toBe(true);
+  });
+
+  test('GET /goals/:id/assessment 404s when none exists yet', async () => {
+    const goalId = insertGoal({ title: 'Unassessed goal' });
+    const { status } = await get(`/api/bap/v1/goals/${goalId}/assessment`, { 'BAP-Key': keyRead });
+    expect(status).toBe(404);
+  });
+
+  test('GET /goals/:id/assessments returns full history, paginated', async () => {
+    const goalId = insertGoal({ title: 'History goal' });
+    insertAssessment(goalId);
+    insertAssessment(goalId);
+    const { status, body } = await get(`/api/bap/v1/goals/${goalId}/assessments`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.assessments).toHaveLength(2);
+  });
+
+  test('GET /goals/:id/strategies returns candidates, recommended first', async () => {
+    const goalId = insertGoal({ title: 'Multi-strategy goal' });
+    const assessmentId = insertAssessment(goalId);
+    insertStrategy(goalId, assessmentId, { name: 'Plan B' });
+    const recommendedId = insertStrategy(goalId, assessmentId, { name: 'Plan A', is_recommended: 1 });
+    const { status, body } = await get(`/api/bap/v1/goals/${goalId}/strategies`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.total).toBe(2);
+    expect(body.strategies[0].id).toBe(recommendedId);
+    expect(body.strategies[0].is_recommended).toBe(true);
+  });
+
+  test('GET detail exposes strategic_planning block', async () => {
+    const goalId = insertGoal({ title: 'Detail with planning' });
+    const assessmentId = insertAssessment(goalId);
+    insertStrategy(goalId, assessmentId);
+    const { body } = await get(`/api/bap/v1/goals/${goalId}`, { 'BAP-Key': keyRead });
+    expect(body.strategic_planning.latest_assessment.id).toBe(assessmentId);
+    expect(body.strategic_planning.strategy_count).toBe(1);
+  });
+});
+
+describe('POST /goals/:goalId/plan', () => {
+  test('202s and requires goals:update + Idempotency-Key', async () => {
+    const goalId = insertGoal({ title: 'Plan me' });
+    const noPerm = await post(`/api/bap/v1/goals/${goalId}/plan`, {}, { 'BAP-Key': keyRead, 'Idempotency-Key': generateId() });
+    expect(noPerm.status).toBe(403);
+
+    const noKey = await post(`/api/bap/v1/goals/${goalId}/plan`, {}, { 'BAP-Key': keyFull });
+    expect(noKey.status).toBe(400);
+
+    const { status, body } = await post(`/api/bap/v1/goals/${goalId}/plan`, {}, { 'BAP-Key': keyFull, 'Idempotency-Key': generateId() });
+    expect(status).toBe(202);
+    expect(body.status).toBe('planning');
+  });
+});
+
+describe('GET /goals/:goalId/timeline', () => {
+  test('merges goal_created, progress checks, and decisions into one chronological list', async () => {
+    const goalId = insertGoal({ title: 'Timeline goal' });
+    db.prepare(`INSERT INTO goal_checks (id, goal_id, business_id, metric_value, progress_pct, checked_at) VALUES (?, ?, ?, 15, 50, CURRENT_TIMESTAMP)`).run(generateId(), goalId, BIZ_A);
+    db.prepare(`
+      INSERT INTO decisions (id, business_id, decision_type, title, decision, author, related_goal_id, created_at)
+      VALUES (?, ?, 'strategy_selection', 'Chose SEO-first', 'x', 'human', ?, CURRENT_TIMESTAMP)
+    `).run(generateId(), BIZ_A, goalId);
+
+    const { status, body } = await get(`/api/bap/v1/goals/${goalId}/timeline`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.goal_id).toBe(goalId);
+    const types = body.events.map((e: any) => e.type);
+    expect(types).toContain('goal_created');
+    expect(types).toContain('progress_check');
+    expect(types).toContain('decision');
+  });
+
+  test('403 across tenants', async () => {
+    const goalId = insertGoal({ business_id: BIZ_B, title: 'B timeline goal' });
+    const { status } = await get(`/api/bap/v1/goals/${goalId}/timeline`, { 'BAP-Key': keyRead });
+    expect(status).toBe(403);
   });
 });

@@ -53,6 +53,11 @@ import bapConnectorsRouter from './bap-connectors.js';
 import bapOutcomesRouter from './bap-outcomes.js';
 import bapRunsRouter from './bap-runs.js';
 import bapAuditRouter from './bap-audit.js';
+import bapOpportunitiesRouter from './bap-opportunities.js';
+import bapConflictsRouter from './bap-conflicts.js';
+import bapDecisionsRouter from './bap-decisions.js';
+import bapGraphRouter from './bap-graph.js';
+import bapReviewRouter from './bap-review.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -221,6 +226,11 @@ router.use(bapConnectorsRouter);
 router.use(bapOutcomesRouter);
 router.use(bapRunsRouter);
 router.use(bapAuditRouter);
+router.use(bapOpportunitiesRouter);
+router.use(bapConflictsRouter);
+router.use(bapDecisionsRouter);
+router.use(bapGraphRouter);
+router.use(bapReviewRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
@@ -512,7 +522,7 @@ router.get('/signals/:signalId', requirePermission('signals:read'), (req: Reques
 router.post('/businesses/:businessId/signals', requirePermission('signals:create'), async (req: Request, res: Response) => {
   try {
     const businessId = String(req.params.businessId);
-    const { type, severity, title, description, data, confidence, connector_id } = req.body as {
+    const { type, severity, title, description, data, confidence, connector_id, goal_id } = req.body as {
       type?: string;
       severity?: string;
       title?: string;
@@ -520,10 +530,15 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
       data?: Record<string, unknown>;
       confidence?: number;
       connector_id?: string;
+      goal_id?: string;
     };
 
     if (!title || !severity || !type) {
       return res.status(400).json({ error: 'type, severity, and title are required.' });
+    }
+    if (goal_id) {
+      const goal = db.prepare('SELECT id FROM goals WHERE id = ? AND business_id = ?').get(goal_id, businessId);
+      if (!goal) return res.status(400).json({ error: `Goal '${goal_id}' not found for this business.` });
     }
 
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
@@ -531,11 +546,11 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
     await withRequiredIdempotency(req, res, 'signals:create', async () => {
       const id = generateId();
       db.prepare(`
-        INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity,
+        INSERT INTO signals (id, business_id, connector_id, goal_id, rule_id, type, severity,
                              title, description, data, status, confidence, agent_id, created_at)
-        VALUES (?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
+        VALUES (?, ?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
       `).run(
-        id, businessId, connector_id ?? null,
+        id, businessId, connector_id ?? null, goal_id ?? null,
         type, severity, stripThink(title) ?? title, stripThink(description),
         JSON.stringify(data ?? {}), confidence ?? null,
         bapAgent.id as string
@@ -555,6 +570,13 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
           });
         }
       } catch {}
+
+      // Phase 3 — fire-and-forget signal-vs-goal conflict check, same
+      // pattern as bap-goals.ts's post-create conflict check.
+      import('../brain/conflict-engine.js')
+        .then((m) => (m as unknown as { checkSignalGoalConflicts: (s: Record<string, unknown>, bid: string) => Promise<unknown> })
+          .checkSignalGoalConflicts({ id, title, description, type, severity }, businessId))
+        .catch(() => {});
 
       return { status: 201, body: { signal_id: id, created: true } };
     });
@@ -655,19 +677,9 @@ router.get('/businesses/:businessId/tasks', requirePermission('tasks:read'), asy
     if (created_from) { conditions.push('created_at >= ?'); params.push(String(created_from)); }
     if (created_to) { conditions.push('created_at <= ?'); params.push(String(created_to)); }
 
-    // goal_id: tasks have no direct goal_id column (see PHASE2.md — goals
-    // and tasks only share an optional project_id today). Best-effort
-    // proxy: resolve the goal's project_id and filter tasks by that,
-    // rather than silently ignoring the filter or erroring.
-    if (goal_id) {
-      const goal = db.prepare('SELECT project_id FROM goals WHERE id = ? AND business_id = ?').get(String(goal_id), businessId) as { project_id: string | null } | undefined;
-      if (!goal || !goal.project_id) {
-        conditions.push('1 = 0'); // goal not found, or has no project linkage — no tasks can match
-      } else {
-        conditions.push('project_id = ?');
-        params.push(goal.project_id);
-      }
-    }
+    // goal_id is a real FK (Phase 3) — see PHASE3.md. Previously this was
+    // a best-effort proxy through the shared project_id column.
+    if (goal_id) { conditions.push('goal_id = ?'); params.push(String(goal_id)); }
 
     const where = conditions.join(' AND ');
     const sortCol = TASK_SORT_COLUMNS.has(String(sort)) ? String(sort) : 'created_at';
@@ -717,11 +729,16 @@ router.get('/tasks/:taskId', requirePermission('tasks:read'), (req: Request, res
       ? db.prepare('SELECT id, type, severity, title, status, confidence, created_at FROM signals WHERE id = ?').get(row.signal_id as string) ?? null
       : null;
 
-    // Best-effort goal linkage via shared project_id (see the list route's
-    // goal_id filter comment — no direct tasks.goal_id column exists).
-    const linkedGoals = row.project_id
-      ? db.prepare("SELECT id, title, status, progress_pct FROM goals WHERE project_id = ? AND business_id = ? AND status != 'cancelled'").all(row.project_id as string, row.business_id as string)
+    // Real FK (Phase 3) — a task links to at most one goal directly, plus
+    // any other active goals still reachable via the legacy project_id
+    // proxy for tasks created before the FK existed.
+    const directGoal = row.goal_id
+      ? db.prepare("SELECT id, title, status, progress_pct FROM goals WHERE id = ? AND business_id = ?").get(row.goal_id as string, row.business_id as string)
+      : null;
+    const proxyGoals = row.project_id
+      ? db.prepare("SELECT id, title, status, progress_pct FROM goals WHERE project_id = ? AND business_id = ? AND status != 'cancelled' AND id != ?").all(row.project_id as string, row.business_id as string, (row.goal_id as string | null) ?? '')
       : [];
+    const linkedGoals = [directGoal, ...proxyGoals].filter(Boolean);
 
     const jobs = (db.prepare(
       `SELECT id, status, attempt_count, max_attempts, lease_owner, lease_expires_at,
@@ -816,7 +833,7 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
     const businessId = String(req.params.businessId);
     const {
       title, description, action_type, priority = 'p2', confidence,
-      estimated_impact, signal_id, assigned_to, action_payload,
+      estimated_impact, signal_id, goal_id, assigned_to, action_payload,
     } = req.body as {
       title?: string;
       description?: string;
@@ -825,6 +842,7 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
       confidence?: number;
       estimated_impact?: string;
       signal_id?: string;
+      goal_id?: string;
       assigned_to?: string;
       action_payload?: Record<string, unknown>;
     };
@@ -844,6 +862,7 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
       const task = createTask({
         business_id: businessId,
         signal_id: signal_id ?? null,
+        goal_id: goal_id ?? null,
         title: stripThink(title) ?? title,
         description: stripThink(description),
         proposed_by: `bap:${bapAgent.id as string}`,
@@ -869,6 +888,7 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
       };
     });
   } catch (err) {
+    if ((err as Error).message.includes('not found')) return res.status(400).json({ error: (err as Error).message });
     return res.status(500).json({ error: (err as Error).message });
   }
 });

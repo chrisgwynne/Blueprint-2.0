@@ -19,6 +19,8 @@ router.get('/:businessId', (req: Request, res: Response) => {
     const filters: Record<string, string> = {};
     if (req.query['status']) filters['status'] = String(req.query['status']);
     if (req.query['entity_id']) filters['entity_id'] = String(req.query['entity_id']);
+    if (req.query['conflict_type']) filters['conflict_type'] = String(req.query['conflict_type']);
+    if (req.query['category']) filters['category'] = String(req.query['category']);
     const rows = listConflicts(businessId, filters);
     res.json(rows);
   } catch (err) {

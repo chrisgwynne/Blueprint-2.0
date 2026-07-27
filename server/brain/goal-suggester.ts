@@ -11,6 +11,7 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { recordDecision } from './decision-memory.js';
 
 const SYSTEM_PROMPT = `You turn detected business-data patterns into a concrete goal suggestion.
 
@@ -35,7 +36,10 @@ Schema:
   "suggested_deadline_days": <number>,
   "suggested_agents": ["seo-sentinel"],
   "confidence": 0.0-1.0,
-  "reasoning": "why we think this will work"
+  "reasoning": "why we think this will work",
+  "required_effort": "low|medium|high",
+  "why_it_matters": "one sentence on the business impact of acting (or not acting) on this",
+  "related_risks": ["what could go wrong if we pursue this"]
 }`;
 
 function extractJSON(content: string): Record<string, unknown> | null {
@@ -344,6 +348,14 @@ export async function scanForGoalSuggestions(
       ? new Date(Date.now() + (expanded.suggested_deadline_days as number) * 86400000).toISOString()
       : null;
 
+    // related_goal_ids is computed deterministically (same metric_name on
+    // an active goal), not asked of the LLM — it cannot know real goal
+    // IDs, so having it invent them would be worse than not having the
+    // field at all.
+    const relatedGoalIds = expanded.metric_name
+      ? (db.prepare("SELECT id FROM goals WHERE business_id = ? AND metric_name = ? AND status = 'active'").all(businessId, expanded.metric_name as string) as Array<{ id: string }>).map((g) => g.id)
+      : [];
+
     const insertParams: any[] = [
       id, businessId,
       expanded.title as string, expanded.description as string,
@@ -356,15 +368,20 @@ export async function scanForGoalSuggestions(
       (expanded.confidence as number | null) ?? null,
       pattern.connector,
       JSON.stringify({ ...pattern, reasoning: expanded.reasoning }),
+      (expanded.required_effort as string | null) ?? null,
+      JSON.stringify(relatedGoalIds),
+      JSON.stringify((expanded.related_risks as string[] | null) ?? []),
+      (expanded.why_it_matters as string | null) ?? null,
     ];
     db.prepare(`
       INSERT INTO goal_suggestions
       (id, business_id, title, description, opportunity_value, opportunity_unit,
        metric_name, current_value, target_value, barrier, suggested_deadline,
-       suggested_agents, confidence, connector_source, evidence, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+       suggested_agents, confidence, connector_source, evidence,
+       required_effort, related_goal_ids, related_risks, why_it_matters, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
     `).run(...insertParams);
-    suggestions.push({ id, ...expanded, connector_source: pattern.connector });
+    suggestions.push({ id, ...expanded, connector_source: pattern.connector, related_goal_ids: relatedGoalIds });
   }
 
   return suggestions;
@@ -390,9 +407,12 @@ export function listGoalSuggestions(businessId: string, status = 'pending'): Rec
 function parseRow(r: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!r) return null;
   let agents: string[] = []; let evidence: Record<string, unknown> = {};
+  let relatedGoalIds: string[] = []; let relatedRisks: string[] = [];
   try { agents = JSON.parse((r.suggested_agents as string) || '[]'); } catch {}
   try { evidence = r.evidence ? JSON.parse(r.evidence as string) as Record<string, unknown> : {}; } catch {}
-  return { ...r, suggested_agents: agents, evidence };
+  try { relatedGoalIds = JSON.parse((r.related_goal_ids as string) || '[]'); } catch {}
+  try { relatedRisks = JSON.parse((r.related_risks as string) || '[]'); } catch {}
+  return { ...r, suggested_agents: agents, evidence, related_goal_ids: relatedGoalIds, related_risks: relatedRisks };
 }
 
 export function snoozeSuggestion(id: string, days = 30): void {
@@ -404,12 +424,22 @@ export function snoozeSuggestion(id: string, days = 30): void {
   `).run(until, id);
 }
 
-export function dismissSuggestion(id: string, reason?: string | null): void {
+export function dismissSuggestion(id: string, reason?: string | null, actor = 'human'): void {
+  const before = db.prepare('SELECT * FROM goal_suggestions WHERE id = ?').get(id) as Record<string, unknown> | null;
   db.prepare(`
     UPDATE goal_suggestions
     SET status = 'dismissed', dismissed_reason = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(reason ?? null, id);
+  if (before) {
+    recordDecision({
+      business_id: before.business_id as string, decision_type: 'opportunity_dismissed',
+      title: `Dismissed opportunity: ${before.title}`,
+      decision: `Dismissed opportunity "${before.title}".${reason ? ` ${reason}` : ''}`,
+      reasoning: reason ?? null, confidence: (before.confidence as number | null) ?? null,
+      author: actor,
+    });
+  }
 }
 
 /**
@@ -446,6 +476,16 @@ export async function acceptSuggestion(id: string, businessId: string): Promise<
     SET status = 'accepted', accepted_goal_id = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).run(goalId, id);
+
+  recordDecision({
+    business_id: businessId, decision_type: 'opportunity_accepted',
+    title: `Accepted opportunity: ${sugg.title as string}`,
+    decision: `Accepted opportunity "${sugg.title as string}" and created goal "${sugg.title as string}".`,
+    reasoning: (sugg.barrier as string | null) ?? null,
+    evidence: [sugg.evidence ?? null].filter(Boolean),
+    confidence: (sugg.confidence as number | null) ?? null,
+    author: 'human', related_goal_id: goalId,
+  });
 
   // Fire-and-forget reasoning + conflict check on the new goal
   (async () => {

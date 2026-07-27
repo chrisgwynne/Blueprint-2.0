@@ -12,6 +12,13 @@ const TYPE_LABELS: Record<string, string> = {
   goal_vs_goal:   'Goal vs Goal',
   task_vs_window: 'Task vs Measurement Window',
   task_vs_goal:   'Task vs Goal',
+  task_vs_task:   'Task vs Task',
+  signal_vs_goal: 'Signal vs Goal',
+  goal_dependency: 'Goal Dependency',
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  direct: 'var(--bp-red)', resource: 'var(--bp-amber)', timing: 'var(--bp-blue)', dependency: 'var(--bp-purple)',
 }
 
 const ENTITY_LINKS: Record<string, (id: string) => string> = {
@@ -55,6 +62,11 @@ function ConflictCard({ conflict, businessId, onRefresh }: ConflictCardProps) {
         <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
           {TYPE_LABELS[conflict.conflict_type] ?? conflict.conflict_type}
         </span>
+        {conflict.category && (
+          <span className="bp-pill" style={{ background: `${CATEGORY_COLORS[conflict.category] ?? 'var(--bp-text-3)'}20`, color: CATEGORY_COLORS[conflict.category] ?? 'var(--bp-text-3)', fontSize: 9 }}>
+            {conflict.category}
+          </span>
+        )}
         <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginLeft: 'auto' }}>
           {formatDistanceToNow(parseTimestamp(conflict.detected_at) || new Date(), { addSuffix: true })}
         </span>
@@ -105,13 +117,19 @@ export default function Conflicts() {
   const currentBusiness = useStore((s) => s.currentBusiness)
   const [conflicts, setConflicts] = useState<Conflict[]>([])
   const [filter, setFilter] = useState('open')
+  const [category, setCategory] = useState('')
+  const [conflictType, setConflictType] = useState('')
   const [running, setRunning] = useState(false)
 
   const load = useCallback(async () => {
     if (!currentBusiness) return
-    const rows = await getConflicts(currentBusiness.id, filter ? `status=${filter}` : '').catch(() => [])
+    const params = new URLSearchParams()
+    if (filter) params.set('status', filter)
+    if (category) params.set('category', category)
+    if (conflictType) params.set('conflict_type', conflictType)
+    const rows = await getConflicts(currentBusiness.id, params.toString()).catch(() => [])
     setConflicts(rows || [])
-  }, [currentBusiness, filter])
+  }, [currentBusiness, filter, category, conflictType])
 
   useEffect(() => { load() }, [load])
 
@@ -141,7 +159,7 @@ export default function Conflicts() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 14, flexWrap: 'wrap' }}>
         {['open', 'resolved', 'dismissed', ''].map((f) => (
           <button key={f || 'all'} onClick={() => setFilter(f)}
             className={`bp-pill ${filter === f ? 'bp-pill-blue' : 'bp-pill-grey'}`}
@@ -149,6 +167,14 @@ export default function Conflicts() {
             {f || 'all'}
           </button>
         ))}
+        <select className="bp-input" style={{ fontSize: 11, marginLeft: 8 }} value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">All categories</option>
+          {['direct', 'resource', 'timing', 'dependency'].map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
+        <select className="bp-input" style={{ fontSize: 11 }} value={conflictType} onChange={(e) => setConflictType(e.target.value)}>
+          <option value="">All types</option>
+          {Object.entries(TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+        </select>
       </div>
 
       {conflicts.length === 0 ? (
