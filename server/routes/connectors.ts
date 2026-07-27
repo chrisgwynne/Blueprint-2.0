@@ -360,6 +360,64 @@ router.get('/gsc/sites', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/connectors/gbp/accounts?businessId=...
+ * Returns the GBP accounts the authorised user can manage.
+ */
+router.get('/gbp/accounts', async (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.query['businessId'] ?? '');
+    if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+    const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js') as unknown as {
+      getValidGoogleAccessToken: (businessId: string) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+    };
+    const tok = await getValidGoogleAccessToken(businessId);
+    if (!tok?.accessToken) {
+      return res.status(409).json({ error: 'No connected Google account found. Connect Google Business Profile first.' });
+    }
+
+    const connector = await getConnector('gbp');
+    if (!connector) return res.status(422).json({ error: 'GBP connector not available.' });
+
+    const accounts = await connector.listAccounts(tok);
+    return res.json({ accounts });
+  } catch (err) {
+    console.error('[connectors] GBP accounts list error:', (err as Error).message);
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
+ * GET /api/connectors/gbp/locations?businessId=...&accountId=...
+ * Returns the locations under a GBP account.
+ */
+router.get('/gbp/locations', async (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.query['businessId'] ?? '');
+    const accountId  = String(req.query['accountId'] ?? '');
+    if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+    if (!accountId)  return res.status(400).json({ error: 'accountId is required.' });
+
+    const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js') as unknown as {
+      getValidGoogleAccessToken: (businessId: string) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+    };
+    const tok = await getValidGoogleAccessToken(businessId);
+    if (!tok?.accessToken) {
+      return res.status(409).json({ error: 'No connected Google account found. Connect Google Business Profile first.' });
+    }
+
+    const connector = await getConnector('gbp');
+    if (!connector) return res.status(422).json({ error: 'GBP connector not available.' });
+
+    const locations = await connector.listLocations(accountId, tok);
+    return res.json({ locations });
+  } catch (err) {
+    console.error('[connectors] GBP locations list error:', (err as Error).message);
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/**
  * POST /api/connectors/:id/sync
  * Trigger a manual sync
  */

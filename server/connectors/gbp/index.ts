@@ -9,6 +9,7 @@
  *   - mybusiness (v4 legacy)             — reviews, insights, posts, photos, Q&A
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
+import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
 
 type Creds = Record<string, string | undefined>;
 
@@ -26,14 +27,16 @@ async function ensureFreshToken(credentials: Creds): Promise<Creds> {
   if (!credentials.refreshToken) {
     throw new Error('GBP token expired and no refresh token available. Re-authorise the connector.');
   }
+
+  const { clientId, clientSecret } = readGoogleOAuthConfig();
   const res = await checkedFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: credentials.refreshToken,
-      client_id: process.env.GOOGLE_CLIENT_ID || '',
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+      client_id: clientId || credentials.clientId || '',
+      client_secret: clientSecret || credentials.clientSecret || '',
     }),
   });
   const tokens = await res.json() as { access_token: string; expires_in?: number };
@@ -118,7 +121,7 @@ const connector = {
    */
   async listLocations(accountId: string, credentials: Creds): Promise<unknown[]> {
     const fresh = await ensureFreshToken(credentials);
-    const readMask = 'name,title,storefrontAddress,websiteUri,businessStatus';
+    const readMask = 'name,title,storefrontAddress,websiteUri,openInfo';
     const data = await gbpFetch(
       `${BUSINESS_INFO}/${accountId}/locations?readMask=${encodeURIComponent(readMask)}`,
       fresh
@@ -156,7 +159,7 @@ const connector = {
     const [location, reviews, insights, posts, photos, qa] = await Promise.all([
       // Location details
       gbpFetch(
-        `${BUSINESS_INFO}/locations/${cleanLocId}?readMask=${encodeURIComponent('name,title,phoneNumbers,categories,storefrontAddress,websiteUri,regularHours,businessStatus,profile,metadata')}`,
+        `${BUSINESS_INFO}/locations/${cleanLocId}?readMask=${encodeURIComponent('name,title,phoneNumbers,categories,storefrontAddress,websiteUri,regularHours,openInfo,profile,metadata')}`,
         fresh
       ).catch(fallback('location', null)),
 

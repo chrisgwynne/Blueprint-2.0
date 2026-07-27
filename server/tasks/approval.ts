@@ -42,6 +42,7 @@ export const DANGEROUS_ACTION_TYPES = new Set<string>([
   'shopify_page_create',
   'shopify_blog_post_create',
   'github_pr',
+  'github_review_deploy',
   'wix_seo_update',
   'delete_product',
 ]);

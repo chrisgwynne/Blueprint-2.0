@@ -34,6 +34,7 @@ export type ActionSafetyCategory = 'internal_idempotent' | 'external_verifiable'
 const EXTERNAL_VERIFIABLE_ACTIONS = new Set<string>([
   'github_issue',
   'github_pr',
+  'github_review_deploy',
   'shopify_product_create',
   'shopify_page_create',
   'shopify_blog_post_create',

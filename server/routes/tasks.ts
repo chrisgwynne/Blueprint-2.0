@@ -159,6 +159,12 @@ router.post('/', (req: Request, res: Response) => {
       { status: 'proposed', source: 'manual' }
     );
 
+    import('../bap/webhook-dispatcher.js').then((m: any) =>
+      m.dispatchWebhookEvent('task.created', {
+        task_id: task.id, business_id: task.business_id, title: task.title,
+        trust_tier: task.trust_tier, priority: task.priority, approval_mode: task.approval_mode,
+      })
+    ).catch(() => {});
     return res.status(201).json(parseRow(task));
   } catch (err) {
     console.error('[tasks] Create error:', err);
@@ -297,7 +303,10 @@ router.post('/:id/comment', (req: Request, res: Response) => {
 
     const eventId = createTaskEvent(id, 'commented', 'human', content, {});
     const event = db.prepare('SELECT * FROM task_events WHERE id = ?').get(eventId as string) as Record<string, unknown>;
-
+    const taskRow = db.prepare('SELECT business_id FROM tasks WHERE id = ?').get(id) as { business_id: string } | undefined;
+    import('../bap/webhook-dispatcher.js').then((m: any) =>
+      m.dispatchWebhookEvent('task.comment', { task_id: id, business_id: taskRow?.business_id, comment: content })
+    ).catch(() => {});
     return res.status(201).json({ ...event, metadata: event.metadata ? JSON.parse(event.metadata as string) : {} });
   } catch (err) {
     console.error('[tasks] Comment error:', err);

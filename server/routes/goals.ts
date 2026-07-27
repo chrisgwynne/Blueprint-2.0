@@ -174,7 +174,11 @@ router.post('/:businessId', (req: Request, res: Response) => {
       }
     })();
 
-    res.status(201).json(parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id) as Record<string, unknown> | null));
+    const created = parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id) as Record<string, unknown> | null);
+    import('../bap/webhook-dispatcher.js').then((m: any) =>
+      m.dispatchWebhookEvent('goal.created', { goal_id: id, business_id: businessId, title, priority })
+    ).catch(() => {});
+    res.status(201).json(created);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -247,7 +251,11 @@ router.put('/:businessId/:id', (req: Request, res: Response) => {
     updates.push('updated_at=CURRENT_TIMESTAMP');
     values.push(id, businessId);
     db.prepare(`UPDATE goals SET ${updates.join(', ')} WHERE id=? AND business_id=?`).run(...values);
-    res.json(parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id) as Record<string, unknown> | null));
+    const updated = parseRow(db.prepare('SELECT * FROM goals WHERE id=?').get(id) as Record<string, unknown> | null);
+    import('../bap/webhook-dispatcher.js').then((m: any) =>
+      m.dispatchWebhookEvent('goal.updated', { goal_id: id, business_id: businessId, status: (updated as any)?.status, title: (updated as any)?.title })
+    ).catch(() => {});
+    res.json(updated);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

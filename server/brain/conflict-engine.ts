@@ -111,6 +111,13 @@ function insertConflict(row: ConflictRow): string {
     row.entity_b_type, row.entity_b_id, row.entity_b_title ?? null,
     row.description, row.recommendation ?? null, row.resolution_kind ?? null,
   );
+  import('../bap/webhook-dispatcher.js').then((m: any) =>
+    m.dispatchWebhookEvent('conflict.created', {
+      conflict_id: id, business_id: row.business_id,
+      conflict_type: row.conflict_type, severity: row.severity,
+      description: row.description,
+    })
+  ).catch(() => {});
   return id;
 }
 

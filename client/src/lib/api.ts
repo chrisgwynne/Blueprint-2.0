@@ -192,6 +192,8 @@ export const lintKb = (businessId: string) => post(`/kb/${businessId}/lint`)
 
 export const getBapAgents = () => get('/bap/v1/agents-admin')   // custom admin route (below)
 export const revokeBapAgent = (agentId: string) => post(`/bap/v1/agents-admin/${agentId}/revoke`)
+export const registerBapAgent = (body: { name: string; description?: string; owner?: string; requested_permissions?: string[]; business_access?: string[]; webhook_url?: string }) => post('/bap/v1/register', body)
+export const updateBapAgent = (agentId: string, body: { business_access?: string[]; permissions?: string[]; webhook_url?: string; webhook_events?: string[]; name?: string; description?: string }) => patch(`/bap/v1/agents-admin/${agentId}`, body)
 export const getBapAudit = (agentId: string, params?: Params) => get(`/bap/v1/agents-admin/${agentId}/audit`, params)
 export const getBapDeliveries = (agentId: string, params?: Params) => get(`/bap/v1/agents-admin/${agentId}/deliveries`, params)
 

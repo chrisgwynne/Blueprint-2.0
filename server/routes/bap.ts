@@ -1450,6 +1450,71 @@ router.get('/agents-admin', isAuthenticated, (req: Request, res: Response) => {
   }
 });
 
+router.patch('/agents-admin/:agentId', isAuthenticated, async (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.agentId);
+    const agent = db.prepare('SELECT id FROM bap_agents WHERE id = ?').get(agentId) as { id: string } | undefined;
+    if (!agent) return res.status(404).json({ error: 'Agent not found.' });
+
+    const { business_access, permissions, webhook_url, webhook_events, name, description } = req.body as {
+      business_access?: string[];
+      permissions?: string[];
+      webhook_url?: string;
+      webhook_events?: string[];
+      name?: string;
+      description?: string;
+    };
+
+    const updates: string[] = [];
+    const params: unknown[] = [];
+
+    if (Array.isArray(business_access)) {
+      const valid = filterValidBusinessIds(business_access);
+      updates.push('business_access = ?');
+      params.push(JSON.stringify(valid));
+    }
+    if (Array.isArray(permissions)) {
+      const granted = filterGrantablePermissions(permissions);
+      updates.push('permissions = ?');
+      params.push(JSON.stringify(granted));
+    }
+    if (typeof webhook_url === 'string') {
+      updates.push('webhook_url = ?');
+      params.push(webhook_url || null);
+    }
+    if (Array.isArray(webhook_events)) {
+      updates.push('webhook_events = ?');
+      params.push(JSON.stringify(webhook_events));
+    }
+    if (typeof name === 'string' && name.trim()) {
+      updates.push('name = ?');
+      params.push(name.trim());
+    }
+    if (typeof description === 'string') {
+      updates.push('description = ?');
+      params.push(description || null);
+    }
+
+    if (updates.length === 0) return res.status(400).json({ error: 'No fields to update.' });
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    params.push(agentId);
+    db.prepare(`UPDATE bap_agents SET ${updates.join(', ')} WHERE id = ?`).run(...(params as import('bun:sqlite').SQLQueryBindings[]));
+
+    const updated = db.prepare(
+      'SELECT id, name, description, owner, api_key_prefix, status, permissions, business_access, webhook_url, last_seen, total_calls, created_at FROM bap_agents WHERE id = ?'
+    ).get(agentId) as Record<string, unknown> | undefined;
+
+    return res.json({
+      ...updated,
+      permissions: safeJSON(updated?.permissions as string) as string[],
+      business_access: safeJSON(updated?.business_access as string) as string[],
+    });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
 router.post('/agents-admin/:agentId/revoke', isAuthenticated, (req: Request, res: Response) => {
   try {
     const agentId = String(req.params.agentId);

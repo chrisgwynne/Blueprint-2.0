@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, deleteBusiness, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval, getBusinessProfile as fetchBusinessProfile, updateBusinessProfile as saveBusinessProfile } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, deleteBusiness, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, registerBapAgent, updateBapAgent, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval, getBusinessProfile as fetchBusinessProfile, updateBusinessProfile as saveBusinessProfile } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import type { Business } from '../types/index.js'
@@ -1970,6 +1970,17 @@ function IntegrationsTab() {
   const [loading, setLoading] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
   const [auditLog, setAuditLog] = useState<BapCall[]>([])
+  const [showRegisterForm, setShowRegisterForm] = useState(false)
+  const [newApiKey, setNewApiKey] = useState<string | null>(null)
+  const [registerForm, setRegisterForm] = useState({ name: '', description: '', owner: '', business_access: '' })
+  const [registering, setRegistering] = useState(false)
+  const [editingAccess, setEditingAccess] = useState<string | null>(null)
+  const [accessDraft, setAccessDraft] = useState('')
+  const [editingPerms, setEditingPerms] = useState<string | null>(null)
+  const [permsDraft, setPermsDraft] = useState<string[]>([])
+  const [editingWebhook, setEditingWebhook] = useState<string | null>(null)
+  const [webhookUrlDraft, setWebhookUrlDraft] = useState('')
+  const [webhookAllEvents, setWebhookAllEvents] = useState(false)
 
   useEffect(() => {
     getBapAgents()
@@ -1977,6 +1988,87 @@ function IntegrationsTab() {
       .catch(() => setAgents([]))
       .finally(() => setLoading(false))
   }, [])
+
+  async function handleRegister() {
+    if (!registerForm.name.trim()) return
+    setRegistering(true)
+    try {
+      const businessIds = registerForm.business_access.split(',').map((s) => s.trim()).filter(Boolean)
+      const result = await registerBapAgent({
+        name: registerForm.name.trim(),
+        description: registerForm.description || undefined,
+        owner: registerForm.owner || undefined,
+        business_access: businessIds,
+        requested_permissions: ['signals:read','signals:create','tasks:read','tasks:propose','kb:read','metrics:read','goals:read','connectors:read','outcomes:read'],
+      }) as { api_key?: string; agent_id?: string; business_access?: string[] }
+      setNewApiKey(result.api_key ?? null)
+      setRegisterForm({ name: '', description: '', owner: '', business_access: '' })
+      setShowRegisterForm(false)
+      const data = await getBapAgents()
+      setAgents((data as { agents?: BapAgent[] })?.agents ?? [])
+      addNotification({ type: 'success', message: `Agent registered. Copy your API key now — it won't be shown again.` })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setRegistering(false)
+    }
+  }
+
+  async function handleSaveAccess(agentId: string) {
+    const businessIds = accessDraft.split(',').map((s) => s.trim()).filter(Boolean)
+    try {
+      const updated = await updateBapAgent(agentId, { business_access: businessIds }) as BapAgent
+      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, business_access: updated.business_access } : a))
+      setEditingAccess(null)
+      addNotification({ type: 'success', message: 'Business access updated' })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    }
+  }
+
+  async function handleSaveWebhook(agentId: string) {
+    try {
+      const updated = await updateBapAgent(agentId, {
+        webhook_url: webhookUrlDraft,
+        webhook_events: webhookAllEvents ? ['*'] : [],
+      }) as BapAgent
+      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, webhook_url: updated.webhook_url, webhook_events: updated.webhook_events } : a))
+      setEditingWebhook(null)
+      addNotification({ type: 'success', message: 'Webhook updated' })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    }
+  }
+
+  async function handleSavePerms(agentId: string) {
+    try {
+      const updated = await updateBapAgent(agentId, { permissions: permsDraft }) as BapAgent
+      setAgents((prev) => prev.map((a) => a.id === agentId ? { ...a, permissions: updated.permissions } : a))
+      setEditingPerms(null)
+      addNotification({ type: 'success', message: 'Permissions updated' })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    }
+  }
+
+  const ALL_PERMISSIONS: { group: string; perms: string[] }[] = [
+    { group: 'Signals',         perms: ['signals:read', 'signals:create'] },
+    { group: 'Tasks',           perms: ['tasks:read', 'tasks:propose', 'tasks:approve'] },
+    { group: 'Goals',           perms: ['goals:read', 'goals:propose', 'goals:update'] },
+    { group: 'Opportunities',   perms: ['opportunities:read', 'opportunities:trigger'] },
+    { group: 'Conflicts',       perms: ['conflicts:read'] },
+    { group: 'Recommendations', perms: ['recommendations:read'] },
+    { group: 'Retrospectives',  perms: ['retrospectives:read', 'retrospectives:trigger'] },
+    { group: 'Calibration',     perms: ['calibration:read'] },
+    { group: 'Decisions',       perms: ['decisions:read'] },
+    { group: 'Graph',           perms: ['graph:read', 'graph:trigger'] },
+    { group: 'Agents',          perms: ['agents:read', 'agents:trigger'] },
+    { group: 'Connectors',      perms: ['connectors:read', 'connectors:sync'] },
+    { group: 'Outcomes',        perms: ['outcomes:read'] },
+    { group: 'Knowledge Base',  perms: ['kb:read', 'kb:write'] },
+    { group: 'Metrics',         perms: ['metrics:read'] },
+    { group: 'Audit',           perms: ['audit:read'] },
+  ]
 
   async function handleRevoke(agentId: string) {
     if (!confirm('Revoke this agent? Its API key will immediately stop working.')) return
@@ -2009,9 +2101,48 @@ function IntegrationsTab() {
         title="External Agents (BAP)"
         description="Agents connected via the Blueprint Agent Protocol. Any agent that speaks HTTP can register and participate."
       >
-        <p className="text-xs text-blueprint-muted mb-3">
-          To register a new agent, POST to <code className="text-blueprint-muted/80">/api/bap/v1/register</code>. See the AGENT-GUIDE.md in server/bap/ for details.
-        </p>
+        {/* New API key reveal */}
+        {newApiKey && (
+          <div className="mb-4 p-3 rounded bg-green-500/10 border border-green-500/30 space-y-2">
+            <p className="text-xs text-green-400 font-semibold">Agent registered — copy your API key now. It will not be shown again.</p>
+            <code className="block text-xs font-mono text-slate-200 break-all bg-blueprint-base/50 rounded p-2">{newApiKey}</code>
+            <button onClick={() => setNewApiKey(null)} className="text-[10px] text-blueprint-muted hover:text-slate-300">Dismiss</button>
+          </div>
+        )}
+
+        {/* Register form */}
+        {showRegisterForm ? (
+          <div className="mb-4 p-3 rounded border border-blueprint-border space-y-3">
+            <p className="text-xs font-semibold text-slate-200">Register external agent</p>
+            <div>
+              <label className="block text-[10px] text-blueprint-muted mb-1">Agent name *</label>
+              <input value={registerForm.name} onChange={(e) => setRegisterForm({ ...registerForm, name: e.target.value })} className="bp-input text-xs" placeholder="Hermes" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-blueprint-muted mb-1">Description</label>
+              <input value={registerForm.description} onChange={(e) => setRegisterForm({ ...registerForm, description: e.target.value })} className="bp-input text-xs" placeholder="AI agent that monitors and proposes tasks" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-blueprint-muted mb-1">Owner</label>
+              <input value={registerForm.owner} onChange={(e) => setRegisterForm({ ...registerForm, owner: e.target.value })} className="bp-input text-xs" placeholder="you@example.com" />
+            </div>
+            <div>
+              <label className="block text-[10px] text-blueprint-muted mb-1">Business IDs (comma-separated)</label>
+              <input value={registerForm.business_access} onChange={(e) => setRegisterForm({ ...registerForm, business_access: e.target.value })} className="bp-input text-xs font-mono" placeholder="biz_abc123, biz_def456" />
+              <p className="text-[10px] text-blueprint-muted mt-1">Find IDs in Settings → Your Businesses. IDs not in your DB will be ignored.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setShowRegisterForm(false)} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+              <button onClick={() => void handleRegister()} disabled={registering || !registerForm.name.trim()} className="bp-btn bp-btn-primary text-xs flex-1 justify-center">
+                {registering ? 'Registering…' : 'Register agent'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setShowRegisterForm(true)} className="bp-btn bp-btn-secondary text-xs mb-4">
+            <Bot size={12} /> Register new agent
+          </button>
+        )}
 
         {agents.length === 0 ? (
           <div className="text-center py-8 text-blueprint-muted text-xs">
@@ -2054,10 +2185,146 @@ function IntegrationsTab() {
                   <div>Last seen: <span className="text-slate-300">{agent.last_seen ? formatDistanceToNow(parseTimestamp(agent.last_seen) || new Date(), { addSuffix: true }) : 'never'}</span></div>
                   <div>Webhook: <span className="text-slate-300">{agent.webhook_url ? '✅ configured' : '—'}</span></div>
                   <div className="col-span-2">
-                    Permissions: <span className="text-slate-300">
-                      {(agent.permissions ?? []).join(', ') || '(none)'}
-                    </span>
+                    {editingPerms === agent.id ? (
+                      <div className="mt-1 space-y-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-blueprint-muted">Permissions</span>
+                          <div className="flex gap-3">
+                            <button
+                              onClick={() => setPermsDraft(ALL_PERMISSIONS.flatMap((g) => g.perms))}
+                              className="text-blueprint-blue hover:text-blue-300"
+                            >
+                              Select all
+                            </button>
+                            <button onClick={() => setPermsDraft([])} className="text-blueprint-muted hover:text-slate-300">Clear</button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                          {ALL_PERMISSIONS.map(({ group, perms }) => (
+                            <div key={group}>
+                              <p className="text-[9px] uppercase tracking-wider text-blueprint-muted/60 mb-0.5">{group}</p>
+                              {perms.map((perm) => (
+                                <label key={perm} className="flex items-center gap-1.5 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={permsDraft.includes(perm)}
+                                    onChange={(e) => setPermsDraft((prev) =>
+                                      e.target.checked ? [...prev, perm] : prev.filter((p) => p !== perm)
+                                    )}
+                                    className="w-3 h-3 accent-blue-500"
+                                  />
+                                  <span className="font-mono text-[10px] text-slate-300">{perm}</span>
+                                </label>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex gap-3 pt-1">
+                          <button onClick={() => setEditingPerms(null)} className="text-[10px] text-blueprint-muted hover:text-slate-300">Cancel</button>
+                          <button onClick={() => void handleSavePerms(agent.id)} className="text-[10px] text-blueprint-blue hover:text-blue-300">Save permissions</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2">
+                        <span className="text-blueprint-muted shrink-0">Permissions:</span>
+                        <span className="text-slate-300 leading-relaxed">
+                          {(agent.permissions ?? []).join(', ') || '(none)'}
+                        </span>
+                        {agent.status === 'active' && (
+                          <button
+                            onClick={() => { setEditingPerms(agent.id); setPermsDraft(agent.permissions ?? []) }}
+                            className="shrink-0 text-blueprint-blue hover:text-blue-300"
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
+                </div>
+
+                {/* Webhook config */}
+                <div className="mt-2">
+                  {editingWebhook === agent.id ? (
+                    <div className="space-y-2 mt-1">
+                      <label className="block text-[10px] text-blueprint-muted">Webhook URL</label>
+                      <input
+                        value={webhookUrlDraft}
+                        onChange={(e) => setWebhookUrlDraft(e.target.value)}
+                        className="bp-input text-xs w-full"
+                        placeholder="https://your-agent.example.com/webhook"
+                      />
+                      <label className="flex items-center gap-2 cursor-pointer mt-1">
+                        <input
+                          type="checkbox"
+                          checked={webhookAllEvents}
+                          onChange={(e) => setWebhookAllEvents(e.target.checked)}
+                          className="w-3 h-3 accent-blue-500"
+                        />
+                        <span className="text-[10px] text-slate-300">Send ALL events (signal, task, goal, conflict, chat, decision, retrospective, connector, agent…)</span>
+                      </label>
+                      <div className="flex gap-3 pt-1">
+                        <button onClick={() => setEditingWebhook(null)} className="text-[10px] text-blueprint-muted hover:text-slate-300">Cancel</button>
+                        <button onClick={() => void handleSaveWebhook(agent.id)} className="text-[10px] text-blueprint-blue hover:text-blue-300">Save webhook</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-blueprint-muted flex items-center gap-2">
+                      <span>Webhook: <span className="text-slate-300">{agent.webhook_url || '—'}</span></span>
+                      {agent.webhook_url && (
+                        <span className="text-slate-400">
+                          · events: <span className="text-slate-300 font-mono">
+                            {((agent.webhook_events ?? []) as string[]).includes('*') ? 'all' : ((agent.webhook_events ?? []) as string[]).join(', ') || 'none'}
+                          </span>
+                        </span>
+                      )}
+                      {agent.status === 'active' && (
+                        <button
+                          onClick={() => {
+                            setEditingWebhook(agent.id)
+                            setWebhookUrlDraft(agent.webhook_url ?? '')
+                            setWebhookAllEvents(((agent.webhook_events ?? []) as string[]).includes('*'))
+                          }}
+                          className="text-blueprint-blue hover:text-blue-300"
+                        >
+                          {agent.webhook_url ? 'Edit' : 'Add webhook'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Business access */}
+                <div className="mt-2">
+                  {editingAccess === agent.id ? (
+                    <div className="space-y-1">
+                      <label className="block text-[10px] text-blueprint-muted">Business IDs (comma-separated)</label>
+                      <input
+                        value={accessDraft}
+                        onChange={(e) => setAccessDraft(e.target.value)}
+                        className="bp-input text-xs font-mono w-full"
+                        placeholder="biz_abc123, biz_def456"
+                      />
+                      <div className="flex gap-2 mt-1">
+                        <button onClick={() => setEditingAccess(null)} className="text-[10px] text-blueprint-muted hover:text-slate-300">Cancel</button>
+                        <button onClick={() => void handleSaveAccess(agent.id)} className="text-[10px] text-blueprint-blue hover:text-blue-300">Save</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="text-[10px] text-blueprint-muted flex items-center gap-2">
+                      <span>Business access: <span className="text-slate-300 font-mono">
+                        {(agent.business_access ?? []).length > 0 ? (agent.business_access ?? []).join(', ') : '(none)'}
+                      </span></span>
+                      {agent.status === 'active' && (
+                        <button
+                          onClick={() => { setEditingAccess(agent.id); setAccessDraft((agent.business_access ?? []).join(', ')) }}
+                          className="text-blueprint-blue hover:text-blue-300"
+                        >
+                          Edit
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex gap-2 mt-3">

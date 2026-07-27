@@ -3,18 +3,21 @@ import type { CompleteOptions, CompleteResult, ProviderCredentials } from './typ
 const DEFAULT_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
 export const KNOWN_MODELS: string[] = [
-  'gemini-2.0-flash',
-  'gemini-2.0-flash-lite',
-  'gemini-1.5-pro-latest',
-  'gemini-1.5-flash-latest',
+  // Gemini 3.x — GA (newest first)
+  'gemini-3.6-flash',
+  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3.1-pro-preview',
 ];
 
 export function estimateCost(model: string, inputTokens: number, outputTokens: number): number {
   const pricing: Record<string, { input: number; output: number }> = {
-    'gemini-1.5-pro-latest':   { input: 3.5,   output: 10.5 },
-    'gemini-1.5-flash-latest': { input: 0.075, output: 0.3  },
-    'gemini-2.0-flash':        { input: 0.1,   output: 0.4  },
-    'gemini-2.0-flash-lite':   { input: 0.075, output: 0.3  },
+    'gemini-3.6-flash':      { input: 0.1,   output: 0.4  },
+    'gemini-3.5-flash':      { input: 0.075, output: 0.3  },
+    'gemini-3.5-flash-lite': { input: 0.019, output: 0.075 },
+    'gemini-3.1-flash-lite': { input: 0.019, output: 0.075 },
+    'gemini-3.1-pro-preview':{ input: 1.25,  output: 10.0 },
   };
   const p = pricing[model] ?? { input: 1.0, output: 4.0 };
   return (inputTokens / 1_000_000) * p.input + (outputTokens / 1_000_000) * p.output;
@@ -22,7 +25,7 @@ export function estimateCost(model: string, inputTokens: number, outputTokens: n
 
 export async function complete({ apiKey, baseUrl, model, messages, system, temperature = 0.7, max_tokens = 4096 }: CompleteOptions): Promise<CompleteResult> {
   const root = baseUrl || DEFAULT_API_URL;
-  const modelId = model || 'gemini-1.5-flash-latest';
+  const modelId = model || 'gemini-3.5-flash';
   const url = `${root}/models/${modelId}:generateContent?key=${apiKey}`;
 
   // Convert Anthropic-style messages to Gemini format

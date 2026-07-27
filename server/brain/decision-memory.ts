@@ -57,6 +57,13 @@ export function recordDecision(input: RecordDecisionInput): string {
     input.related_signal_id ?? null, input.related_outcome_id ?? null,
     input.related_conflict_id ?? null,
   );
+  import('../bap/webhook-dispatcher.js').then((m: any) =>
+    m.dispatchWebhookEvent('decision.created', {
+      decision_id: id, business_id: input.business_id,
+      decision_type: input.decision_type, title: input.title,
+      confidence: input.confidence ?? null,
+    })
+  ).catch(() => {});
   return id;
 }
 

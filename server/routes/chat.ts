@@ -125,6 +125,10 @@ router.post('/:businessId/conversations/:id/messages', async (req: Request, res:
 
     const responses = await processMessage({ content }, id, businessId);
 
+    import('../bap/webhook-dispatcher.js').then((m: any) =>
+      m.dispatchWebhookEvent('chat.message', { conversation_id: id, business_id: businessId, content, responses })
+    ).catch(() => {});
+
     res.json({ ok: true, responses });
   } catch (err) {
     console.error('[chat] send error:', err);

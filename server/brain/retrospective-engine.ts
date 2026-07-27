@@ -268,6 +268,14 @@ export async function runRetrospective(
     opts.triggered_by ?? 'scheduler'
   );
 
+  import('../bap/webhook-dispatcher.js').then((m: any) =>
+    m.dispatchWebhookEvent('retrospective.created', {
+      retrospective_id: id, business_id: businessId,
+      period_start: periodStart.toISOString(), period_end: periodEnd.toISOString(),
+      executive_summary: (parsed.executive_summary as string | null) ?? null,
+    })
+  ).catch(() => {});
+
   // Apply calibration to agent_calibration table
   await applyCalibration(businessId, parsed, periodStart, periodEnd).catch(() => {});
 

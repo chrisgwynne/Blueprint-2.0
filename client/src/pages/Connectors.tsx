@@ -455,6 +455,160 @@ function MerchantSetup({ businessId, existing, onSaved, onClose }: MerchantSetup
   )
 }
 
+// ─── GBP Account + Location Setup ────────────────────────────────────────────
+
+interface GBPSetupProps {
+  businessId: string | undefined
+  existing: Connector | undefined
+  onSaved: (connector: Connector) => void
+  onClose: () => void
+}
+
+interface GBPAccount { name: string; accountName?: string; type?: string }
+interface GBPLocation { name: string; title?: string; businessStatus?: string }
+
+function GBPSetup({ businessId, existing, onSaved, onClose }: GBPSetupProps) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [accountId, setAccountId]   = useState<string>((existing?.config?.accountId as string) || '')
+  const [locationId, setLocationId] = useState<string>((existing?.config?.locationId as string) || '')
+  const [accounts, setAccounts]     = useState<GBPAccount[] | null>(null)
+  const [locations, setLocations]   = useState<GBPLocation[] | null>(null)
+  const [loadingAccounts, setLoadingAccounts] = useState(false)
+  const [loadingLocations, setLoadingLocations] = useState(false)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!existing || !businessId) return
+    setLoadingAccounts(true)
+    fetch(`/api/connectors/gbp/accounts?businessId=${encodeURIComponent(businessId)}`)
+      .then((r) => r.json())
+      .then((d) => setAccounts(d.accounts ?? []))
+      .catch(() => setAccounts([]))
+      .finally(() => setLoadingAccounts(false))
+  }, [existing, businessId])
+
+  useEffect(() => {
+    if (!existing || !businessId || !accountId) { setLocations(null); return }
+    setLoadingLocations(true)
+    fetch(`/api/connectors/gbp/locations?businessId=${encodeURIComponent(businessId)}&accountId=${encodeURIComponent(accountId)}`)
+      .then((r) => r.json())
+      .then((d) => setLocations(d.locations ?? []))
+      .catch(() => setLocations([]))
+      .finally(() => setLoadingLocations(false))
+  }, [existing, businessId, accountId])
+
+  if (!existing) {
+    const authUrl = `/api/oauth/gbp?businessId=${encodeURIComponent(businessId ?? '')}`
+    return (
+      <div className="space-y-4">
+        <p className="text-xs text-blueprint-muted">
+          Click below to connect your Google Business Profile account. You will be redirected to
+          Google to grant access. Once authorised you will be brought back here to select your
+          business location.
+        </p>
+        <a href={authUrl} className="bp-btn bp-btn-primary text-xs w-full justify-center" style={{ textDecoration: 'none' }}>
+          <ExternalLink size={12} /> Connect with Google
+        </a>
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs w-full justify-center">Cancel</button>
+      </div>
+    )
+  }
+
+  async function handleSave() {
+    if (!accountId || !locationId) return
+    setSaving(true)
+    try {
+      const updated = await updateConnector(existing!.id, { config: { accountId, locationId } })
+      onSaved(updated as Connector)
+      addNotification({ type: 'success', message: 'Google Business Profile connector updated' })
+      onClose()
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const accountLabel = (a: GBPAccount) => a.accountName || a.name
+  const locationLabel = (l: GBPLocation) => l.title || l.name
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 rounded bg-blueprint-green/5 border border-blueprint-green/20 text-xs text-blueprint-green flex items-center gap-2">
+        <CheckCircle size={13} />
+        Google account connected
+      </div>
+
+      {/* Account picker */}
+      <div>
+        <label className="block text-xs text-blueprint-muted mb-1">GBP Account</label>
+        {loadingAccounts ? (
+          <p className="text-[10px] text-blueprint-muted">Loading accounts…</p>
+        ) : accounts && accounts.length > 0 ? (
+          <select
+            value={accountId}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => { setAccountId(e.target.value); setLocationId('') }}
+            className="bp-input"
+          >
+            <option value="">— select an account —</option>
+            {accounts.map((a) => (
+              <option key={a.name} value={a.name}>{accountLabel(a)}</option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={accountId}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => { setAccountId(e.target.value); setLocationId('') }}
+            className="bp-input"
+            placeholder="accounts/123456789"
+          />
+        )}
+        <p className="text-[10px] text-blueprint-muted mt-1">Format: accounts/&#123;number&#125;</p>
+      </div>
+
+      {/* Location picker */}
+      {accountId && (
+        <div>
+          <label className="block text-xs text-blueprint-muted mb-1">Business Location</label>
+          {loadingLocations ? (
+            <p className="text-[10px] text-blueprint-muted">Loading locations…</p>
+          ) : locations && locations.length > 0 ? (
+            <select
+              value={locationId}
+              onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setLocationId(e.target.value)}
+              className="bp-input"
+            >
+              <option value="">— select a location —</option>
+              {locations.map((l) => (
+                <option key={l.name} value={l.name}>{locationLabel(l)}</option>
+              ))}
+            </select>
+          ) : (
+            <input
+              value={locationId}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setLocationId(e.target.value)}
+              className="bp-input"
+              placeholder="locations/123456789"
+            />
+          )}
+          <p className="text-[10px] text-blueprint-muted mt-1">Format: locations/&#123;number&#125;</p>
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+        <button
+          onClick={handleSave}
+          disabled={saving || !accountId || !locationId}
+          className="bp-btn bp-btn-primary text-xs flex-1 justify-center"
+        >
+          {saving ? 'Saving…' : 'Save Location'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── GSC Site URL Setup ───────────────────────────────────────────────────────
 
 interface GSCSetupProps {
@@ -1085,6 +1239,9 @@ function AddConnectorModal({ onClose, onSaved, businessId, connectors }: AddConn
     if (selectedType === 'google-merchant') {
       return <MerchantSetup businessId={businessId} existing={existingByType['google-merchant']} onSaved={onSaved} onClose={onClose} />
     }
+    if (selectedType === 'gbp') {
+      return <GBPSetup businessId={businessId} existing={existingByType['gbp']} onSaved={onSaved} onClose={onClose} />
+    }
 
     // Generic / OAuth-driven setups for the rest of the catalog
     const typeMeta = CONNECTOR_TYPES.find((t) => t.id === selectedType)
@@ -1453,7 +1610,15 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
                   onClose={() => setShowConfig(false)}
                 />
               )}
-              {!['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant'].includes(connector.type) && (
+              {connector.type === 'gbp' && (
+                <GBPSetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {!['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'gbp'].includes(connector.type) && (
                 <p className="text-xs text-blueprint-muted">
                   This connector type doesn't have an inline editor yet. Delete and re-add it to change credentials.
                 </p>
@@ -1462,7 +1627,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
           ) : (
             // Show a one-click "Configure" button so users can fix missing
             // siteUrl / propertyId / etc. without re-creating the connector.
-            (['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant'].includes(connector.type)) && (
+            (['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'gbp'].includes(connector.type)) && (
               <button
                 onClick={() => setShowConfig(true)}
                 className="bp-btn bp-btn-secondary text-xs"
