@@ -265,6 +265,57 @@ function recordSkippedRun(
   console.log(`[agent-runner] Skipped '${agentId}' — ${reason}`);
 }
 
+const DEFAULT_AGENT_RUN_TIMEOUT_MINUTES = 30;
+
+interface StaleAgentRunRow {
+  id: string;
+  agent_id: string;
+  business_id: string;
+  started_at: string;
+}
+
+/**
+ * Recover agent_runs stuck in status='running' — e.g. the process crashed
+ * or an LLM call hung mid-run, so the row never reached its normal
+ * completed_at/status transition (see runAgent()'s own try/catch above,
+ * which only fires for errors the process is still alive to catch). This
+ * is the agent_runs equivalent of execution-worker.ts's recoverStuckJobs():
+ * a periodic sweep, not a live heartbeat, since agent runs have no lease
+ * to renew mid-flight. Configurable via the 'agent_run_timeout_minutes'
+ * setting (default 30 — no single agent run legitimately takes longer;
+ * see agentActivationRules.ts's per-role LLM budgets).
+ */
+export function recoverStaleAgentRuns(): { markedStale: number } {
+  const timeoutMinutes = Number(
+    (db.prepare("SELECT value FROM settings WHERE key = 'agent_run_timeout_minutes'").get() as { value: string } | null)?.value
+  ) || DEFAULT_AGENT_RUN_TIMEOUT_MINUTES;
+
+  const stale = db.prepare(`
+    SELECT id, agent_id, business_id, started_at FROM agent_runs
+    WHERE status = 'running' AND started_at <= datetime('now', '-' || ? || ' minutes')
+  `).all(timeoutMinutes) as StaleAgentRunRow[];
+
+  for (const run of stale) {
+    db.prepare(`
+      UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND status = 'running'
+    `).run(
+      `Run exceeded the maximum duration (${timeoutMinutes} min) with no completion — marked stale by the scheduler. Likely a crashed process or a hung LLM/tool call; retry if the underlying work is still needed.`,
+      run.id,
+    );
+    import('../lib/sse-bus.js')
+      .then(({ pushDashboardEvent }) => pushDashboardEvent(run.business_id, 'agent_run_failed', {
+        agentId: run.agent_id, runId: run.id, error: 'stale_run_timeout',
+      }))
+      .catch(() => {});
+  }
+
+  if (stale.length > 0) {
+    console.warn(`[agent-runner] Marked ${stale.length} stale agent run(s) as failed (running longer than ${timeoutMinutes}min).`);
+  }
+  return { markedStale: stale.length };
+}
+
 function loadProfile(agentId: string): AgentProfile {
   const dir = agentLiveDir(agentId);
   const profilePath = join(dir, 'profile.yaml');

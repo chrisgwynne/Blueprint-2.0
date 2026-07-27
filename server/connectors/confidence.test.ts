@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import db, { generateId } from '../db/db.js';
-import { computeConnectorConfidence, refreshConnectorConfidence, getConnectorConfidence, listConnectorConfidence, isLowConfidence, lowConfidenceConnectorTypes } from './confidence.js';
+import { computeConnectorConfidence, refreshConnectorConfidence, getConnectorConfidence, listConnectorConfidence, isLowConfidence, lowConfidenceConnectorTypes, isConnectorApplicable } from './confidence.js';
 import { updateBusinessProfile } from '../business/business-profile.js';
 import type { Connector } from '../types/db.js';
 
@@ -161,5 +161,41 @@ describe('isLowConfidence', () => {
   test('healthy/warning overall_status is not low confidence', () => {
     expect(isLowConfidence({ overall_status: 'healthy' } as any)).toBe(false);
     expect(isLowConfidence({ overall_status: 'warning' } as any)).toBe(false);
+  });
+});
+
+describe('isConnectorApplicable (issue #27)', () => {
+  const APP_BIZ = 'biz_connector_applicable_test';
+
+  beforeAll(() => {
+    db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Applicable Test', 'applicable-test') ON CONFLICT(id) DO NOTHING`).run(APP_BIZ);
+  });
+
+  afterAll(() => {
+    db.prepare(`DELETE FROM business_profiles WHERE business_id = ?`).run(APP_BIZ);
+  });
+
+  test('a never-synced google-merchant connector is not applicable to a service business', () => {
+    updateBusinessProfile(APP_BIZ, { business_type: 'service' });
+    expect(isConnectorApplicable({ type: 'google-merchant', last_sync: null }, APP_BIZ)).toBe(false);
+  });
+
+  test('a never-synced google-merchant connector IS applicable to an ecommerce business', () => {
+    updateBusinessProfile(APP_BIZ, { business_type: 'ecommerce' });
+    expect(isConnectorApplicable({ type: 'google-merchant', last_sync: null }, APP_BIZ)).toBe(true);
+  });
+
+  test('a google-merchant connector with real sync history is never suppressed, even for a non-ecommerce business', () => {
+    updateBusinessProfile(APP_BIZ, { business_type: 'service' });
+    expect(isConnectorApplicable({ type: 'google-merchant', last_sync: new Date().toISOString() }, APP_BIZ)).toBe(true);
+  });
+
+  test('a business with no profile at all is never suppressed (unknown is not the same as inapplicable)', () => {
+    expect(isConnectorApplicable({ type: 'google-merchant', last_sync: null }, 'biz_never_profiled_xyz')).toBe(true);
+  });
+
+  test('a non-ecommerce-only connector type (e.g. gsc) is always applicable regardless of business_type', () => {
+    updateBusinessProfile(APP_BIZ, { business_type: 'service' });
+    expect(isConnectorApplicable({ type: 'gsc', last_sync: null }, APP_BIZ)).toBe(true);
   });
 });

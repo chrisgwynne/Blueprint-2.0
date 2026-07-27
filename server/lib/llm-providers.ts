@@ -329,6 +329,41 @@ export interface ResolvedLLM {
 }
 
 /**
+ * Providers Blueprint maintains a curated, current model catalog for.
+ * Local/BYO providers (ollama, lmstudio, custom, claude-cli) are
+ * deliberately excluded — their model names are whatever the operator's
+ * local install supports, and Blueprint has no way to enumerate or
+ * validate them.
+ */
+const CATALOGUED_PROVIDERS = new Set(['anthropic', 'openai', 'google', 'minimax']);
+
+/**
+ * Issue #26: a saved model setting can go stale in two ways — the
+ * provider retires it out from under Blueprint (e.g. Google removing
+ * `gemini-2.5-pro`), or the stored value itself is malformed/truncated
+ * (observed: a lone `g`). Either way the provider's API call fails with a
+ * raw error on every single conductor/agent run until a human notices and
+ * fixes Settings. For providers with a maintained model catalog, silently
+ * retrying the same broken model is never useful — fall back to the
+ * catalog's current default and warn, so autonomous runs keep working
+ * instead of failing forever on stale config. Providers without a
+ * catalog (local/BYO) are left untouched; there's nothing to validate
+ * against.
+ */
+function validateOrFallbackModel(providerId: string, model: string): string {
+  if (!CATALOGUED_PROVIDERS.has(providerId)) return model;
+  const known = PROVIDER_MAP[providerId]?.default_models ?? [];
+  if (known.length === 0 || known.includes(model)) return model;
+  const replacement = known[0]!;
+  console.warn(
+    `[llm-providers] Configured model '${model}' for provider '${providerId}' is not in the current known-model ` +
+    `list (likely retired, or a stale/malformed config value) — falling back to '${replacement}' for this run. ` +
+    `Update Settings → LLM Providers to clear this warning.`
+  );
+  return replacement;
+}
+
+/**
  * Given a profile's llm config, return { providerId, model, temperature, max_tokens }.
  *
  * Resolution order for provider:
@@ -403,5 +438,5 @@ export function resolveProfileLLM(profileLLM: ProfileLLM | null, opts: { tier?: 
     );
   }
 
-  return { providerId, model, temperature, max_tokens };
+  return { providerId, model: validateOrFallbackModel(providerId, model), temperature, max_tokens };
 }

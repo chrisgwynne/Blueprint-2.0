@@ -121,6 +121,33 @@ describe('GET /businesses/:id/connectors', () => {
     const { status } = await get(`/api/bap/v1/businesses/${BIZ_B}/connectors`, { 'BAP-Key': keyRead });
     expect(status).toBe(403);
   });
+
+  test('issue #27: a never-synced google-merchant connector on a non-ecommerce business is reported not_applicable, not disconnected', async () => {
+    const { updateBusinessProfile } = await import('../business/business-profile.js');
+    updateBusinessProfile(BIZ_A, { business_type: 'service' });
+    const id = insertConnector({ type: 'google-merchant', status: 'disconnected', last_sync: null });
+
+    const { body } = await get(`/api/bap/v1/businesses/${BIZ_A}/connectors?type=google-merchant`, { 'BAP-Key': keyRead });
+    const conn = body.connectors.find((c: any) => c.id === id);
+
+    expect(conn.status).toBe('not_applicable');
+    expect(conn.raw_status).toBe('disconnected'); // ground truth still available
+    expect(conn.not_applicable_reason).toBeTruthy();
+  });
+
+  test('a never-synced google-merchant connector on an ecommerce business is still reported honestly as disconnected', async () => {
+    const { updateBusinessProfile } = await import('../business/business-profile.js');
+    updateBusinessProfile(BIZ_A, { business_type: 'ecommerce' });
+    const id = insertConnector({ type: 'google-merchant', status: 'disconnected', last_sync: null });
+
+    const { body } = await get(`/api/bap/v1/businesses/${BIZ_A}/connectors?type=google-merchant`, { 'BAP-Key': keyRead });
+    const conn = body.connectors.find((c: any) => c.id === id);
+
+    expect(conn.status).toBe('disconnected');
+    expect(conn).not.toHaveProperty('not_applicable_reason');
+
+    updateBusinessProfile(BIZ_A, { business_type: 'service' }); // restore for any later test in this file
+  });
 });
 
 describe('GET /connectors/:id (detail)', () => {

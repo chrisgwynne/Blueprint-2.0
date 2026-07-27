@@ -61,6 +61,32 @@ const IDENTITY_CHECKABLE_TYPES = new Set([
   'gbp', 'ga4', 'gsc', 'pagespeed', 'shopify', 'wordpress', 'wix', 'google-merchant', 'github',
 ]);
 
+// Connector types that only make business sense for an ecommerce business
+// (issue #27: a service/GBP business had a disconnected google-merchant
+// connector surfaced as connector-health noise, even though it had never
+// been used and never would be). A connector of one of these types that
+// has never actually synced is not a broken integration — it's simply not
+// applicable to this business — see isConnectorApplicable() below. Scoped
+// narrowly to google-merchant (the reported connector) rather than also
+// including shopify — Shopify's own onboarding/workflows are far more
+// heavily exercised elsewhere and were not part of this report.
+export const ECOMMERCE_ONLY_CONNECTOR_TYPES = new Set(['google-merchant']);
+
+/**
+ * Is this connector type relevant to this business at all? Only says
+ * "no" for a connector that has NEVER actually synced (last_sync is
+ * null) — once a connector has real sync history, business_type may have
+ * simply been misclassified after the fact, and suppressing a connector
+ * with real data would hide a genuine problem rather than noise.
+ */
+export function isConnectorApplicable(connector: { type: string; last_sync: string | null }, businessId: string): boolean {
+  if (!ECOMMERCE_ONLY_CONNECTOR_TYPES.has(connector.type)) return true;
+  if (connector.last_sync) return true;
+  const profile = getBusinessProfile(businessId);
+  if (!profile) return true; // no profile yet to check against — don't assume inapplicable
+  return profile.business_type === 'ecommerce';
+}
+
 // bun:sqlite returns JSON columns as raw strings at the driver level even
 // though the TS row types claim they're already parsed — every other
 // reader in this codebase re-parses defensively (see e.g.

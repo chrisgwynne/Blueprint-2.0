@@ -57,6 +57,31 @@ function shouldFireSignal(ruleId: string, connectorId: string, businessId: strin
 }
 
 /**
+ * Auto-resolve a still-open signal for this exact rule/connector/business
+ * once the rule's own re-evaluation shows the underlying metric has
+ * recovered (issue #28). Only ever touches 'open'/'acknowledged' signals
+ * — a 'suppressed' signal (an active do-not-touch window from causal.ts,
+ * see the triggered branch above) is deliberately left alone here.
+ */
+function autoResolveIfStillOpen(ruleId: string, connectorId: string, businessId: string, result: RuleResult): void {
+  const existing = db.prepare(`
+    SELECT id FROM signals
+    WHERE business_id = ? AND connector_id = ? AND rule_id = ? AND status IN ('open', 'acknowledged')
+    ORDER BY created_at DESC LIMIT 1
+  `).get(businessId, connectorId, ruleId) as { id: string } | null;
+  if (!existing) return;
+
+  db.prepare(`
+    UPDATE signals
+    SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP,
+        description = COALESCE(description, '') || char(10) || char(10) ||
+          '✅ Auto-resolved: a later measurement no longer triggers this rule (' || ? || ').'
+    WHERE id = ?
+  `).run(JSON.stringify(result.data).slice(0, 300), existing.id);
+  console.log(`[signal-engine] Auto-resolved stale signal ${existing.id} (rule: ${ruleId}) — metric recovered.`);
+}
+
+/**
  * Run all applicable signal rules against new connector data.
  *
  * @param businessId
@@ -87,7 +112,22 @@ export async function runSignalEngine(
       continue;
     }
 
-    if (!result.triggered) continue;
+    if (!result.triggered) {
+      // Issue #28: a rule that evaluated real current data and found the
+      // condition no longer holds means the underlying metric recovered —
+      // auto-resolve any signal left open from a prior firing of this
+      // exact rule instead of leaving it stale forever, waiting on a
+      // human or a proposed cleanup task to notice. Restricted to rules
+      // whose "not triggered" result carries a non-empty `data` — every
+      // rule in rules.ts returns `data: {}` on its early-out ("no data
+      // this cycle, can't evaluate") branch, so a non-empty `data` here
+      // reliably means the rule genuinely ran against real data and came
+      // back healthy, not that this cycle simply had nothing to check.
+      if (Object.keys(result.data ?? {}).length > 0) {
+        autoResolveIfStillOpen(rule.id, connectorId, businessId, result);
+      }
+      continue;
+    }
 
     // Cool-down + dedup check — don't re-fire same rule too soon
     if (!shouldFireSignal(rule.id, connectorId, businessId)) {

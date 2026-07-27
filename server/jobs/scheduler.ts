@@ -10,6 +10,7 @@ import { runExecutionWorkerTick, recoverStuckJobs } from '../tasks/execution-wor
 import { pruneExpiredIdempotencyKeys } from '../lib/idempotency.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
+import { recoverStaleAgentRuns } from '../agents/agent-runner.js';
 
 let schedulerStarted = false;
 
@@ -721,6 +722,21 @@ export function startScheduler(): void {
       }
     } catch (err: any) {
       console.error('[scheduler] Crash recovery sweep failed:', err.message);
+    }
+  });
+
+  // Stale agent-run recovery (issue #25): agent_runs left in status='running'
+  // with no completed_at/error because the process crashed or an LLM/tool
+  // call hung mid-run. Runs every 10 minutes — a coarser cadence than the
+  // execution-job crash recovery above since agent runs have no lease to
+  // expire, only a maximum-duration timeout (default 30 min, see
+  // recoverStaleAgentRuns()).
+  scheduleWithLock('*/10 * * * *', () => {
+    try {
+      const { markedStale } = recoverStaleAgentRuns();
+      if (markedStale > 0) console.log(`[scheduler] Marked ${markedStale} stale agent run(s) as failed.`);
+    } catch (err: any) {
+      console.error('[scheduler] Stale agent-run recovery failed:', err.message);
     }
   });
 
