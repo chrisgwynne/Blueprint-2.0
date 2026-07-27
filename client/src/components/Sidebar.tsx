@@ -29,6 +29,7 @@ import {
   TrendingUp,
   CreditCard,
   GitBranch,
+  Store,
   type LucideIcon,
 } from 'lucide-react'
 import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2 } from 'lucide-react'
@@ -51,6 +52,7 @@ const CONNECTOR_ICONS: Record<string, LucideIcon> & { default: LucideIcon } = {
   wordpress:     Globe,
   kirby:         FileText,
   'google-ads':  TrendingUp,
+  'google-merchant': Store,
   'meta-ads':    Target,
   default:       Database,
 }
@@ -70,6 +72,7 @@ const CONNECTOR_LABELS: Record<string, string> = {
   wordpress:     'WordPress',
   kirby:         'Kirby',
   'google-ads':  'Google Ads',
+  'google-merchant': 'Merchant Center',
   'meta-ads':    'Meta Ads',
   default:       'Data',
 }

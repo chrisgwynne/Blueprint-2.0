@@ -548,6 +548,113 @@ router.get('/google-ads/callback', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/oauth/google-merchant
+ * Initiates Google Merchant Center OAuth flow (uses Google OAuth with the
+ * content scope — a dedicated flow, same reasoning as google-ads above:
+ * bundling this into the shared GSC/GA4 consent would force those users to
+ * also grant Merchant Center access).
+ */
+router.get('/google-merchant', (req: Request, res: Response) => {
+  const { businessId } = req.query;
+  if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  const { clientId, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+  const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI ||
+    googleRedirect?.replace('/google/callback', '/google-merchant/callback') ||
+    'http://localhost:4000/api/oauth/google-merchant/callback';
+  if (!clientId) {
+    const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+    return res.redirect(`${clientUrl}/connectors?error=google_oauth_not_configured&detail=${encodeURIComponent('Configure Google OAuth in Settings → Google OAuth first.')}`);
+  }
+
+  const state = Buffer.from(JSON.stringify({ businessId, type: 'google-merchant' })).toString('base64url');
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    scope: 'https://www.googleapis.com/auth/content',
+    access_type: 'offline',
+    prompt: 'consent',
+    state,
+  });
+  return res.redirect(`${AUTH_BASE}?${params.toString()}`);
+});
+
+/**
+ * GET /api/oauth/google-merchant/callback
+ */
+router.get('/google-merchant/callback', async (req: Request, res: Response) => {
+  const { code, state, error } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
+
+  if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(String(error))}`);
+  if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
+
+  let parsedState: { businessId: string };
+  try {
+    parsedState = JSON.parse(Buffer.from(String(state), 'base64url').toString('utf8'));
+  } catch {
+    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+  }
+  const { businessId } = parsedState;
+
+  const { clientId, clientSecret, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+  const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI ||
+    googleRedirect?.replace('/google/callback', '/google-merchant/callback') ||
+    'http://localhost:4000/api/oauth/google-merchant/callback';
+
+  try {
+    const tokenRes = await fetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: String(code),
+        client_id: clientId!,
+        client_secret: clientSecret!,
+        redirect_uri: redirectUri,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      const err = await tokenRes.text();
+      console.error('[oauth] Google Merchant Center token exchange failed:', err.substring(0, 300));
+      return res.redirect(`${clientUrl}/connectors?error=token_exchange_failed`);
+    }
+
+    const tokens = await tokenRes.json() as any;
+    const credentials = {
+      accessToken: tokens.access_token,
+      refreshToken: tokens.refresh_token || null,
+      expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+      scope: tokens.scope,
+    };
+    const encryptedCreds = encrypt(JSON.stringify(credentials));
+
+    const existing = db.prepare(
+      "SELECT id FROM connectors WHERE business_id = ? AND type = 'google-merchant'"
+    ).get(businessId) as { id: string } | null;
+
+    if (existing) {
+      db.prepare(`
+        UPDATE connectors SET credentials = ?, status = 'connected', last_error = NULL WHERE id = ?
+      `).run(encryptedCreds, existing.id);
+    } else {
+      const id = generateId();
+      db.prepare(`
+        INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+        VALUES (?, ?, 'google-merchant', 'Google Merchant Center', ?, 'connected', '{}', CURRENT_TIMESTAMP)
+      `).run(id, businessId, encryptedCreds);
+    }
+
+    return res.redirect(`${clientUrl}/connectors?connected=google-merchant`);
+  } catch (err) {
+    console.error('[oauth] Google Merchant Center callback error:', err);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent((err as Error).message.substring(0, 100))}`);
+  }
+});
+
+/**
  * GET /api/oauth/meta
  * Initiates Meta (Facebook) OAuth flow for Meta Ads connector.
  */

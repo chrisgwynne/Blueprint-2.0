@@ -6,7 +6,7 @@ import {
   X, Plus, RefreshCw, Trash2, AlertTriangle, CheckCircle,
   Zap, Search, BarChart2, ShoppingBag, ExternalLink, Unplug,
   Activity, CheckSquare, Mail, Send, Globe, FileText, TrendingUp,
-  CreditCard, GitBranch, MapPin, Settings2, MessageSquare, Database,
+  CreditCard, GitBranch, MapPin, Settings2, MessageSquare, Database, Store,
 } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store'
@@ -374,6 +374,87 @@ function GA4Setup({ businessId, existing, googleConnected, onSaved, onClose }: G
   )
 }
 
+// ─── Google Merchant Center Account Setup ────────────────────────────────────
+// Merchant Center needs its own OAuth consent (content scope isn't bundled
+// into the shared GSC/GA4 flow — see server/routes/oauth.ts), so unlike
+// GA4Setup this doesn't check a shared googleConnected flag: `existing` only
+// becomes defined once the dedicated /api/oauth/google-merchant round trip
+// has already created the connector row.
+
+interface MerchantSetupProps {
+  businessId: string | undefined
+  existing: Connector | undefined
+  onSaved: (connector: Connector) => void
+  onClose: () => void
+}
+
+function MerchantSetup({ businessId, existing, onSaved, onClose }: MerchantSetupProps) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [accountId, setAccountId] = useState<string>((existing?.config?.accountId as string) || '')
+  const [saving, setSaving] = useState<boolean>(false)
+
+  if (!existing) {
+    const authUrl = `/api/oauth/google-merchant?businessId=${encodeURIComponent(businessId ?? '')}`
+    return (
+      <div className="space-y-4">
+        <p className="text-xs text-blueprint-muted">
+          Click below to connect your Google Merchant Center account. You will be redirected to Google
+          to grant Blueprint read access to your product feed. Once authorised you will be brought back here
+          to enter your Merchant Center Account ID.
+        </p>
+        <a href={authUrl} className="bp-btn bp-btn-primary text-xs w-full justify-center" style={{ textDecoration: 'none' }}>
+          <ExternalLink size={12} /> Connect with Google
+        </a>
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs w-full justify-center">Cancel</button>
+      </div>
+    )
+  }
+
+  async function handleSave() {
+    if (!accountId) return
+    setSaving(true)
+    try {
+      const updated = await updateConnector(existing!.id, { config: { accountId } })
+      onSaved(updated as Connector)
+      addNotification({ type: 'success', message: 'Merchant Center connector updated' })
+      onClose()
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 rounded bg-blueprint-green/5 border border-blueprint-green/20 text-xs text-blueprint-green flex items-center gap-2">
+        <CheckCircle size={13} />
+        Google account connected
+      </div>
+      <div>
+        <label className="block text-xs text-blueprint-muted mb-1">Merchant Center Account ID</label>
+        <input
+          value={accountId}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setAccountId(e.target.value)}
+          className="bp-input"
+          placeholder="123456789"
+        />
+        <p className="text-[10px] text-blueprint-muted mt-1">Merchant Center → Settings → Account information (top-right corner shows it too).</p>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+        <button
+          onClick={handleSave}
+          disabled={saving || !accountId}
+          className="bp-btn bp-btn-primary text-xs flex-1 justify-center"
+        >
+          {saving ? 'Saving…' : 'Save Account ID'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // ─── GSC Site URL Setup ───────────────────────────────────────────────────────
 
 interface GSCSetupProps {
@@ -638,6 +719,7 @@ const CONNECTOR_TYPES: ConnectorTypeMeta[] = [
   { id: 'gsc',         label: 'Search Console',     icon: Search,      available: true, custom: true },
   { id: 'ga4',         label: 'Analytics 4',        icon: BarChart2,   available: true, custom: true },
   { id: 'shopify',     label: 'Shopify',            icon: ShoppingBag, available: true, custom: true },
+  { id: 'google-merchant', label: 'Merchant Center', icon: Store,      available: true, custom: true },
 
   // Generic apikey / basic-auth setup (driven by configFields)
   { id: 'uptimerobot', label: 'UptimeRobot',        icon: Activity,    available: true,
@@ -1000,6 +1082,9 @@ function AddConnectorModal({ onClose, onSaved, businessId, connectors }: AddConn
     if (selectedType === 'shopify') {
       return <ShopifySetup businessId={businessId} existing={existingByType['shopify']} onSaved={onSaved} onClose={onClose} />
     }
+    if (selectedType === 'google-merchant') {
+      return <MerchantSetup businessId={businessId} existing={existingByType['google-merchant']} onSaved={onSaved} onClose={onClose} />
+    }
 
     // Generic / OAuth-driven setups for the rest of the catalog
     const typeMeta = CONNECTOR_TYPES.find((t) => t.id === selectedType)
@@ -1360,7 +1445,15 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
                   onClose={() => setShowConfig(false)}
                 />
               )}
-              {!['gsc', 'ga4', 'pagespeed', 'shopify'].includes(connector.type) && (
+              {connector.type === 'google-merchant' && (
+                <MerchantSetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
+              {!['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant'].includes(connector.type) && (
                 <p className="text-xs text-blueprint-muted">
                   This connector type doesn't have an inline editor yet. Delete and re-add it to change credentials.
                 </p>
@@ -1369,7 +1462,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
           ) : (
             // Show a one-click "Configure" button so users can fix missing
             // siteUrl / propertyId / etc. without re-creating the connector.
-            (['gsc', 'ga4', 'pagespeed', 'shopify'].includes(connector.type)) && (
+            (['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant'].includes(connector.type)) && (
               <button
                 onClick={() => setShowConfig(true)}
                 className="bp-btn bp-btn-secondary text-xs"

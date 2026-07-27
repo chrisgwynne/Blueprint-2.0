@@ -69,6 +69,45 @@ describe('signal rules — defensive behaviour', () => {
     expect(result.triggered).toBe(true);
   });
 
+  test('merchant_products_disapproved triggers only for products newly disapproved this sync', () => {
+    const rule = getRule('merchant_products_disapproved');
+    const previous = { products: [{ id: 'p1', title: 'Widget', disapproved: false }] };
+    const current = { products: [{ id: 'p1', title: 'Widget', disapproved: true }, { id: 'p2', title: 'Gadget', disapproved: false }] };
+    const result = rule.evaluate(current, previous);
+    expect(result.triggered).toBe(true);
+    expect(result.data.count).toBe(1);
+  });
+
+  test('merchant_products_disapproved does not re-trigger for a product still disapproved from before', () => {
+    const rule = getRule('merchant_products_disapproved');
+    const previous = { products: [{ id: 'p1', title: 'Widget', disapproved: true }] };
+    const current = { products: [{ id: 'p1', title: 'Widget', disapproved: true }] };
+    expect(rule.evaluate(current, previous).triggered).toBe(false);
+  });
+
+  test('merchant_feed_data_quality_issues triggers when error-level issues increase', () => {
+    const rule = getRule('merchant_feed_data_quality_issues');
+    const previous = { products: [{ id: 'p1', hasErrorIssues: false }] };
+    const current = { products: [{ id: 'p1', hasErrorIssues: true }, { id: 'p2', hasErrorIssues: true }] };
+    const result = rule.evaluate(current, previous);
+    expect(result.triggered).toBe(true);
+    expect(result.data.increase).toBe(2);
+  });
+
+  test('merchant_product_count_drop does not divide by zero when previous count is 0', () => {
+    const rule = getRule('merchant_product_count_drop');
+    const result = rule.evaluate({ totalProductCount: 100 }, { totalProductCount: 0 });
+    expect(result.triggered).toBe(false);
+    expect(Number.isNaN(result.confidence)).toBe(false);
+  });
+
+  test('merchant_product_count_drop triggers on a 20%+ drop', () => {
+    const rule = getRule('merchant_product_count_drop');
+    const result = rule.evaluate({ totalProductCount: 400 }, { totalProductCount: 1000 });
+    expect(result.triggered).toBe(true);
+    expect(result.data.dropPct).toBe(60);
+  });
+
   test('every rule result has the required shape', () => {
     for (const rule of rules) {
       let result;
