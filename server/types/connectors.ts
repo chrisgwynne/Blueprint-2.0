@@ -9,6 +9,7 @@ export type ConnectorId =
   | 'gbp'
   | 'github'
   | 'google-ads'
+  | 'google-merchant'
   | 'gsc'
   | 'kirby'
   | 'klaviyo'

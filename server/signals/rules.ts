@@ -2482,6 +2482,100 @@ export const rules: SignalRule[] = [
       };
     },
   },
+
+  {
+    id: 'merchant_products_disapproved',
+    connectorType: 'google-merchant',
+    type: 'merchant_products_disapproved',
+    severity: 'warning',
+    name: 'Products Newly Disapproved',
+
+    evaluate(current: any, previous: any): RuleResult {
+      const currProducts = Array.isArray(current?.products) ? current.products : [];
+      const prevProducts = Array.isArray(previous?.products) ? previous.products : [];
+      if (currProducts.length === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+
+      const prevMap = new Map(prevProducts.map((p: any) => [p.id, p]));
+      const newlyDisapproved = currProducts.filter((p: any) => {
+        if (!p.disapproved) return false;
+        const prev = prevMap.get(p.id) as any;
+        return !prev || !prev.disapproved;
+      });
+
+      const triggered = newlyDisapproved.length > 0;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.95, 0.6 + newlyDisapproved.length * 0.05) : 0,
+        data: {
+          count: newlyDisapproved.length,
+          products: newlyDisapproved.slice(0, 20).map((p: any) => ({ id: p.id, title: p.title })),
+        },
+        title: triggered ? `${newlyDisapproved.length} product(s) newly disapproved` : '',
+        description: triggered
+          ? `Google Merchant Center disapproved ${newlyDisapproved.length} product(s) that were previously approved (or new this sync). Disapproved products don't show in Shopping ads or free listings.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'merchant_feed_data_quality_issues',
+    connectorType: 'google-merchant',
+    type: 'merchant_feed_data_quality_issues',
+    severity: 'warning',
+    name: 'Product Feed Data-Quality Issues',
+
+    evaluate(current: any, previous: any): RuleResult {
+      const currProducts = Array.isArray(current?.products) ? current.products : [];
+      if (currProducts.length === 0) {
+        return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+      }
+      const prevProducts = Array.isArray(previous?.products) ? previous.products : [];
+
+      const currErrorCount = currProducts.filter((p: any) => p.hasErrorIssues).length;
+      const prevErrorCount = prevProducts.filter((p: any) => p.hasErrorIssues).length;
+
+      const triggered = currErrorCount > 0 && currErrorCount > prevErrorCount;
+      const increase = currErrorCount - prevErrorCount;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.9, 0.5 + increase * 0.05) : 0,
+        data: { currErrorCount, prevErrorCount, increase },
+        title: triggered ? `${currErrorCount} product(s) with data-quality errors (+${increase})` : '',
+        description: triggered
+          ? `${currErrorCount} product(s) now have item-level errors (up from ${prevErrorCount}). These typically block Shopping approval — check the product feed for missing GTINs, price mismatches, or policy violations.`
+          : '',
+      };
+    },
+  },
+
+  {
+    id: 'merchant_product_count_drop',
+    connectorType: 'google-merchant',
+    type: 'merchant_product_count_drop',
+    severity: 'alert',
+    name: 'Merchant Center Product Count Drop',
+
+    evaluate(current: any, previous: any): RuleResult {
+      const curr = current?.totalProductCount ?? 0;
+      const prev = previous?.totalProductCount ?? 0;
+      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+
+      const dropPct = ((prev - curr) / prev) * 100;
+      const triggered = dropPct >= 20;
+      return {
+        triggered,
+        confidence: triggered ? Math.min(0.95, 0.5 + (dropPct - 20) / 100) : 0,
+        data: { currProductCount: curr, prevProductCount: prev, dropPct: Math.round(dropPct * 10) / 10 },
+        title: triggered ? `Product count dropped ${Math.round(dropPct)}%` : '',
+        description: triggered
+          ? `The product feed went from ${prev} to ${curr} products — a ${Math.round(dropPct)}% drop. Often signals a feed processing failure or an unintentional bulk removal rather than a real catalogue change.`
+          : '',
+      };
+    },
+  },
 ];
 
 // ─── Meta Ads helpers ────────────────────────────────────────────────────────

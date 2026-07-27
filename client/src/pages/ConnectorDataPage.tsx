@@ -36,6 +36,7 @@ const CONNECTOR_META = {
   wordpress:     { icon: Globe,       label: 'WordPress',          color: 'var(--bp-blue)' },
   kirby:         { icon: FileText,    label: 'Kirby',              color: 'var(--bp-amber)' },
   'google-ads':  { icon: TrendingUp,  label: 'Google Ads',         color: 'var(--bp-amber)' },
+  'google-merchant': { icon: ShoppingBag, label: 'Merchant Center', color: 'var(--bp-purple)' },
   'meta-ads':    { icon: Target,      label: 'Meta Ads',           color: '#1877F2' },
   klaviyo:       { icon: Mail,        label: 'Klaviyo',            color: '#FF6B35' },
   semrush:       { icon: TrendingUp,  label: 'SEMrush',            color: '#FF642D' },
@@ -61,6 +62,7 @@ const CONNECTOR_TABS = {
   wordpress:     ['Overview', 'Posts', 'Pages', 'Plugins', 'Comments', 'Media', 'Raw Data'],
   kirby:         ['Overview', 'Pages', 'Drafts', 'Content Health', 'Raw Data'],
   'google-ads':  ['Overview', 'Campaigns', 'Keywords', 'Performance', 'Budget', 'Raw Data'],
+  'google-merchant': ['Overview', 'Products', 'Raw Data'],
   'meta-ads':    ['Overview', 'Campaigns', 'Audiences', 'Creative', 'Raw Data'],
   klaviyo:       ['Overview', 'Campaigns', 'Flows', 'Lists', 'Raw Data'],
   semrush:       ['Overview', 'Keywords', 'Competitors', 'Opportunities', 'Raw Data'],
@@ -1518,6 +1520,80 @@ function ShopifyInventory({ metrics }: any) {
   )
 }
 
+// ─── Google Merchant Center Tabs ──────────────────────────────────────────────
+
+function MerchantOverview({ metrics }: any) {
+  const { latest } = metrics
+  const total = latest['total_products'] ?? 0
+  const active = latest['active_products'] ?? 0
+  const disapproved = latest['disapproved_products'] ?? 0
+  const withIssues = latest['products_with_data_quality_issues'] ?? 0
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+        <MetricCard label="Total Products" value={total} accent="var(--bp-blue)" />
+        <MetricCard label="Active" value={active} accent="var(--bp-green)" />
+        <MetricCard label="Disapproved" value={disapproved} accent="var(--bp-red)" />
+        <MetricCard label="Data-Quality Issues" value={withIssues} accent="var(--bp-amber)" />
+      </div>
+      {total === 0 && <EmptyState message="No product data yet. Run a sync to pull your Merchant Center feed." />}
+    </div>
+  )
+}
+
+function MerchantProducts({ metrics }: any) {
+  const raw = metrics.latest['products_data']
+  const products = raw
+    ? (typeof raw === 'string' ? JSON.parse(raw) : raw)
+    : []
+
+  if (!products || products.length === 0) {
+    return <EmptyState message="Product data will appear here after sync." />
+  }
+
+  return (
+    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid var(--bp-border)' }}>
+            {['Product', 'Status', 'Issues'].map((h) => (
+              <th key={h} style={{ padding: '10px 14px', textAlign: 'left', fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {products.slice(0, 200).map((p: any, i: any) => {
+            const statusColor = p.disapproved ? 'var(--bp-red)' : p.hasErrorIssues ? 'var(--bp-amber)' : 'var(--bp-green)'
+            const statusLabel = p.disapproved ? 'Disapproved' : p.hasErrorIssues ? 'Has issues' : 'Active'
+            return (
+              <tr key={i} style={{ borderBottom: i < products.length - 1 ? '1px solid var(--bp-border)' : 'none' }}>
+                <td style={{ padding: '10px 14px', fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>
+                  {p.title || p.id}
+                </td>
+                <td style={{ padding: '10px 14px' }}>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: 10,
+                    background: `${statusColor}22`, border: `1px solid ${statusColor}44`,
+                    fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: statusColor,
+                  }}>
+                    {statusLabel}
+                  </span>
+                </td>
+                <td style={{ padding: '10px 14px', fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
+                  {(p.issues ?? []).slice(0, 2).map((iss: any) => iss.description || iss.code).join('; ') || '—'}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // ─── GA4 Pages Tab ────────────────────────────────────────────────────────────
 
 function GA4Pages({ metrics }: any) {
@@ -1852,6 +1928,10 @@ function renderTab(connector: any, tab: any, data: any, range: any) {
     if (tab === 'Desktop') return <PSDesktop metrics={metrics} />
     if (tab === 'History') return <PSHistory metrics={metrics} />
     if (tab === 'Opportunities') return <PSOpportunities metrics={metrics} connector={connector} />
+  }
+  if (type === 'google-merchant') {
+    if (tab === 'Overview') return <MerchantOverview metrics={metrics} />
+    if (tab === 'Products') return <MerchantProducts metrics={metrics} />
   }
   if (type === 'stripe') {
     if (tab === 'Overview') return <StripeOverview metrics={metrics} />
