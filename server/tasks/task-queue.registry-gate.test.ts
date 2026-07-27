@@ -1,15 +1,17 @@
 /**
- * Typed Action & Executor Registry gate inside approveTask() (Phase 2-INT).
- * Covers the two hard-blocking checks (unregistered action_type,
- * business-type incompatibility) and the non-blocking system_issues
- * warning path, without touching the CAS/concurrency behaviour already
- * covered by task-queue.approve-cancel.test.ts.
+ * Typed Action & Executor Registry gate inside approveTask() (Phase 2-INT,
+ * full-enforcement pass). Every check the spec lists is now a hard block —
+ * action exists, business type supports action, required connectors
+ * exist, connector confidence is acceptable, payload matches schema,
+ * permissions exist, executor exists/is healthy. Doesn't touch the
+ * CAS/concurrency behaviour already covered by task-queue.approve-cancel.test.ts.
  */
 import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
-import db from '../db/db.js';
+import db, { generateId } from '../db/db.js';
 import { createTask, approveTask } from './task-queue.js';
 import { updateBusinessProfile } from '../business/business-profile.js';
 import { listSystemIssues } from '../system/system-issues.js';
+import { upsertActionRegistryEntry } from './action-registry.js';
 
 const BIZ = 'biz_registry_gate_test';
 
@@ -22,6 +24,8 @@ afterEach(() => {
   db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM system_issues WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM connector_confidence WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM connectors WHERE business_id = ?`).run(BIZ);
 });
 
 function propose(actionType: string | null) {
@@ -35,7 +39,18 @@ function propose(actionType: string | null) {
   })!;
 }
 
-describe('approveTask — Typed Action Registry gate', () => {
+function addHealthyConnector(type: string): string {
+  const id = generateId();
+  db.prepare(`INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at) VALUES (?, ?, ?, ?, '{}', 'connected', '{}', CURRENT_TIMESTAMP)`)
+    .run(id, BIZ, type, `${type} connector`);
+  db.prepare(`
+    INSERT INTO connector_confidence (id, connector_id, business_id, overall_confidence, overall_status, created_at, updated_at)
+    VALUES (?, ?, ?, 0.95, 'healthy', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(generateId(), id, BIZ);
+  return id;
+}
+
+describe('approveTask — Typed Action Registry gate (full enforcement)', () => {
   test('a task with no action_type (manual to-do) is never blocked', () => {
     const task = propose(null);
     const after = approveTask(task.id, 'tester');
@@ -55,10 +70,10 @@ describe('approveTask — Typed Action Registry gate', () => {
   });
 
   // product_suggestion (like the shopify_* family) is ecommerce-only, but —
-  // unlike shopify_* — it is NOT in executor.ts's EXECUTABLE_ACTION_TYPES,
-  // so approving it never triggers a real (async, fire-and-forget)
-  // execution attempt. Keeps this test deterministic and free of the
-  // executor's own side effects.
+  // unlike shopify_* — it is NOT in executor.ts's EXECUTABLE_ACTION_TYPES
+  // and has no required connectors, so approving it never triggers a real
+  // (async, fire-and-forget) execution attempt or a connector check. Keeps
+  // this test isolated to the one thing it's checking.
   test('an ecommerce-only action_type on a service business blocks approval', () => {
     updateBusinessProfile(BIZ, { business_type: 'service' });
     const task = propose('product_suggestion');
@@ -74,13 +89,107 @@ describe('approveTask — Typed Action Registry gate', () => {
 
   // gbp_post requires a 'gbp' connector but — unlike gbp_update — is not in
   // executor.ts's EXECUTABLE_ACTION_TYPES, for the same determinism reason.
-  test('a registered action_type with no configured connector approves with a non-blocking warning', () => {
+  test('a registered action_type with no configured connector now BLOCKS approval', () => {
     updateBusinessProfile(BIZ, { business_type: 'other' });
     const task = propose('gbp_post'); // requires a 'gbp' connector — none configured for BIZ
+    expect(() => approveTask(task.id, 'tester')).toThrow(/requires connector type/);
+
+    const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
+    expect(issues.some((i) => (i.metadata as any)?.issues?.some((iss: any) => iss.code === 'missing_connector'))).toBe(true);
+  });
+
+  test('a connected but never-confidence-scored connector still blocks approval', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other' });
+    const id = generateId();
+    db.prepare(`INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at) VALUES (?, ?, 'gbp', 'GBP', '{}', 'connected', '{}', CURRENT_TIMESTAMP)`).run(id, BIZ);
+    const task = propose('gbp_post');
+    expect(() => approveTask(task.id, 'tester')).toThrow(/confidence/);
+  });
+
+  test('a connected, confidence-scored-healthy connector clears both checks', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other' });
+    addHealthyConnector('gbp');
+    const task = propose('gbp_post');
     const after = approveTask(task.id, 'tester');
     expect(after!.status).toBe('approved');
+  });
 
-    const warnings = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_warning:missing_connector' });
-    expect(warnings.length).toBeGreaterThan(0);
+  test('a BAP agent missing a required permission is blocked', () => {
+    upsertActionRegistryEntry('test_perm_action', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent' });
+    const agentId = generateId();
+    db.prepare(`
+      INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, permissions, business_access)
+      VALUES (?, 'No-Perm Agent', 'x', 'bap_noperm', '[]', '["*"]')
+    `).run(agentId);
+    const task = propose('test_perm_action');
+    expect(() => approveTask(task.id, `bap:${agentId}`)).toThrow(/requires permission/);
+  });
+
+  test('a BAP agent holding the required permission is not blocked by the permission check', () => {
+    upsertActionRegistryEntry('test_perm_action_2', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent' });
+    const agentId = generateId();
+    db.prepare(`
+      INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, permissions, business_access)
+      VALUES (?, 'Has-Perm Agent', 'x', 'bap_hasperm', '["tasks:approve"]', '["*"]')
+    `).run(agentId);
+    const task = propose('test_perm_action_2');
+    const after = approveTask(task.id, `bap:${agentId}`);
+    expect(after!.status).toBe('approved');
+  });
+
+  test('a dashboard/telegram approver is never subject to the permission check', () => {
+    upsertActionRegistryEntry('test_perm_action_3', { required_permissions: ['some:permission-nobody-has'], side_effect_classification: 'internal_idempotent' });
+    const task = propose('test_perm_action_3');
+    const after = approveTask(task.id, 'dashboard:admin');
+    expect(after!.status).toBe('approved');
+  });
+
+  test('an action_type whose last 3 executions all dead-lettered is blocked as an unhealthy executor', () => {
+    // A dedicated, never-reused action_type — execution_jobs health is
+    // checked system-wide by action_type (not scoped to this test's
+    // business), so a shared name like 'investigation' would be
+    // order-dependent on whatever else the full suite does with it.
+    upsertActionRegistryEntry('test_unhealthy_executor_action', { dispatched_by_executor: true, side_effect_classification: 'internal_idempotent' });
+    for (let i = 0; i < 3; i++) {
+      const taskId = generateId();
+      db.prepare(`INSERT INTO tasks (id, business_id, title, proposed_by, status, trust_tier, approval_mode, version, created_at, updated_at)
+                  VALUES (?, ?, 'dead task', 'test', 'failed', 'yellow', 'requires_approval', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(taskId, BIZ);
+      db.prepare(`INSERT INTO execution_jobs (id, task_id, business_id, action_type, status, created_at, updated_at)
+                  VALUES (?, ?, ?, 'test_unhealthy_executor_action', 'dead_letter', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(generateId(), taskId, BIZ);
+    }
+    const task = propose('test_unhealthy_executor_action');
+    expect(() => approveTask(task.id, 'tester')).toThrow(/unhealthy/i);
+  });
+
+  test('risk_policy.max_risk_level blocks a higher-risk action_type', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other', risk_policy: { max_risk_level: 'low' } });
+    const task = propose('shopify_theme_edit'); // seeded as risk_level 'high'
+    expect(() => approveTask(task.id, 'tester')).toThrow(/risk_policy|risk level/i);
+  });
+
+  test('risk_policy.max_risk_level allows an action_type at or below the ceiling', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other', risk_policy: { max_risk_level: 'high' } });
+    const task = propose('test_unhealthy_executor_action'); // risk_level defaults to 'medium'
+    const after = approveTask(task.id, 'tester');
+    expect(after!.status).toBe('approved');
+  });
+
+  test('automation_policy.max_autonomous_tasks_per_day blocks further non-dashboard approvals once the cap is hit', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other', risk_policy: {}, automation_policy: { max_autonomous_tasks_per_day: 1 } });
+    const first = propose(null);
+    approveTask(first.id, 'bap:some-agent');
+
+    const second = propose(null);
+    expect(() => approveTask(second.id, 'bap:some-agent')).toThrow(/automation_policy|daily/i);
+  });
+
+  test('automation_policy daily cap does not block a human dashboard approval', () => {
+    updateBusinessProfile(BIZ, { business_type: 'other', automation_policy: { max_autonomous_tasks_per_day: 1 } });
+    const first = propose(null);
+    approveTask(first.id, 'bap:some-agent');
+
+    const second = propose(null);
+    const after = approveTask(second.id, 'dashboard:human');
+    expect(after!.status).toBe('approved');
   });
 });

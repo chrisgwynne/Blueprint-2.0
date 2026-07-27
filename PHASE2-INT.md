@@ -32,7 +32,11 @@ genuinely new work there is thinner than the spec's wording implies.
 | 4 | World Model | Done — §5 |
 | 5 | Outcome Learning Engine | Done — §6 (mostly pre-existing, formalized) |
 
-Every "Done" carries honest, documented limitations — see §7.
+Every "Done" carries honest, documented limitations — see §7. A
+follow-up pass (§13) subsequently closed every gap this phase originally
+deferred — full-enforcement validation, connector-confidence-aware
+recommendations, Business Profile policy consumption, action-windows
+consolidation, and World-Model-sourced signals.
 
 ---
 
@@ -117,14 +121,34 @@ with no real connectors configured. Two checks hard-block (task stays
 2. The business's `business_type` must be in the action's
    `supported_business_types` (if restricted).
 
-Everything else the spec asks Blueprint to check — required connectors
-present, connector confidence acceptable, payload matches schema — is
-recorded as a **non-blocking** Blueprint System Issue (§ below) rather
-than blocking approval, since those checks depend on real per-business
-connector configuration most existing businesses/tests don't have. This
-is the honest trade-off in this phase: full-strict validation would be
-truer to the spec's letter but would regress real usage; the two
-hard-blocks are the two the spec gives unambiguous examples for.
+**Full-enforcement follow-up (§13) turned all of the following into
+hard blocks** — approval throws and a Blueprint System Issue records why,
+same as the two above:
+
+3. Every required connector type must have a `connectors` row.
+4. Every required connector must be confidence-scored `healthy` or
+   `warning` (`connector_confidence.overall_status`) — a connector that's
+   never been scored is treated as untrusted, not trusted-by-default
+   (fail closed).
+5. The payload must pass `validatePayloadAgainstSchema()` against the
+   registry entry's `payload_schema`.
+6. For BAP-agent approvals (`approvedBy` starting `bap:`) only: the
+   agent's granted permissions must be a superset of the action's
+   `required_permissions`. Dashboard/Telegram approvals are fully
+   privileged, matching this codebase's existing human-trust model.
+7. The action's registered executor must exist (checked statically via
+   `action_registry.dispatched_by_executor`, not a runtime import of
+   `executor.ts`, to avoid a module cycle).
+8. The executor must be healthy: if the last 3 completed
+   (`succeeded`/`dead_letter`) `execution_jobs` rows for the action_type
+   are *all* `dead_letter`, approval is blocked (a DB-observable
+   circuit breaker, not a new live health-check system).
+9. If the Business Profile's `risk_policy.max_risk_level` is set, the
+   action's `risk_level` must not exceed it.
+
+`validateAction()`'s `warnings` return value is kept (always `[]`) for
+API shape stability with existing callers; nothing is a "soft" issue
+anymore.
 
 ---
 
@@ -157,12 +181,15 @@ with no natural identity relationship (stripe, todoist, brave-search,
 
 **`isLowConfidence()`** returns true for `degraded`/`broken` status *and*
 for a connector that's never been scored at all (fail closed, not
-fail open). Wiring this into "low-confidence connectors must not
-generate autonomous recommendations" end-to-end (i.e. having
-`goal-suggester.ts`/`recommendation-engine.ts` actually consult it) is
-listed as a follow-up in §7 — the scoring/persistence layer is done and
-tested; the consumption side is not yet threaded through every
-recommendation path.
+fail open). **Full-enforcement follow-up (§13):** `lowConfidenceConnectorTypes(businessId)`
+(new, in this file) returns the set of connector types where *every*
+configured instance is low-confidence (a type never configured at all is
+excluded — no data isn't the same as untrusted data). `goal-suggester.ts`
+filters detected patterns by it before they ever reach the LLM;
+`recommendation-engine.ts` excludes candidates whose required connector
+type(s) are all low-confidence, with the exclusion reason recorded —
+"low-confidence connectors must not generate autonomous recommendations"
+is now enforced end-to-end, not just queryable.
 
 Refreshed on every connector sync (`server/jobs/scheduler.ts`'s cron tick
 and `server/routes/connectors.ts`'s manual sync route both call
@@ -194,14 +221,21 @@ fires fire-and-forget from the same two call sites that already run
 (`server/jobs/scheduler.ts` and `server/routes/connectors.ts`) — "connectors
 update the World Model" per the spec, without adding a third code path.
 
-**Scoping limitation, stated up front:** the revenue/traffic/SEO/
-lead-gen/marketing "trend" fields are a coarse keyword-bucketing of
-recent open signals, not a metrics regression. Rewiring `signals/rules.ts`'s
-~40 existing `evaluate(current, previous)` functions to consume World
-Model state instead of raw connector data — the deeper version of
-"agents should never reason directly from connector outputs" — was
-judged too large a change for this phase's "nothing should break"
-constraint and is left as a documented follow-up, not silently skipped.
+**Scoping note:** the revenue/traffic/SEO/lead-gen/marketing "trend"
+fields remain a coarse keyword-bucketing of recent open signals, not a
+metrics regression — that simplification stands.
+
+**Full-enforcement follow-up (§13): signals now source their "previous"
+comparison data from the World Model, not a raw second query.** The
+snapshot gained a `connector_data` field — each connector's latest synced
+data blob, keyed by `connector_id` — and a new `getPreviousConnectorData(businessId,
+connectorId)` reads it from the *last* snapshot (the one about to be
+superseded). `server/jobs/scheduler.ts` and `server/routes/connectors.ts`
+both now call this instead of their own ad-hoc "previous row in the
+metrics table" query, so `runSignalEngine()`'s `(current, previous)` input
+now flows through the World Model in both places it's invoked. The ~40
+signal rule functions in `signals/rules.ts` were untouched — only where
+their `previous` argument comes from changed, not their shape.
 
 ---
 
@@ -237,12 +271,18 @@ What this phase actually added:
    follow-up once the 4-week check lands" guard means this never causes
    a premature investigation.
 
-**Not done, deliberately:** consolidating `action-windows.ts`'s
-`ACTION_WINDOWS` into `action_registry` as the sole source of truth.
-`restraint.ts`/`causal.ts`/`agent-runner`/`conductor` all read
-`action-windows.ts` directly today; action_registry's fields are
-backfilled *from* it for this phase (one-directional sync), not yet the
-other way around. A real consolidation is a follow-up.
+**Full-enforcement follow-up (§13): consolidated, without rewriting every
+consumer.** `restraint.ts`/`causal.ts`/`agent-runner`/`conductor` still
+read the `action_windows` table directly — that was left alone. Instead,
+`action_registry` gained `display_name`/`measurement_notes`/`volatility`
+columns (making it a complete superset of what `action_windows` stores)
+and `upsertActionRegistryEntry()` now write-through syncs every
+insert/update into `action_windows` via a new `syncToActionWindows()`.
+`action_registry` is now the single edit surface; `action_windows` is a
+kept-in-sync read replica for its existing readers. `seedActionWindows()`
+seeds from `action_registry` first, falling back to the hardcoded
+`ACTION_WINDOWS` array only for an action type the registry doesn't have
+a 3-element `measurement_window_days` for.
 
 ---
 
@@ -336,27 +376,86 @@ green (548/548) with this fix; it was not green before.
 
 ---
 
-## 12. What was NOT built (explicit follow-ups)
+## 12. What was NOT built, as of the original phase (historical)
 
-- Full enforcement of every check the spec lists before a task becomes
+This section originally listed five deliberately deferred gaps. All five
+were closed in a direct follow-up pass — see §13 for what changed and
+why each was judged safe to complete rather than leave deferred. Kept
+here, struck through in spirit but not in text, so the reasoning trail
+that led to deferring them in the first place isn't lost:
+
+- ~~Full enforcement of every check the spec lists before a task becomes
   executable (only 2 of ~8 checks hard-block; the rest are non-blocking
-  system issues — §3).
-- `signals/rules.ts`'s ~40 evaluation functions still consume raw
-  connector data directly, not World Model state (§5).
-- `action-windows.ts` and `action_registry` are two systems with
-  overlapping data, synced one-directionally, not yet consolidated (§6).
-- Connector confidence scoring exists and is queryable, but
+  system issues).~~ Closed — §13.1.
+- ~~`signals/rules.ts`'s ~40 evaluation functions still consume raw
+  connector data directly, not World Model state.~~ Closed — §13.2.
+- ~~`action-windows.ts` and `action_registry` are two systems with
+  overlapping data, synced one-directionally, not yet consolidated.~~
+  Closed — §13.3.
+- ~~Connector confidence scoring exists and is queryable, but
   `goal-suggester.ts`/`recommendation-engine.ts` don't yet filter
-  candidates by it — "low-confidence connectors must not generate
-  autonomous recommendations" is enforceable today via `isLowConfidence()`
-  but not yet wired into every recommendation path (§4).
-- Business Profile's policy fields (`approval_policy`, `risk_policy`,
-  `deployment_policy`, `seo_policy`, `ecommerce_policy`,
-  `lead_gen_policy`, `communication_preferences`) are present as typed,
-  editable JSON but not yet consumed by the engines whose behaviour they
-  describe (e.g. `approval.ts`'s `shouldAutoApprove()` still uses its own
-  policy tables, not the Business Profile's `approval_policy`).
+  candidates by it.~~ Closed — §13.4.
+- ~~Business Profile's policy fields are present as typed, editable JSON
+  but not yet consumed by the engines whose behaviour they describe.~~
+  Closed — §13.5.
 
-None of these are silent gaps — each is load-bearing enough that
-pretending otherwise would be dishonest, and each is scoped narrowly
-enough to be a clean follow-up phase rather than a redesign.
+---
+
+## 13. Full-enforcement follow-up
+
+Every gap in §12 was a scoped, load-bearing trade-off, not an oversight
+— each is closed here in the same spirit: no check weakened to make a
+test pass, no existing behaviour silently regressed.
+
+**13.1 — All ~9 validation checks now hard-block approval,** not just
+the original 2. See §3's expanded list. New: connector-presence,
+connector-confidence, payload-schema, BAP-agent-permission,
+executor-exists, executor-health, and `risk_policy.max_risk_level`
+checks. `automation_policy.max_autonomous_tasks_per_day` is enforced
+separately in `approveTask()` (not `validateAction()`, since it's a
+time-windowed count, not a per-call check) — non-`dashboard:`-prefixed
+approvals for a business are capped per calendar day; a human approving
+via the dashboard is never capped.
+
+**13.2 — Signals now read their "previous" comparison data from the
+World Model.** See §5's rewritten paragraph. `getPreviousConnectorData()`
+plus a new `connector_data` snapshot field; both call sites
+(`scheduler.ts`, `connectors.ts`) rewired; the 40 signal rule functions
+themselves are unchanged.
+
+**13.3 — `action-windows.ts` consolidated into `action_registry`** via
+write-through sync rather than rewriting the ~10 files that read
+`action_windows` directly. See §6's rewritten paragraph.
+
+**13.4 — Connector-confidence-aware recommendation filtering.** See §4's
+rewritten paragraph. `lowConfidenceConnectorTypes()` is consulted by both
+`goal-suggester.ts` and `recommendation-engine.ts`.
+
+**13.5 — Business Profile policy fields are now consumed:**
+- `approval_policy.always_require_approval` / `allow_auto_approve` /
+  `default_mode`: `approval.ts`'s `shouldAutoApprove()` now checks these
+  right after the `DANGEROUS_ACTION_TYPES` hard floor and before the
+  global Settings→Approval Policies / legacy `trust_tier` fallback —
+  precedence is: dangerous-action floor → Business Profile → global
+  settings → legacy fallback.
+- `risk_policy.max_risk_level`: enforced in `validateAction()` (§13.1).
+- `automation_policy.max_autonomous_tasks_per_day`: enforced in
+  `approveTask()` (§13.1).
+
+**A pre-existing bug this pass's testing surfaced and fixed:**
+`getCurrentWorldModel()`/`getWorldModelHistory()` ordered snapshots by
+`created_at DESC` alone. `created_at` is second-precision
+(`CURRENT_TIMESTAMP`), so multiple snapshots written within the same
+second — routine when several connectors sync back-to-back, or in fast
+test runs — had no guaranteed order, meaning `getPreviousConnectorData()`
+could read a stale snapshot instead of the truly most recent one. Fixed
+by adding `rowid DESC` as a tiebreaker (rowid increases with insertion
+order). The same tie existed in `buildWorldModelSnapshot()`'s own
+per-connector "latest metrics row" query (`recorded_at DESC` with no
+tiebreaker) and was fixed the same way. Both were caught by a new test in
+`world-model.test.ts` that writes two snapshots back-to-back and asserts
+`getPreviousConnectorData()` returns the *first* sync's data until the
+*second* snapshot is written.
+
+All 575 tests pass (up from 548 at the end of the original phase);
+`tsc --noEmit` and `vite build` are both clean.

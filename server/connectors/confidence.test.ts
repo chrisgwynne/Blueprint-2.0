@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import db, { generateId } from '../db/db.js';
-import { computeConnectorConfidence, refreshConnectorConfidence, getConnectorConfidence, listConnectorConfidence, isLowConfidence } from './confidence.js';
+import { computeConnectorConfidence, refreshConnectorConfidence, getConnectorConfidence, listConnectorConfidence, isLowConfidence, lowConfidenceConnectorTypes } from './confidence.js';
 import { updateBusinessProfile } from '../business/business-profile.js';
 import type { Connector } from '../types/db.js';
 
@@ -100,6 +100,54 @@ describe('refreshConnectorConfidence / getConnectorConfidence / listConnectorCon
     const list = listConnectorConfidence(BIZ);
     expect(list.length).toBeGreaterThan(0);
   });
+});
+
+describe('lowConfidenceConnectorTypes', () => {
+  const LOW_BIZ = 'biz_low_confidence_types_test';
+
+  beforeAll(() => {
+    db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Low Confidence Types Test', 'low-confidence-types-test') ON CONFLICT(id) DO NOTHING`).run(LOW_BIZ);
+  });
+
+  afterAll(() => {
+    db.prepare(`DELETE FROM connector_confidence WHERE business_id = ?`).run(LOW_BIZ);
+    db.prepare(`DELETE FROM connectors WHERE business_id = ?`).run(LOW_BIZ);
+  });
+
+  test('a connector type never configured at all is not included (no data ≠ untrusted data)', () => {
+    expect(lowConfidenceConnectorTypes(LOW_BIZ).has('ga4')).toBe(false);
+  });
+
+  test('a configured but never-scored connector type is low-confidence (fail-closed)', () => {
+    const c = makeConnector({ type: 'ga4' });
+    expect(lowConfidenceConnectorTypes(LOW_BIZ).has('ga4')).toBe(true);
+    void c;
+  });
+
+  test('a configured, healthily-scored connector type is NOT low-confidence', () => {
+    const c = makeConnector({ type: 'shopify' });
+    refreshConnectorConfidence(c);
+    expect(lowConfidenceConnectorTypes(LOW_BIZ).has('shopify')).toBe(false);
+  });
+
+  test('one healthy instance is enough to clear a type even if another instance is broken', () => {
+    const healthy = makeConnector({ type: 'gsc' });
+    refreshConnectorConfidence(healthy);
+    const broken = makeConnector({ type: 'gsc', status: 'error', last_error: 'Invalid token — unauthorized' });
+    refreshConnectorConfidence(broken);
+    expect(lowConfidenceConnectorTypes(LOW_BIZ).has('gsc')).toBe(false);
+  });
+
+  function makeConnector(overrides: Partial<Connector> = {}): Connector {
+    const id = generateId();
+    const type = overrides.type ?? 'ga4';
+    const status = overrides.status ?? 'connected';
+    db.prepare(`
+      INSERT INTO connectors (id, business_id, type, name, credentials, status, last_sync, last_error, config, created_at)
+      VALUES (?, ?, ?, ?, '{}', ?, ?, ?, '{}', CURRENT_TIMESTAMP)
+    `).run(id, LOW_BIZ, type, `${type} connector`, status, new Date().toISOString(), overrides.last_error ?? null);
+    return { id, business_id: LOW_BIZ, type, name: `${type} connector`, credentials: {}, status, last_sync: new Date().toISOString(), last_error: overrides.last_error ?? null, config: {}, created_at: '' };
+  }
 });
 
 describe('isLowConfidence', () => {

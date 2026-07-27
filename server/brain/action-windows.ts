@@ -127,6 +127,14 @@ export const ACTION_WINDOWS: ActionWindow[] = [
 
 /**
  * Seed action_windows table. Idempotent — only inserts missing rows.
+ *
+ * action_registry (server/tasks/action-registry.ts) is the authoritative
+ * source now — its display_name/measurement_window_days/success_metrics/
+ * measurement_notes/volatility fields carry the exact same knowledge this
+ * file's ACTION_WINDOWS constant used to be the only copy of (see db.ts's
+ * migration notes for the consolidation). This reads from action_registry
+ * first; ACTION_WINDOWS is kept only as a fallback for an action_type the
+ * registry doesn't have a 3-element measurement_window_days for yet.
  */
 export function seedActionWindows(): number {
   const insert = db.prepare(`
@@ -136,7 +144,35 @@ export function seedActionWindows(): number {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let inserted = 0;
+
+  const fromRegistry = db.prepare(`
+    SELECT action_type, display_name, measurement_window_days, success_metrics, measurement_notes, volatility, description
+    FROM action_registry
+    WHERE display_name IS NOT NULL
+  `).all() as Array<{
+    action_type: string; display_name: string; measurement_window_days: string;
+    success_metrics: string; measurement_notes: string | null; volatility: string | null; description: string | null;
+  }>;
+
+  const seededFromRegistry = new Set<string>();
+  for (const r of fromRegistry) {
+    let windowDaysRaw: number[] = [];
+    try { windowDaysRaw = JSON.parse(r.measurement_window_days); } catch { continue; }
+    if (windowDaysRaw.length !== 3) continue;
+    const [minDays, expectedDays, maxDays] = windowDaysRaw as [number, number, number];
+    const existing = db.prepare('SELECT id FROM action_windows WHERE action_type = ?').get(r.action_type);
+    if (existing) { seededFromRegistry.add(r.action_type); continue; }
+    insert.run(
+      crypto.randomUUID(), r.action_type, r.display_name,
+      minDays, expectedDays, maxDays,
+      r.success_metrics, r.measurement_notes ?? r.description ?? '', r.volatility ?? 'medium'
+    );
+    seededFromRegistry.add(r.action_type);
+    inserted++;
+  }
+
   for (const w of ACTION_WINDOWS) {
+    if (seededFromRegistry.has(w.action_type)) continue;
     const existing = db.prepare('SELECT id FROM action_windows WHERE action_type = ?').get(w.action_type);
     if (existing) continue;
     insert.run(

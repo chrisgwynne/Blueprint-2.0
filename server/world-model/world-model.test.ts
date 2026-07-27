@@ -1,6 +1,9 @@
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import db, { generateId } from '../db/db.js';
-import { buildWorldModelSnapshot, writeWorldModelSnapshot, getCurrentWorldModel, getWorldModelHistory } from './world-model.js';
+import {
+  buildWorldModelSnapshot, writeWorldModelSnapshot, getCurrentWorldModel, getWorldModelHistory,
+  getPreviousConnectorData,
+} from './world-model.js';
 
 const BIZ = 'biz_world_model_test';
 
@@ -11,6 +14,8 @@ beforeAll(() => {
 afterAll(() => {
   db.prepare(`DELETE FROM world_model_snapshots WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM signals WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM metrics WHERE business_id = ?`).run(BIZ);
+  db.prepare(`DELETE FROM connectors WHERE business_id = ?`).run(BIZ);
 });
 
 describe('buildWorldModelSnapshot', () => {
@@ -53,5 +58,63 @@ describe('writeWorldModelSnapshot / getCurrentWorldModel / getWorldModelHistory'
 
   test('a business with no snapshots yet returns null for current', () => {
     expect(getCurrentWorldModel('biz_never_synced_xyz')).toBeNull();
+  });
+});
+
+describe('connector_data / getPreviousConnectorData', () => {
+  const CONNECTOR_ID = 'conn_world_model_test';
+
+  beforeAll(() => {
+    db.prepare(`
+      INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+      VALUES (?, ?, 'ga4', 'GA4', '{}', 'connected', '{}', CURRENT_TIMESTAMP)
+      ON CONFLICT(id) DO NOTHING
+    `).run(CONNECTOR_ID, BIZ);
+  });
+
+  afterAll(() => {
+    db.prepare(`DELETE FROM metrics WHERE connector_id = ?`).run(CONNECTOR_ID);
+    db.prepare(`DELETE FROM connectors WHERE id = ?`).run(CONNECTOR_ID);
+  });
+
+  test('buildWorldModelSnapshot picks up the latest *_sync metrics blob per connector', () => {
+    db.prepare(`
+      INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_data, period_start, period_end, recorded_at)
+      VALUES (?, ?, ?, 'ga4_sync', ?, '2026-01-01', '2026-01-01', CURRENT_TIMESTAMP)
+    `).run(generateId(), BIZ, CONNECTOR_ID, JSON.stringify({ sessions: 100 }));
+
+    const snapshot = buildWorldModelSnapshot(BIZ);
+    expect(snapshot.connector_data[CONNECTOR_ID]).toBeDefined();
+    expect(snapshot.connector_data[CONNECTOR_ID]!.connector_type).toBe('ga4');
+    expect(snapshot.connector_data[CONNECTOR_ID]!.data).toEqual({ sessions: 100 });
+  });
+
+  test('getPreviousConnectorData returns null when no snapshot has been written yet', () => {
+    expect(getPreviousConnectorData(BIZ, CONNECTOR_ID)).toBeNull();
+  });
+
+  test('getPreviousConnectorData reflects the last *written* snapshot, not the live metrics table', () => {
+    // Write a snapshot capturing the first sync's data.
+    writeWorldModelSnapshot(BIZ, 'test-connector-data');
+    expect(getPreviousConnectorData(BIZ, CONNECTOR_ID)).toEqual({ sessions: 100 });
+
+    // A second sync writes newer metrics, but getPreviousConnectorData must
+    // still report the OLD value until a new snapshot is written — this is
+    // the "previous data" a signal rule compares against.
+    db.prepare(`
+      INSERT INTO metrics (id, business_id, connector_id, metric_name, metric_data, period_start, period_end, recorded_at)
+      VALUES (?, ?, ?, 'ga4_sync', ?, '2026-01-02', '2026-01-02', CURRENT_TIMESTAMP)
+    `).run(generateId(), BIZ, CONNECTOR_ID, JSON.stringify({ sessions: 250 }));
+    expect(getPreviousConnectorData(BIZ, CONNECTOR_ID)).toEqual({ sessions: 100 });
+
+    // Once the new snapshot is written (mirroring scheduler.ts / connectors.ts
+    // calling writeWorldModelSnapshot after reading previousData), the World
+    // Model's "previous" now reflects the second sync.
+    writeWorldModelSnapshot(BIZ, 'test-connector-data-2');
+    expect(getPreviousConnectorData(BIZ, CONNECTOR_ID)).toEqual({ sessions: 250 });
+  });
+
+  test('getPreviousConnectorData returns null for a connector with no recorded data', () => {
+    expect(getPreviousConnectorData(BIZ, 'conn_never_synced_xyz')).toBeNull();
   });
 });

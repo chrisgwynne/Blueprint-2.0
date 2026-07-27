@@ -16,6 +16,8 @@
 import db from '../db/db.js';
 import { actionTypeTrackRecord } from '../tasks/historical-learning.js';
 import { checkConstraints } from './constraint-engine.js';
+import { getActionRegistryEntry } from '../tasks/action-registry.js';
+import { lowConfidenceConnectorTypes } from '../connectors/confidence.js';
 
 export type RecommendationSourceType = 'task' | 'opportunity' | 'strategy';
 
@@ -132,6 +134,18 @@ function gatherCandidates(businessId: string): Candidate[] {
   return candidates;
 }
 
+// A task candidate's connector dependency comes from its action_type's
+// registry entry; an opportunity candidate's `action_type` field is
+// overloaded to carry `connector_source` directly (see gatherCandidates
+// above); a strategy candidate has no connector dependency.
+function requiredConnectorTypesFor(c: Candidate): string[] {
+  if (c.source_type === 'opportunity') return c.action_type ? [c.action_type] : [];
+  if (c.source_type === 'task' && c.action_type) {
+    return getActionRegistryEntry(c.action_type)?.required_connector_types ?? [];
+  }
+  return [];
+}
+
 function hasOpenConflict(businessId: string, entityType: string, entityId: string): boolean {
   const row = db.prepare(
     "SELECT 1 FROM conflicts WHERE business_id = ? AND status = 'open' AND ((entity_a_type = ? AND entity_a_id = ?) OR (entity_b_type = ? AND entity_b_id = ?))"
@@ -144,6 +158,7 @@ export function getRankedRecommendations(businessId: string, opts: { limit?: num
   const candidates = gatherCandidates(businessId);
   const recommendations: RankedRecommendation[] = [];
   const excluded: ExcludedRecommendation[] = [];
+  const untrustedConnectorTypes = lowConfidenceConnectorTypes(businessId);
 
   for (const c of candidates) {
     const constraintResult = checkConstraints(businessId, {
@@ -154,6 +169,17 @@ export function getRankedRecommendations(businessId: string, opts: { limit?: num
       excluded.push({
         id: c.id, source_type: c.source_type, title: c.title,
         reason: blocking?.note ?? `Blocked by a ${blocking?.constraint_type ?? 'constraint'} constraint.`,
+      });
+      continue;
+    }
+
+    // Low-confidence connectors must not generate autonomous
+    // recommendations — exclude any candidate that depends on one.
+    const untrustedRequired = requiredConnectorTypesFor(c).filter((t) => untrustedConnectorTypes.has(t));
+    if (untrustedRequired.length > 0) {
+      excluded.push({
+        id: c.id, source_type: c.source_type, title: c.title,
+        reason: `Sourced from connector type(s) [${untrustedRequired.join(', ')}] with low or unverified confidence.`,
       });
       continue;
     }

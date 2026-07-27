@@ -12,6 +12,7 @@ import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import { recordDecision } from './decision-memory.js';
+import { lowConfidenceConnectorTypes } from '../connectors/confidence.js';
 
 const SYSTEM_PROMPT = `You turn detected business-data patterns into a concrete goal suggestion.
 
@@ -322,7 +323,12 @@ export async function scanForGoalSuggestions(
   const business = db.prepare('SELECT * FROM businesses WHERE id = ?').get(businessId) as Record<string, unknown> | null;
   if (!business) throw new Error('Business not found');
 
-  const patterns = detectAllPatterns(businessId);
+  // Low-confidence connectors must not generate autonomous recommendations
+  // — a pattern detected from a connector Blueprint can't currently trust
+  // (unverified identity, broken auth, ...) is dropped before it ever
+  // reaches the LLM, rather than suggested with a caveat.
+  const untrustedTypes = lowConfidenceConnectorTypes(businessId);
+  const patterns = detectAllPatterns(businessId).filter((p) => !untrustedTypes.has(p.connector));
   if (patterns.length === 0) return [];
 
   // Avoid duplicates — don't suggest the same pattern twice within 30 days

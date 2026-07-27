@@ -6,7 +6,7 @@ import { isAuthenticated } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../crypto.js';
 import type { Connector } from '../types/db.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
-import { writeWorldModelSnapshot } from '../world-model/world-model.js';
+import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -116,15 +116,12 @@ async function runConnectorSync(rowId: string): Promise<void> {
       const { runSignalEngine } = await import('../signals/signal-engine.js') as unknown as {
         runSignalEngine: (businessId: string, connectorId: string, data: unknown, prevData: unknown, type: string) => Promise<void>;
       };
-      const prevMetric = db.prepare(`
-        SELECT metric_data FROM metrics
-        WHERE business_id = ? AND connector_id = ? AND metric_name = ?
-        ORDER BY recorded_at DESC LIMIT 1 OFFSET 1
-      `).get(row.business_id, row.id, `${row.type}_sync`) as { metric_data: string | null } | undefined;
-      let previousData: unknown = null;
-      if (prevMetric?.metric_data) {
-        try { previousData = JSON.parse(prevMetric.metric_data); } catch {}
-      }
+      // "Connectors update the World Model, signals are generated from the
+      // World Model" — previousData comes from the World Model's own
+      // record of this connector's last-known data, not an ad-hoc second
+      // query against the metrics table (see scheduler.ts's identical
+      // change and world-model.ts's getPreviousConnectorData).
+      const previousData = getPreviousConnectorData(row.business_id, row.id);
       const signalData = (row.type === 'pagespeed' && (data as any).mobile) ? (data as any).mobile : data;
       const prevSignalData = (row.type === 'pagespeed' && (previousData as any)?.mobile) ? (previousData as any).mobile : previousData;
       await runSignalEngine(row.business_id, row.id, signalData, prevSignalData, row.type);

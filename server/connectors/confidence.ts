@@ -282,3 +282,33 @@ export function isLowConfidence(confidence: ConnectorConfidence | null): boolean
   if (!confidence) return true; // never verified = treat as low-confidence, not trusted
   return confidence.overall_status === 'degraded' || confidence.overall_status === 'broken';
 }
+
+/**
+ * Connector *types* for which this business has no acceptable-confidence
+ * instance — i.e. every connector of that type is low-confidence (or has
+ * never been scored at all). Consumers (goal-suggester.ts,
+ * recommendation-engine.ts) use this to exclude candidates/patterns
+ * sourced from a connector type in this set, per the spec's "low-
+ * confidence connectors must not generate autonomous recommendations."
+ * A connector type the business has never even configured is NOT
+ * included here — that's "no data", not "untrusted data".
+ */
+export function lowConfidenceConnectorTypes(businessId: string): Set<string> {
+  const connectors = db.prepare('SELECT id, type FROM connectors WHERE business_id = ?').all(businessId) as Array<{ id: string; type: string }>;
+  if (connectors.length === 0) return new Set();
+
+  const confidenceByConnectorId = new Map(listConnectorConfidence(businessId).map((c) => [c.connector_id, c]));
+  const instancesByType = new Map<string, Array<{ id: string; type: string }>>();
+  for (const c of connectors) {
+    if (!instancesByType.has(c.type)) instancesByType.set(c.type, []);
+    instancesByType.get(c.type)!.push(c);
+  }
+
+  const lowTypes = new Set<string>();
+  for (const [type, instances] of instancesByType) {
+    if (instances.every((c) => isLowConfidence(confidenceByConnectorId.get(c.id) ?? null))) {
+      lowTypes.add(type);
+    }
+  }
+  return lowTypes;
+}
