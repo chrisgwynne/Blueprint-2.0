@@ -5,6 +5,8 @@ import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../crypto.js';
 import type { Connector } from '../types/db.js';
+import { refreshConnectorConfidence } from '../connectors/confidence.js';
+import { writeWorldModelSnapshot } from '../world-model/world-model.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -129,6 +131,10 @@ async function runConnectorSync(rowId: string): Promise<void> {
     } catch (sigErr) {
       console.error(`[connectors] Signal engine error for ${row.name}:`, (sigErr as Error).message);
     }
+
+    // World Model: connectors feed the World Model, not agents directly.
+    try { refreshConnectorConfidence({ ...row, status: 'connected', last_sync: new Date().toISOString(), last_error: null }); } catch {}
+    writeWorldModelSnapshot(row.business_id, 'connector_sync');
   } catch (err) {
     db.prepare(`UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?`).run((err as Error).message.substring(0, 500), row.id);
     console.error(`[connectors] Sync error for ${row.name}:`, (err as Error).message);

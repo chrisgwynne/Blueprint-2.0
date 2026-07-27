@@ -58,6 +58,11 @@ import bapConflictsRouter from './bap-conflicts.js';
 import bapDecisionsRouter from './bap-decisions.js';
 import bapGraphRouter from './bap-graph.js';
 import bapReviewRouter from './bap-review.js';
+import bapBusinessProfileRouter from './bap-business-profile.js';
+import bapActionRegistryRouter from './bap-action-registry.js';
+import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
+import bapWorldModelRouter from './bap-world-model.js';
+import bapSystemIssuesRouter from './bap-system-issues.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -231,6 +236,12 @@ router.use(bapConflictsRouter);
 router.use(bapDecisionsRouter);
 router.use(bapGraphRouter);
 router.use(bapReviewRouter);
+// Phase 2-INT — Autonomous Intelligence Foundation.
+router.use(bapBusinessProfileRouter);
+router.use(bapActionRegistryRouter);
+router.use(bapConnectorConfidenceRouter);
+router.use(bapWorldModelRouter);
+router.use(bapSystemIssuesRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

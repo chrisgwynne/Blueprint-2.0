@@ -1,6 +1,10 @@
 import db, { generateId, audit } from '../db/db.js';
 import { enqueueExecutionJob, getActiveJobForTask, cancelJob as cancelExecutionJob } from './execution-jobs.js';
 import { recordDecision } from '../brain/decision-memory.js';
+import { validateAction } from './action-registry.js';
+import { getBusinessProfile } from '../business/business-profile.js';
+import { createSystemIssue } from '../system/system-issues.js';
+import type { Connector } from '../types/db.js';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -400,6 +404,56 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string; trust_tier: string; approval_mode: string; action_type: string | null; action_payload: string } | null;
   if (!existingRaw) throw new Error(`Task '${id}' not found.`);
   const existing = parseRow(existingRaw)!;
+
+  // ─── Typed Action & Executor Registry validation gate ──────────────────────
+  // "Before a task can become executable Blueprint must validate..." — this
+  // is the propose→approve transition, so it runs here rather than at task
+  // creation (which would immediately break the many existing tests/fixtures
+  // that create tasks with arbitrary action_types against DBs with no real
+  // connectors configured). A null action_type (manual to-do) always passes.
+  // Only two checks hard-block: the action_type must be a known, active
+  // registry entry, and the business's profile must support it. Everything
+  // else (missing connectors, payload schema mismatches) is recorded as a
+  // non-blocking Blueprint System Issue rather than blocking approval, since
+  // those checks depend on real per-business connector configuration that
+  // most existing businesses/tests don't have.
+  const businessProfile = getBusinessProfile(existing.business_id);
+  const connectors = db.prepare('SELECT * FROM connectors WHERE business_id = ?').all(existing.business_id) as Connector[];
+  const actionValidation = validateAction({
+    actionType: existing.action_type,
+    payload: existing.action_payload,
+    businessProfile,
+    connectors,
+  });
+
+  for (const warning of actionValidation.warnings) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: `action_validation_warning:${warning.code}`,
+      severity: 'warning',
+      title: `Task "${existing.title}" has an unresolved action validation warning`,
+      description: warning.message,
+      related_task_id: id,
+      related_action_type: existing.action_type,
+    });
+  }
+
+  if (!actionValidation.valid) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: 'action_validation_failure',
+      severity: 'error',
+      title: `Task "${existing.title}" cannot be approved — action validation failed`,
+      description: actionValidation.issues.map((i) => i.message).join(' '),
+      related_task_id: id,
+      related_action_type: existing.action_type,
+      metadata: { issues: actionValidation.issues },
+    });
+    throw new Error(
+      `Task cannot be approved: ${actionValidation.issues.map((i) => i.message).join(' ')} ` +
+      'A Blueprint System Issue has been created explaining why.'
+    );
+  }
 
   const runApproval = db.transaction(() => {
     const now = new Date().toISOString();

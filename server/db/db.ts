@@ -7,15 +7,27 @@ import { mkdirSync, readFileSync } from 'fs';
 const __dbdir = dirname(fileURLToPath(import.meta.url));
 const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
 
-const DB_PATH = process.env['DATABASE_PATH']
-  ? resolve(process.env['DATABASE_PATH'])
-  : _defaultPath;
+// ':memory:' (and bun:sqlite's other in-memory sentinels, e.g.
+// 'file::memory:?cache=shared') must be passed through to Database()
+// verbatim — resolve()ing it turns the special string into a literal
+// relative-path file (e.g. "<cwd>/:memory:"), silently defeating the
+// "ephemeral, never touches disk" guarantee test-setup.ts relies on and
+// leaving a real, ever-growing file that persists across every process
+// invocation instead of the intended fresh-per-process database.
+const _envPath = process.env['DATABASE_PATH'];
+const _isMemory = _envPath === ':memory:' || _envPath?.startsWith('file::memory:') || _envPath?.startsWith(':memory:?');
 
-const _root = dirname(DB_PATH);
+const DB_PATH = !_envPath
+  ? _defaultPath
+  : _isMemory
+    ? _envPath
+    : resolve(_envPath);
 
-try {
-  mkdirSync(_root, { recursive: true });
-} catch (_) {}
+if (!_isMemory) {
+  try {
+    mkdirSync(dirname(DB_PATH), { recursive: true });
+  } catch (_) {}
+}
 
 const db = new Database(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
@@ -971,6 +983,204 @@ const STARTUP_MIGRATIONS: string[] = [
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS idx_constraints_business_active ON constraints(business_id, active)`,
+
+  // ─── Phase 2-INT.1 Business Truth Layer ──────────────────────────────────
+  // Canonical per-business profile. Nothing should infer business identity
+  // or capability (type, allowed connectors/agents/actions, policies) from
+  // connector data or free-text fields — everything consults this row.
+  `CREATE TABLE IF NOT EXISTS business_profiles (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL UNIQUE REFERENCES businesses(id),
+    business_type TEXT NOT NULL DEFAULT 'other',
+    operating_model TEXT,
+    primary_domain TEXT,
+    primary_brand TEXT,
+    products_services JSON DEFAULT '[]',
+    supported_platforms JSON DEFAULT '[]',
+    enabled_connector_types JSON DEFAULT '[]',
+    disabled_connector_types JSON DEFAULT '[]',
+    allowed_agent_types JSON DEFAULT '[]',
+    allowed_action_types JSON DEFAULT '[]',
+    strategic_goals JSON DEFAULT '[]',
+    kpis JSON DEFAULT '[]',
+    operating_constraints JSON DEFAULT '{}',
+    approval_policy JSON DEFAULT '{}',
+    automation_policy JSON DEFAULT '{}',
+    risk_policy JSON DEFAULT '{}',
+    deployment_policy JSON DEFAULT '{}',
+    seo_policy JSON DEFAULT '{}',
+    ecommerce_policy JSON DEFAULT '{}',
+    lead_gen_policy JSON DEFAULT '{}',
+    communication_preferences JSON DEFAULT '{}',
+    inferred_fields JSON DEFAULT '[]',
+    confirmed_by_human INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_business_profiles_business ON business_profiles(business_id)`,
+
+  // ─── Phase 2-INT.2 Typed Action & Executor Registry ──────────────────────
+  // Consolidates the 3 previously-drifting hand-maintained action-type
+  // lists (executor.ts EXECUTABLE_ACTION_TYPES, action-payloads.ts
+  // ActionType union, execution-safety.ts EXTERNAL_VERIFIABLE_ACTIONS) into
+  // one queryable table. Also carries the Outcome Learning Engine's
+  // per-action-type measurement configuration (measurement_window_days,
+  // success_metrics, ...) so the two subsystems share one definition
+  // instead of a second parallel table.
+  `CREATE TABLE IF NOT EXISTS action_registry (
+    action_type TEXT PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 1,
+    description TEXT,
+    payload_schema JSON DEFAULT '{}',
+    required_connector_types JSON DEFAULT '[]',
+    supported_business_types JSON DEFAULT '[]',
+    required_permissions JSON DEFAULT '[]',
+    supports_rollback INTEGER NOT NULL DEFAULT 0,
+    verification_routine TEXT,
+    retry_policy JSON DEFAULT '{}',
+    timeout_ms INTEGER,
+    side_effect_classification TEXT NOT NULL DEFAULT 'internal_idempotent',
+    requires_approval INTEGER NOT NULL DEFAULT 1,
+    risk_level TEXT NOT NULL DEFAULT 'medium',
+    measurement_window_days JSON DEFAULT '[7,14,28]',
+    success_metrics JSON DEFAULT '[]',
+    expected_impact TEXT,
+    acceptable_variance REAL DEFAULT 0.05,
+    confidence_adjustment_rules JSON DEFAULT '{}',
+    follow_up_schedule JSON DEFAULT '[]',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+
+  // ─── Phase 2-INT.3 Connector Confidence & Identity Verification ──────────
+  `CREATE TABLE IF NOT EXISTS connector_confidence (
+    id TEXT PRIMARY KEY,
+    connector_id TEXT NOT NULL UNIQUE REFERENCES connectors(id),
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    connectivity_status TEXT NOT NULL DEFAULT 'unknown',
+    authentication_status TEXT NOT NULL DEFAULT 'unknown',
+    authorisation_status TEXT NOT NULL DEFAULT 'unknown',
+    resource_mapping_status TEXT NOT NULL DEFAULT 'unknown',
+    business_identity_status TEXT NOT NULL DEFAULT 'unknown',
+    website_verification_status TEXT NOT NULL DEFAULT 'unknown',
+    freshness_status TEXT NOT NULL DEFAULT 'unknown',
+    historical_consistency_status TEXT NOT NULL DEFAULT 'unknown',
+    data_completeness_status TEXT NOT NULL DEFAULT 'unknown',
+    overall_confidence REAL NOT NULL DEFAULT 0,
+    overall_status TEXT NOT NULL DEFAULT 'unknown',
+    verification_details JSON DEFAULT '{}',
+    last_verified_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_connector_confidence_business ON connector_confidence(business_id)`,
+
+  // ─── Phase 2-INT.4 World Model ────────────────────────────────────────────
+  // Timestamped, attributable snapshots so reasoning can compare
+  // before/after states. The "current" world model for a business is
+  // simply its most recent snapshot row (ORDER BY created_at DESC LIMIT 1).
+  `CREATE TABLE IF NOT EXISTS world_model_snapshots (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    snapshot JSON NOT NULL,
+    trigger_source TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_world_model_snapshots_business_time ON world_model_snapshots(business_id, created_at DESC)`,
+
+  // ─── Phase 2-INT — Blueprint System Issues ────────────────────────────────
+  // Raised when validation fails (registry/business-type/connector checks)
+  // instead of silently creating or executing a task. related_task_id /
+  // related_connector_id are soft references (no REFERENCES clause) — a
+  // system issue is a historical/audit record and must survive deletion of
+  // the task or connector it references (same lesson learned the hard way
+  // on the `decisions` table in Phase 3).
+  `CREATE TABLE IF NOT EXISTS system_issues (
+    id TEXT PRIMARY KEY,
+    business_id TEXT REFERENCES businesses(id),
+    issue_type TEXT NOT NULL,
+    severity TEXT NOT NULL DEFAULT 'warning',
+    title TEXT NOT NULL,
+    description TEXT,
+    related_task_id TEXT,
+    related_connector_id TEXT,
+    related_action_type TEXT,
+    status TEXT NOT NULL DEFAULT 'open',
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    resolved_at DATETIME
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_system_issues_business_status ON system_issues(business_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_system_issues_related_task ON system_issues(related_task_id)`,
+
+  // ─── Phase 2-INT.2 (cont.) Seed the registry with every action_type in ────
+  // real use today (executor.ts EXECUTABLE_ACTION_TYPES ∪ agentActivation-
+  // Rules.ts ROLE_SPECS task_types). INSERT OR IGNORE so this never
+  // clobbers an operator's own edits, and re-runs harmlessly on every
+  // startup (safe to extend this list in a later deploy — new rows just
+  // get inserted, existing ones are left alone). Without this seed,
+  // turning on registry validation (task-queue.ts approveTask()) would
+  // immediately block every action type currently in production use.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval) VALUES
+    ('github_issue', 'Create or update a GitHub issue.', '["github"]', '[]', 'external_verifiable', 'medium', 0, 1),
+    ('github_pr', 'Create or update a GitHub pull request.', '["github"]', '[]', 'external_verifiable', 'medium', 0, 1),
+    ('investigation', 'Run an LLM-driven investigation into a signal or question.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('deep_investigation', 'Run a deeper, multi-step LLM investigation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('content_draft', 'Draft new content (blog post, page copy) for review.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('meta_update', 'Update SEO metadata (title/description) on a page.', '[]', '[]', 'internal_idempotent', 'medium', 0, 1),
+    ('shopify_product_create', 'Create a new Shopify product.', '["shopify"]', '["ecommerce"]', 'external_verifiable', 'medium', 0, 1),
+    ('shopify_product_update', 'Update an existing Shopify product.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'medium', 0, 1),
+    ('shopify_description_update', 'Update a Shopify product description.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 1),
+    ('shopify_page_create', 'Create a new Shopify page.', '["shopify"]', '["ecommerce"]', 'external_verifiable', 'medium', 0, 1),
+    ('shopify_page_update', 'Update an existing Shopify page.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 1),
+    ('shopify_blog_post_create', 'Create a new Shopify blog post.', '["shopify"]', '["ecommerce"]', 'external_verifiable', 'medium', 0, 1),
+    ('shopify_meta_update', 'Update Shopify SEO metadata.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 1),
+    ('shopify_collection_update', 'Update a Shopify collection.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 1),
+    ('shopify_tag_update', 'Update Shopify product tags.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 1),
+    ('shopify_theme_edit', 'Edit Shopify theme files.', '["shopify"]', '["ecommerce"]', 'internal_idempotent', 'high', 0, 1),
+    ('hire_agent', 'Hire (activate) a new agent for a business.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('wix_seo_update', 'Update Wix page/blog-post SEO fields.', '["wix"]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('server_file_write', 'Write a file on a connected server (backed up first).', '["server-access"]', '[]', 'internal_idempotent', 'high', 1, 1),
+    ('server_file_rollback', 'Roll back a previous server_file_write.', '["server-access"]', '[]', 'internal_idempotent', 'medium', 0, 1),
+    ('gbp_update', 'Update a Google Business Profile listing.', '["gbp"]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('klaviyo_flow_update', 'Update a Klaviyo email flow.', '["klaviyo"]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('meta_ads_update', 'Update a Meta Ads campaign.', '["meta-ads"]', '[]', 'internal_idempotent', 'medium', 0, 1),
+    ('connect_connector', 'Prompt connecting a new connector.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('research_connector', 'Research/evaluate a candidate connector.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('notification', 'Send an informational notification — no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('strategic_review', 'Produce a strategic review/summary — no external mutation.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('product_suggestion', 'Suggest a new product for an ecommerce catalog.', '[]', '["ecommerce"]', 'internal_idempotent', 'low', 0, 0),
+    ('content_brief', 'Produce a content brief for later drafting.', '[]', '[]', 'internal_idempotent', 'low', 0, 0),
+    ('page_optimisation', 'Recommend on-page optimisation changes.', '[]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('gbp_post', 'Publish a Google Business Profile post.', '["gbp"]', '[]', 'internal_idempotent', 'low', 0, 1),
+    ('meta-ads-change', 'Change a Meta Ads campaign (legacy alias — see server/brain/action-windows.ts).', '["meta-ads"]', '[]', 'internal_idempotent', 'medium', 0, 1)
+  `,
+
+  // ─── Phase 2-INT.5 (cont.) Tie the registry to the existing per-action- ──
+  // type measurement config in server/brain/action-windows.ts's
+  // ACTION_WINDOWS (min/expected/max_days + metric_types) — a pre-existing
+  // system this phase's research missed initially (it predates this phase
+  // and already does exactly what the Outcome Learning Engine spec asks
+  // for: "each action type should define a measurement window and success
+  // metrics"). Rather than forking a second, competing set of numbers,
+  // action_registry's fields are backfilled FROM action-windows.ts's data
+  // here so the two agree; action-windows.ts itself remains the engine
+  // restraint.ts/causal.ts/conductor actually read from — consolidating
+  // them into one is a follow-up, not done in this phase (see PHASE2-INT.md).
+  // Guarded on success_metrics = '[]' so an operator's own edit is never
+  // silently overwritten by a later startup.
+  `UPDATE action_registry SET measurement_window_days = '[7,21,42]', success_metrics = '["gsc.avg_ctr","gsc.total_clicks","ga4.sessions"]' WHERE action_type = 'meta_update' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[7,14,28]', success_metrics = '["shopify.conversion_rate","ga4.bounce_rate","ga4.sessions"]' WHERE action_type = 'shopify_description_update' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[21,56,112]', success_metrics = '["gsc.total_clicks","gsc.impressions","ga4.sessions"]' WHERE action_type = 'shopify_page_create' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[3,14]', success_metrics = '["pagespeed.mobile.performance_score","pagespeed.mobile.lcp_ms","ga4.bounce_rate","ga4.sessions"]' WHERE action_type = 'github_pr' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[28,56,120]', success_metrics = '["gsc.total_clicks","gsc.impressions","ga4.sessions"]' WHERE action_type = 'content_draft' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[3,7,21]', success_metrics = '["meta-ads.roas","meta-ads.ctr","meta-ads.cpm","meta-ads.cpc"]' WHERE action_type = 'meta-ads-change' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[7,21,42]', success_metrics = '["gsc.avg_ctr","gsc.total_clicks"]' WHERE action_type = 'shopify_meta_update' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[14,28,56]', success_metrics = '["gsc.total_clicks","shopify.revenue","shopify.conversion_rate"]' WHERE action_type = 'shopify_collection_update' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[1,7,28]', success_metrics = '["gbp.views_total","gbp.actions_website","gbp.actions_phone"]' WHERE action_type = 'gbp_post' AND success_metrics = '[]'`,
+  `UPDATE action_registry SET measurement_window_days = '[7,21]', success_metrics = '["shopify.conversion_rate","ga4.bounce_rate","ga4.sessions","pagespeed.mobile.performance_score"]' WHERE action_type = 'shopify_theme_edit' AND success_metrics = '[]'`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {
@@ -1117,6 +1327,58 @@ for (const sql of STARTUP_MIGRATIONS) {
     }
   } catch (err) {
     console.warn('[db] BAP wildcard-grant migration skipped:', (err as Error).message);
+  }
+})();
+
+// ─── One-off data migration: backfill Business Profiles ─────────────────────
+// Auto-populates a business_profiles row for every pre-existing business,
+// inferring business_type from the legacy free-text `businesses.type`
+// column via keyword matching and marking the field as inferred (not
+// human-confirmed) — see server/business/business-profile.ts for the
+// shared inference logic and the same auto-create path new businesses use.
+(function backfillBusinessProfiles() {
+  try {
+    const businesses = db.prepare('SELECT id, name, type FROM businesses').all() as
+      Array<{ id: string; name: string; type: string | null }>;
+    if (businesses.length === 0) return;
+
+    const existing = new Set(
+      (db.prepare('SELECT business_id FROM business_profiles').all() as Array<{ business_id: string }>)
+        .map((r) => r.business_id)
+    );
+    const missing = businesses.filter((b) => !existing.has(b.id));
+    if (missing.length === 0) return;
+
+    const inferType = (freeText: string | null): string => {
+      const t = (freeText ?? '').toLowerCase();
+      if (/shop|commerce|store|retail|apparel|merch/.test(t)) return 'ecommerce';
+      if (/agency|marketing firm|consultanc/.test(t)) return 'agency';
+      if (/saas|software|platform|app\b/.test(t)) return 'saas';
+      if (/content|media|publish|blog/.test(t)) return 'content';
+      if (!t) return 'other';
+      return 'service';
+    };
+
+    const insert = db.prepare(`
+      INSERT INTO business_profiles (
+        id, business_id, business_type, primary_brand,
+        products_services, supported_platforms, enabled_connector_types, disabled_connector_types,
+        allowed_agent_types, allowed_action_types, strategic_goals, kpis, operating_constraints,
+        approval_policy, automation_policy, risk_policy, deployment_policy, seo_policy,
+        ecommerce_policy, lead_gen_policy, communication_preferences, inferred_fields,
+        confirmed_by_human, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `);
+    for (const b of missing) {
+      insert.run(
+        generateId(), b.id, inferType(b.type), b.name,
+        '[]', '[]', '[]', '[]', '[]', '[]', '[]', '[]', '{}',
+        '{}', '{}', '{}', '{}', '{}', '{}', '{}', '{}', JSON.stringify(['business_type']),
+      );
+    }
+    console.log(`[db] Business Profile backfill: created ${missing.length} profile(s) with inferred business_type.`);
+  } catch (err) {
+    console.warn('[db] business profile backfill skipped:', (err as Error).message);
   }
 })();
 

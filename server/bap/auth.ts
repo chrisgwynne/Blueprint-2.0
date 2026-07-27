@@ -82,6 +82,18 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'recommendations:read',
   'retrospectives:read', 'retrospectives:trigger',
   'calibration:read',
+  // Phase 2-INT — Autonomous Intelligence Foundation. business_profile:read
+  // covers GET on the profile; :update covers PATCH. action_registry:read
+  // covers listing/getting entries; :write covers upsert (operator/BAP
+  // editing of an action_type's metadata). connector_confidence:read and
+  // world_model:read are read-only by design — both are derived state,
+  // recomputed from connectors/goals/signals, never directly authored.
+  // system_issues:read/:update cover listing and acknowledging/resolving.
+  'business_profile:read', 'business_profile:update',
+  'action_registry:read', 'action_registry:write',
+  'connector_confidence:read',
+  'world_model:read',
+  'system_issues:read', 'system_issues:update',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

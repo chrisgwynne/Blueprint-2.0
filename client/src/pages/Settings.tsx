@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Save, Eye, EyeOff, Send, Download, Upload, Info, Plus, Trash2, Check, X, Building2, Image, BookOpen, FolderOpen, RefreshCw, Bot, Shield, GitBranch } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
-import { updateBusiness, createBusiness, getBusinesses, deleteBusiness, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval } from '../lib/api.js'
+import { updateBusiness, createBusiness, getBusinesses, deleteBusiness, getKbSettings, saveKbSettings, initKb, getBapAgents, revokeBapAgent, getBapAudit, getGoogleOAuthConfig, saveGoogleOAuthConfig, getLLMProviders, saveLLMCredentials, testLLMCredentials, getLLMDefault, setLLMDefault, getLLMTiers, setLLMTier, clearLLMTier, getApprovalPolicies, saveApprovalPolicies, getBlueprintGitHubStatus, saveBlueprintGitHubSettings, testBlueprintGitHubConnection, getSecurityStatus, getSecurityAllowlist, addSecurityAllowlist, removeSecurityAllowlist, setSecurityEnforcement, toggleSecurityLayer, getSecurityEvents, getAgentPollIntervals, setAgentPollInterval, resetAgentPollInterval, getBusinessProfile as fetchBusinessProfile, updateBusinessProfile as saveBusinessProfile } from '../lib/api.js'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import type { Business } from '../types/index.js'
@@ -182,6 +182,118 @@ function Field({ label, hint, children }: FieldProps) {
 // ============================================
 // Tab: Business Profile
 // ============================================
+const BUSINESS_TYPES = ['service', 'agency', 'ecommerce', 'saas', 'content', 'other'] as const
+
+interface BusinessProfile {
+  business_type: string
+  operating_model: string | null
+  primary_domain: string | null
+  primary_brand: string | null
+  allowed_agent_types: string[]
+  allowed_action_types: string[]
+  inferred_fields: string[]
+  confirmed_by_human: boolean
+}
+
+// ============================================
+// Business Truth Layer (Phase 2-INT)
+// ============================================
+function BusinessTruthLayerSection({ businessId }: { businessId: string }) {
+  const addNotification = useStore((s) => s.addNotification) as (n: { type: string; title?: string; message: string }) => void
+  const [profile, setProfile] = useState<BusinessProfile | null>(null)
+  const [form, setForm] = useState({
+    business_type: 'other',
+    operating_model: '',
+    primary_domain: '',
+    primary_brand: '',
+    allowed_agent_types: '',
+    allowed_action_types: '',
+  })
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    fetchBusinessProfile(businessId).then((res: { profile: BusinessProfile }) => {
+      if (cancelled) return
+      setProfile(res.profile)
+      setForm({
+        business_type: res.profile.business_type,
+        operating_model: res.profile.operating_model || '',
+        primary_domain: res.profile.primary_domain || '',
+        primary_brand: res.profile.primary_brand || '',
+        allowed_agent_types: res.profile.allowed_agent_types.join(', '),
+        allowed_action_types: res.profile.allowed_action_types.join(', '),
+      })
+    }).catch(() => {}).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [businessId])
+
+  async function handleSave() {
+    setSaving(true)
+    try {
+      const res = await saveBusinessProfile(businessId, {
+        business_type: form.business_type,
+        operating_model: form.operating_model || null,
+        primary_domain: form.primary_domain || null,
+        primary_brand: form.primary_brand || null,
+        allowed_agent_types: form.allowed_agent_types.split(',').map((s) => s.trim()).filter(Boolean),
+        allowed_action_types: form.allowed_action_types.split(',').map((s) => s.trim()).filter(Boolean),
+      }) as { profile: BusinessProfile }
+      setProfile(res.profile)
+      addNotification({ type: 'success', message: 'Business profile saved' })
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <Section title="Business Truth Layer" description="Canonical identity and capability profile — every recommendation and task consults this before acting.">
+        <p className="text-xs text-blueprint-muted">Loading…</p>
+      </Section>
+    )
+  }
+
+  return (
+    <Section title="Business Truth Layer" description="Canonical identity and capability profile — every recommendation and task consults this before acting.">
+      {profile && !profile.confirmed_by_human && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded border border-amber-500/30 bg-amber-500/5 text-xs text-amber-300">
+          <Info size={13} className="flex-shrink-0" />
+          <span>Some fields below (business type) were auto-inferred, not yet confirmed. Save to confirm.</span>
+        </div>
+      )}
+      <Field label="Business Type" hint="Determines which action types and agent types are valid for this business (e.g. Shopify actions require 'ecommerce').">
+        <select value={form.business_type} onChange={(e) => setForm({ ...form, business_type: e.target.value })} className="bp-select w-full">
+          {BUSINESS_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+        </select>
+      </Field>
+      <Field label="Operating Model" hint="Free-text: how this business actually operates day-to-day">
+        <input value={form.operating_model} onChange={(e) => setForm({ ...form, operating_model: e.target.value })} className="bp-input" placeholder="e.g. Local service business, appointment-based" />
+      </Field>
+      <Field label="Primary Domain" hint="Used to verify connectors (GA4, GSC, GBP, Shopify, ...) genuinely belong to this business">
+        <input value={form.primary_domain} onChange={(e) => setForm({ ...form, primary_domain: e.target.value })} className="bp-input" placeholder="example.com" />
+      </Field>
+      <Field label="Primary Brand">
+        <input value={form.primary_brand} onChange={(e) => setForm({ ...form, primary_brand: e.target.value })} className="bp-input" />
+      </Field>
+      <Field label="Allowed Agent Types" hint="Comma-separated agent roles allowed to work on this business. Empty = no restriction.">
+        <input value={form.allowed_agent_types} onChange={(e) => setForm({ ...form, allowed_agent_types: e.target.value })} className="bp-input" placeholder="e.g. seo-sentinel, merchant" />
+      </Field>
+      <Field label="Allowed Action Types" hint="Comma-separated action_types allowed for this business. Empty = no restriction (subject to the registry's own business-type rules).">
+        <input value={form.allowed_action_types} onChange={(e) => setForm({ ...form, allowed_action_types: e.target.value })} className="bp-input" placeholder="e.g. meta_update, content_draft" />
+      </Field>
+      <button onClick={() => void handleSave()} disabled={saving} className="bp-btn bp-btn-primary text-xs">
+        <Save size={13} />
+        {saving ? 'Saving…' : 'Save Business Profile'}
+      </button>
+    </Section>
+  )
+}
+
 function BusinessTab() {
   const currentBusiness = useStore((s) => s.currentBusiness) as Business | null
   const setCurrentBusiness = useStore((s) => s.setCurrentBusiness) as unknown as (b: Business) => void
@@ -464,6 +576,8 @@ function BusinessTab() {
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
       </Section>
+
+      {currentBusiness?.id && <BusinessTruthLayerSection businessId={currentBusiness.id} />}
     </div>
   )
 }
