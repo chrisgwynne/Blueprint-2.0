@@ -1225,6 +1225,19 @@ const STARTUP_MIGRATIONS: string[] = [
   `UPDATE action_registry SET display_name = 'Collection page update', volatility = 'medium', measurement_notes = 'Collection pages have SEO and UX components. SEO takes weeks, conversion rate impact visible sooner with sufficient traffic.' WHERE action_type = 'shopify_collection_update' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Google Business Profile post', volatility = 'high', measurement_notes = 'GBP posts have immediate but short-lived visibility. Views peak in first week. Measure within 7-14 days.' WHERE action_type = 'gbp_post' AND display_name IS NULL`,
   `UPDATE action_registry SET display_name = 'Shopify theme file edit', volatility = 'medium', measurement_notes = 'Theme changes take effect immediately. Conversion and UX metric changes need 7-14 days of traffic for statistical significance.' WHERE action_type = 'shopify_theme_edit' AND display_name IS NULL`,
+
+  // ─── Issue #22 fix: register github_review_deploy ────────────────────────
+  // executor.ts already implements this action type (draft-PR-or-review-issue
+  // only, never a blind deploy — see executeGithubReviewDeploy) and
+  // approval.ts/execution-safety.ts already classify it as dangerous/
+  // external_verifiable. It was never added to action_registry's seed list,
+  // so full-enforcement validateAction() (see the full-enforcement follow-up
+  // above) blocked every such task at approval with 'unknown_action_type'
+  // even though the executor could run it. This closes that gap.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval) VALUES
+    ('github_review_deploy', 'Review a code change and stage it for deployment — creates a draft PR or review issue only, never a blind merge/deploy.', '["github"]', '[]', 'external_verifiable', 'high', 0, 1)
+  `,
+  `UPDATE action_registry SET dispatched_by_executor = 1 WHERE action_type = 'github_review_deploy'`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {
