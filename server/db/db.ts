@@ -695,6 +695,17 @@ const STARTUP_MIGRATIONS: string[] = [
     expires_at DATETIME NOT NULL,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
+
+  // ─── Phase 2: BAP completeness (request/correlation IDs) ──────────────────
+  // Every BAP call is tagged with a request_id (unique per call) and a
+  // correlation_id (defaults to request_id, but a caller can supply its own
+  // via X-Correlation-Id to tie a multi-call workflow together) — see
+  // server/bap/route-helpers.ts. Persisting both onto the existing
+  // per-call bap_audit row (rather than a new table) keeps one row per BAP
+  // call as the source of truth for both timing/status and now traceability.
+  `ALTER TABLE bap_audit ADD COLUMN request_id TEXT`,
+  `ALTER TABLE bap_audit ADD COLUMN correlation_id TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_bap_audit_correlation ON bap_audit(correlation_id)`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

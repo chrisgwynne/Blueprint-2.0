@@ -189,6 +189,9 @@ const mountRoutes = async () => {
   const { default: oauthRoutes } = await import('./routes/oauth.js');
   const { default: connectorDataRoutes } = await import('./routes/connector-data.js');
   const { default: llmRoutes } = await import('./routes/llm.js');
+  // bap.ts mounts server/routes/bap-{goals,connectors,outcomes,runs,audit}.js
+  // internally as sub-routers (see its own docstring) — mounting them
+  // separately here too would duplicate bapAuth's work per request.
   const { default: bapRoutes } = await import('./routes/bap.js');
   const { default: publicApiRoutes } = await import('./routes/public-api.js');
   const { default: exportRoutes } = await import('./routes/export.js');

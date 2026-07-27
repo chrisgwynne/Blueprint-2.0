@@ -9,6 +9,7 @@ import { join } from 'path';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { checkAgentReadiness } from '../agents/readiness.js';
+import { STALE_THRESHOLDS_HOURS, getPollingInterval, computeConnectorStatus } from '../connectors/freshness.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -18,37 +19,6 @@ const router = Router();
 router.use(isAuthenticated);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-const STALE_THRESHOLDS_HOURS: Record<string, number> = {
-  pagespeed: 48,
-  gsc: 24,
-  ga4: 12,
-  shopify: 12,
-  uptimerobot: 2,
-  stripe: 24,
-  github: 24,
-  todoist: 2,
-  brevo: 24,
-  stannp: 72,
-  wordpress: 24,
-  kirby: 24,
-  'google-ads': 24,
-  gbp: 24,
-};
-
-const POLLING_DEFAULTS_MIN: Record<string, number> = {
-  pagespeed: 1440,
-  gsc: 720,
-  ga4: 360,
-  shopify: 360,
-  uptimerobot: 15,
-  todoist: 60,
-  brevo: 360,
-  stannp: 720,
-  wordpress: 360,
-  kirby: 720,
-  'google-ads': 360,
-};
 
 const CONNECTOR_LABELS: Record<string, string> = {
   gsc: 'Google Search Console',
@@ -66,25 +36,6 @@ const CONNECTOR_LABELS: Record<string, string> = {
   kirby: 'Kirby',
   'google-ads': 'Google Ads',
 };
-
-function getPollingInterval(connector: Record<string, unknown>): number {
-  try {
-    if (connector.config) {
-      const cfg = JSON.parse(connector.config as string) as Record<string, unknown>;
-      if (cfg.pollingIntervalMinutes) return Number(cfg.pollingIntervalMinutes);
-    }
-  } catch {}
-  return POLLING_DEFAULTS_MIN[connector.type as string] ?? 360;
-}
-
-function computeConnectorStatus(c: Record<string, unknown>, hoursSinceSync: number | null, threshold: number): string {
-  if (c.status === 'error') return 'error';
-  if (c.status === 'disconnected') return 'disconnected';
-  if (hoursSinceSync != null && hoursSinceSync > threshold) return 'stale';
-  if (c.status === 'connected' || c.status === 'syncing') return 'live';
-  if (c.status === 'stale') return 'stale';
-  return (c.status as string) || 'live';
-}
 
 function getAgentProfile(agentId: string): Record<string, unknown> | null {
   const path = join(AGENTS_DIR, agentId, 'profile.yaml');
