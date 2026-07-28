@@ -763,7 +763,18 @@ paths:
         - $ref: '#/components/parameters/BusinessIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202': { description: Proposed correction row; does not mutate capability state. }
+        '202': { description: Proposed correction row; does not mutate capability state. }  /businesses/{businessId}/corrections/{correctionId}/impacts:
+    get:
+      summary: List records affected by a confirmed correction
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - name: correctionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Correction impact rows scoped to the requested business. }
+        '404': { description: Correction not found for this business. }
   /businesses/{businessId}/revenue-paths:
     get:
       summary: List revenue paths

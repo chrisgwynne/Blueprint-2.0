@@ -168,6 +168,7 @@ Before proposing work, check capability/applicability state when an action depen
 If you believe Blueprint has a false business fact, propose a correction instead of acting on the assumption:
 
 - `POST /businesses/$BLUEPRINT_BUSINESS_ID/corrections/propose`
+- `GET /businesses/$BLUEPRINT_BUSINESS_ID/corrections/$CORRECTION_ID/impacts`
 
 A proposed correction does not mutate durable facts until a human confirms it. Treat `unknown` applicability as a verification task, not proof that the capability exists. Treat `blocked` or `failed` provider preflight evidence as authoritative for the current run; do not start LLM-dependent work until a later preflight passes or an approved fallback is recorded.
 

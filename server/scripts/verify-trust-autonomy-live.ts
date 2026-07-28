@@ -219,7 +219,9 @@ const correction = createCorrection({
 assert(Array.isArray(correction.impacts) && correction.impacts.length >= 2, 'Correction did not produce dependent impacts.');
 const corrections = await request(`/businesses/${businessId}/corrections`);
 assert(corrections.corrections.some((c: Record<string, unknown>) => c.id === correction.id), 'Confirmed correction is not visible through BAP read endpoint.');
-remember('human correction invalidation and BAP readback', { correction_id: correction.id, impacts: correction.impacts });
+const correctionImpacts = await request(`/businesses/${businessId}/corrections/${correction.id}/impacts`);
+assert(correctionImpacts.impacts.length >= 2, 'Correction impacts are not visible through BAP read endpoint.');
+remember('human correction invalidation and BAP impact readback', { correction_id: correction.id, impacts: correctionImpacts.impacts });
 
 const staleConnectorId = `conn_${generateId()}`;
 const staleSignalId = `sig_${generateId()}`;

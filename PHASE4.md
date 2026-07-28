@@ -19,13 +19,14 @@ Verification performed:
 - Focused trust engine tests: 9 pass
 - Action registry/task gate tests: 35 pass
 - BAP run tests: 11 pass
+- BAP trust correction-impact tests: 3 pass
 - Agent stale-run tests: 5 pass
 - Agent lifecycle tests: 22 pass in isolation
 - Agent activation tests: 5 pass
 - GitHub executor safety tests pass in isolation
 - Research connector executor tests: 6 pass
-- Full server suite: 626 pass, 0 fail, 2036 assertions
-- Live HTTP/BAP verifier: `bun server/scripts/verify-trust-autonomy-live.ts` passed against `http://127.0.0.1:4100`, including stale-to-open signal lifecycle re-evaluation through BAP readback
+- Full server suite: 629 pass, 0 fail, 2043 assertions
+- Live HTTP/BAP verifier: `bun server/scripts/verify-trust-autonomy-live.ts` passed against `http://127.0.0.1:4100`, including correction-impact readback and stale-to-open signal lifecycle re-evaluation through BAP readback
 
 Incomplete from the original broad goal:
 - No real external Hermes Kanban connector exists in this repository; Blueprint now exposes canonical BAP card projections for Hermes to mirror, but remote card creation remains outside this codebase.

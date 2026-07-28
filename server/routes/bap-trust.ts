@@ -17,6 +17,14 @@ router.post('/businesses/:businessId/capabilities', requirePermission('capabilit
 router.post('/businesses/:businessId/applicability/evaluate', requirePermission('capabilities:read'), (req: Request, res: Response) => res.json({ applicability: evaluateApplicability({ ...(req.body as Record<string, unknown>), businessId: String(req.params.businessId), candidateType: String((req.body as Record<string, unknown>).candidateType ?? 'task') }) }));
 router.get('/businesses/:businessId/suppressions', requirePermission('capabilities:read'), (req: Request, res: Response) => res.json({ suppressions: db.prepare('SELECT * FROM applicability_suppressions WHERE business_id = ? ORDER BY created_at DESC').all(String(req.params.businessId)) }));
 router.get('/businesses/:businessId/corrections', requirePermission('corrections:read'), (req: Request, res: Response) => res.json({ corrections: db.prepare('SELECT * FROM human_corrections WHERE business_id = ? ORDER BY created_at DESC').all(String(req.params.businessId)) }));
+router.get('/businesses/:businessId/corrections/:correctionId/impacts', requirePermission('corrections:read'), (req: Request, res: Response) => {
+  const businessId = String(req.params.businessId);
+  const correctionId = String(req.params.correctionId);
+  const correction = db.prepare('SELECT id, business_id, status FROM human_corrections WHERE id = ? AND business_id = ?').get(correctionId, businessId) as Record<string, unknown> | undefined;
+  if (!correction) return res.status(404).json({ error: `Correction '${correctionId}' not found for this business.` });
+  const impacts = db.prepare('SELECT * FROM correction_impacts WHERE business_id = ? AND correction_id = ? ORDER BY created_at DESC, id DESC').all(businessId, correctionId);
+  return res.json({ correction_id: correctionId, business_id: businessId, impacts });
+});
 router.post('/businesses/:businessId/corrections/propose', requirePermission('corrections:propose'), async (req: Request, res: Response) => {
   await withRequiredIdempotency(req, res, 'corrections:propose', async () => ({ status: 202, body: { correction: createCorrection({ ...(req.body as Record<string, unknown>), business_id: String(req.params.businessId), status: 'proposed' }, `bap:${((req as any).bapAgent?.id ?? 'agent')}`) } }));
 });
