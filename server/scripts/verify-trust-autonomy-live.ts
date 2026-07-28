@@ -2,6 +2,7 @@ import db, { generateId } from '../db/db.js';
 import { generateApiKey, hashApiKey, keyPrefix } from '../bap/auth.js';
 import {
   createCorrection,
+  evaluateSignalLifecycle,
   recordProviderPreflight,
   scheduleOutcomeMeasurements,
 } from '../trust/trust-engine.js';
@@ -25,6 +26,7 @@ const permissions = [
   'scorecards:read',
   'tasks:read',
   'tasks:propose',
+  'signals:read',
 ];
 
 type Check = { name: string; status: 'passed'; detail?: unknown };
@@ -61,6 +63,9 @@ function cleanupVerifierRecords() {
   db.prepare('DELETE FROM tasks WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM signal_lifecycle_events WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM signals WHERE business_id = ?').run(businessId);
+  const connectorIds = db.prepare('SELECT id FROM connectors WHERE business_id = ?').all(businessId) as Array<{ id: string }>;
+  for (const connector of connectorIds) db.prepare('DELETE FROM connector_syncs WHERE connector_id = ?').run(connector.id);
+  db.prepare('DELETE FROM connectors WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM correction_impacts WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM human_corrections WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM applicability_suppressions WHERE business_id = ?').run(businessId);
@@ -216,6 +221,26 @@ const corrections = await request(`/businesses/${businessId}/corrections`);
 assert(corrections.corrections.some((c: Record<string, unknown>) => c.id === correction.id), 'Confirmed correction is not visible through BAP read endpoint.');
 remember('human correction invalidation and BAP readback', { correction_id: correction.id, impacts: correction.impacts });
 
+const staleConnectorId = `conn_${generateId()}`;
+const staleSignalId = `sig_${generateId()}`;
+db.prepare(`INSERT INTO connectors (id, business_id, type, name, status, last_sync, created_at) VALUES (?, ?, 'gsc', 'Verifier GSC', 'stale', datetime('now','-3 days'), CURRENT_TIMESTAMP)`).run(staleConnectorId, businessId);
+db.prepare(`INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, description, data, status, lifecycle_status, confidence, created_at) VALUES (?, ?, ?, 'live-verifier-ranking-drop', 'risk', 'warning', 'Verifier ranking drop', 'Connector freshness should drive stale and reopen transitions.', '{}', 'open', 'open', 0.8, CURRENT_TIMESTAMP)`).run(staleSignalId, businessId, staleConnectorId);
+const staleResult = evaluateSignalLifecycle(businessId);
+assert(staleResult.changed >= 1, 'Signal lifecycle evaluator did not mark stale connector evidence stale.');
+let signalDetail = await request(`/signals/${staleSignalId}`);
+assert(signalDetail.signal.lifecycle_status === 'stale', 'BAP signal detail did not expose stale lifecycle status.');
+
+db.prepare("UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?").run(staleConnectorId);
+const reopenedResult = evaluateSignalLifecycle(businessId);
+assert(reopenedResult.changed >= 1, 'Signal lifecycle evaluator did not reopen signal after connector evidence became fresh.');
+signalDetail = await request(`/signals/${staleSignalId}`);
+assert(signalDetail.signal.lifecycle_status === 'open', 'BAP signal detail did not expose reopened lifecycle status.');
+remember('signal lifecycle stale-to-open re-evaluation with BAP readback', {
+  stale_changed: staleResult.changed,
+  reopened_changed: reopenedResult.changed,
+  lifecycle_status: signalDetail.signal.lifecycle_status,
+  lifecycle_reason: signalDetail.signal.lifecycle_reason,
+});
 const policyId = 'policy_live_trust_autonomy';
 db.prepare(`INSERT INTO measurement_policies (id, business_id, name, action_type, checkpoints_json, final_day, connector_freshness_hours, active, created_at, updated_at) VALUES (?, ?, 'Live verifier checkpoints', 'github_issue', '[0,1,7]', 7, 48, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(policyId, businessId);
 db.prepare('UPDATE tasks SET measurement_policy_id = ?, target_metric_baseline = NULL WHERE id = ?').run(policyId, validTask.task_id);

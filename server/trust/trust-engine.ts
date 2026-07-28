@@ -129,15 +129,33 @@ export function invalidateDependentEntities(businessId: string, correctionId: st
   return impacts;
 }
 export function evaluateSignalLifecycle(businessId?: string): { evaluated: number; changed: number } {
-  const params: unknown[] = []; const where = businessId ? 'WHERE s.business_id = ?' : ''; if (businessId) params.push(businessId);
+  const params: unknown[] = [];
+  const where = businessId ? 'WHERE s.business_id = ?' : '';
+  if (businessId) params.push(businessId);
   const rows = sqlPrepare(`SELECT s.id, s.business_id, s.connector_id, s.created_at, s.lifecycle_status, c.status AS connector_status, c.last_sync FROM signals s LEFT JOIN connectors c ON c.id = s.connector_id ${where}`).all(...params) as Array<Record<string, unknown>>;
   let changed = 0;
   for (const s of rows) {
-    const current = String(s.lifecycle_status ?? 'open'); if (['resolved', 'invalidated', 'superseded'].includes(current)) continue;
-    const lastSync = s.last_sync ? new Date(String(s.last_sync)).getTime() : 0; const ageHours = lastSync ? (Date.now() - lastSync) / 3600000 : null;
-    if (s.connector_status === 'stale' || s.connector_status === 'disconnected' || s.connector_status === 'error' || (ageHours != null && ageHours > 48)) { transitionSignalLifecycle(String(s.id), 'stale', 'Connector evidence is no longer fresh enough for actionable ranking.', { evidenceStatus: 'observed' }); changed++; continue; }
+    const current = String(s.lifecycle_status ?? 'open');
+    if (['resolved', 'invalidated', 'superseded'].includes(current)) continue;
+    const lastSync = s.last_sync ? new Date(String(s.last_sync)).getTime() : 0;
+    const ageHours = lastSync ? (Date.now() - lastSync) / 3600000 : null;
+    const connectorStatus = String(s.connector_status ?? '');
+    const connectorStale = connectorStatus === 'stale' || connectorStatus === 'disconnected' || connectorStatus === 'error' || (ageHours != null && ageHours > 48);
+    if (connectorStale) {
+      transitionSignalLifecycle(String(s.id), 'stale', 'Connector evidence is no longer fresh enough for actionable ranking.', { evidenceStatus: 'observed' });
+      changed++;
+      continue;
+    }
+    if (current === 'stale' && connectorStatus === 'connected' && ageHours != null && ageHours <= 48) {
+      transitionSignalLifecycle(String(s.id), 'open', 'Connector evidence is fresh again; signal reopened for actionable re-evaluation.', { evidenceStatus: 'observed' });
+      changed++;
+      continue;
+    }
     const newer = sqlPrepare(`SELECT id FROM signals WHERE business_id = ? AND rule_id = (SELECT rule_id FROM signals WHERE id = ?) AND id != ? AND created_at > ? ORDER BY created_at DESC LIMIT 1`).get(s.business_id, s.id, s.id, s.created_at) as { id: string } | undefined;
-    if (newer) { transitionSignalLifecycle(String(s.id), 'superseded', `Newer signal ${newer.id} describes the same condition.`, { relatedSignalId: newer.id, evidenceStatus: 'observed' }); changed++; }
+    if (newer) {
+      transitionSignalLifecycle(String(s.id), 'superseded', `Newer signal ${newer.id} describes the same condition.`, { relatedSignalId: newer.id, evidenceStatus: 'observed' });
+      changed++;
+    }
   }
   return { evaluated: rows.length, changed };
 }

@@ -40,6 +40,21 @@ describe('Phase 4 trust engine', () => {
     expect(result.changed).toBe(1);
     expect((db.prepare("SELECT lifecycle_status FROM signals WHERE id = 'sig_stale'").get() as any).lifecycle_status).toBe('stale');
   });
+  test('signal lifecycle reopens stale signals when connector evidence becomes fresh again', () => {
+    db.prepare("INSERT INTO connectors (id, business_id, type, name, status, last_sync) VALUES ('conn_reopen', ?, 'gsc', 'GSC', 'stale', datetime('now','-3 days'))").run(BIZ);
+    db.prepare("INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, status, lifecycle_status) VALUES ('sig_reopen', ?, 'conn_reopen', 'drop', 'risk', 'warning', 'Ranking drop', 'open', 'open')").run(BIZ);
+    expect(evaluateSignalLifecycle(BIZ).changed).toBe(1);
+    expect((db.prepare("SELECT lifecycle_status FROM signals WHERE id = 'sig_reopen'").get() as any).lifecycle_status).toBe('stale');
+
+    db.prepare("UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP WHERE id = 'conn_reopen'").run();
+    expect(evaluateSignalLifecycle(BIZ).changed).toBe(1);
+    expect((db.prepare("SELECT lifecycle_status, lifecycle_reason FROM signals WHERE id = 'sig_reopen'").get() as any)).toMatchObject({
+      lifecycle_status: 'open',
+      lifecycle_reason: 'Connector evidence is fresh again; signal reopened for actionable re-evaluation.',
+    });
+    const transitions = db.prepare("SELECT from_status, to_status FROM signal_lifecycle_events WHERE signal_id = 'sig_reopen' ORDER BY created_at ASC").all() as Array<Record<string, unknown>>;
+    expect(transitions.map((t) => `${t.from_status}->${t.to_status}`)).toEqual(['open->stale', 'stale->open']);
+  });
 
   test('risk tier escalates with scope and exposure', () => {
     expect(calculateApprovalTier({ actionType: 'report', baseTier: 'green' }).tier).toBe('green');
