@@ -1,12 +1,14 @@
 import db, { generateId, audit } from '../db/db.js';
 import { enqueueExecutionJob, getActiveJobForTask, cancelJob as cancelExecutionJob } from './execution-jobs.js';
 import { recordDecision } from '../brain/decision-memory.js';
-import { validateAction } from './action-registry.js';
+import { getActionRegistryEntry, validateAction, validatePayloadAgainstSchema } from './action-registry.js';
 import { getBusinessProfile } from '../business/business-profile.js';
 import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
+import type { ValidationIssue } from '../types/action-registry.js';
+import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export type TaskStatus =
   | 'proposed'
@@ -78,7 +80,7 @@ interface UpdateStatusMetadata {
   [key: string]: unknown;
 }
 
-// ── Internals ────────────────────────────────────────────────────────────────
+// â”€â”€ Internals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 // Lazy import for webhook dispatch (avoids circular dependency at startup)
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -95,14 +97,14 @@ function fireWebhook(event: string, data: unknown): void {
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   proposed: ['approved', 'rejected', 'cancelled'],
-  approved: ['executing', 'rejected', 'cancelled'],
+  approved: ['executing', 'rejected', 'cancelled', 'manual_review'],
   // 'approved' here is deliberately narrow: it's ONLY used by
   // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
   // (its job's lease expired mid-execution, and the recovery classifier
-  // determined a fresh attempt is safe — see execution-safety.ts) back at
+  // determined a fresh attempt is safe â€” see execution-safety.ts) back at
   // the exact state executeTask()'s own approved-only guard requires
   // before it will run at all. No other code path performs this
-  // transition — a normal 'executing' task cannot be pushed back to
+  // transition â€” a normal 'executing' task cannot be pushed back to
   // 'approved' by an API call.
   executing: ['complete', 'failed', 'draft_ready', 'blocked', 'manual_review', 'approved'],
   draft_ready: ['complete', 'failed'], // human reviews the draft, then marks complete or rejects
@@ -114,7 +116,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   deferred: ['proposed', 'rejected'], // Brain may defer; resurface on schedule
   cancelled: [],
   // A crash-recovery-flagged ambiguous outcome (execution-jobs.ts:markManualReview)
-  // — a human must look at the actual external system and tell Blueprint
+  // â€” a human must look at the actual external system and tell Blueprint
   // what happened before anything automated touches this task again.
   manual_review: ['proposed', 'cancelled', 'failed'],
 };
@@ -129,6 +131,12 @@ function safeJSON<T>(raw: unknown, fallback: T): T {
   }
 }
 
+function createProposalValidationError(message: string, issues: ValidationIssue[]): Error & { issues: ValidationIssue[]; statusCode: number } {
+  const err = new Error(message) as Error & { issues: ValidationIssue[]; statusCode: number };
+  err.issues = issues;
+  err.statusCode = 400;
+  return err;
+}
 function parseRow(row: Record<string, unknown> | null): TaskRow | null {
   if (!row) return null;
   return {
@@ -140,7 +148,7 @@ function parseRow(row: Record<string, unknown> | null): TaskRow | null {
   };
 }
 
-// ── Exports ───────────────────────────────────────────────────────────────────
+// â”€â”€ Exports â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 /**
  * Create a new task.
@@ -170,12 +178,67 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (!title) throw new Error('title is required.');
   if (!proposed_by) throw new Error('proposed_by is required.');
 
-  // goal_id is a real FK (Phase 3) — reject silently-wrong linkage rather
+  // goal_id is a real FK (Phase 3) â€” reject silently-wrong linkage rather
   // than storing a dangling reference to another business's goal.
   if (goal_id) {
     const goal = db.prepare('SELECT id FROM goals WHERE id = ? AND business_id = ?').get(goal_id, business_id);
     if (!goal) throw new Error(`Goal '${goal_id}' not found for this business.`);
   }
+
+  if (action_type) {
+    const entry = getActionRegistryEntry(action_type);
+    if (!entry || entry.active === false) {
+      const issues: ValidationIssue[] = [{
+        code: 'unknown_action_type',
+        message: `Action type '${action_type}' is not registered in the Typed Action Registry.`,
+      }];
+      createSystemIssue({
+        business_id,
+        issue_type: 'action_validation_failure',
+        severity: 'warning',
+        title: `Task action '${action_type}' cannot be proposed`,
+        description: issues[0]!.message,
+        related_action_type: action_type,
+        metadata: { stage: 'proposal', issues },
+      });
+      throw createProposalValidationError(`Task action '${action_type}' cannot be proposed: ${issues[0]!.message}`, issues);
+    }
+
+    const payloadIssues = validatePayloadAgainstSchema(entry.payload_schema, action_payload ?? {});
+    if (payloadIssues.length > 0) {
+      const issues: ValidationIssue[] = [{
+        code: 'payload_schema_mismatch',
+        message: `action_type '${action_type}' payload does not match its schema: ${payloadIssues.map((issue) => issue.message).join('; ')}`,
+      }];
+      createSystemIssue({
+        business_id,
+        issue_type: 'action_validation_failure',
+        severity: 'warning',
+        title: `Task action '${action_type}' payload cannot be proposed`,
+        description: issues[0]!.message,
+        related_action_type: action_type,
+        metadata: { stage: 'proposal', issues, payload_issues: payloadIssues },
+      });
+      throw createProposalValidationError(`Task action '${action_type}' cannot be proposed: ${issues[0]!.message}`, issues);
+    }
+  }
+
+  const applicability = evaluateApplicability({
+    businessId: business_id,
+    candidateType: 'task',
+    candidateKey: action_type ?? title,
+    actionType: action_type,
+    title,
+    description,
+    payload: action_payload,
+    sourceType: 'task',
+    recordSuppression: true,
+  });
+  if (applicability.status === 'not_applicable') {
+    throw new Error(`Task is not actionable: ${applicability.reason}`);
+  }
+  const risk = calculateApprovalTier({ actionType: action_type, payload: action_payload, baseTier: trust_tier, agentConfidence: confidence, applicabilityStatus: applicability.status });
+  const revenue = explainRevenueRelevance(business_id, { title, description, action_type });
 
   const id = generateId();
   const now = new Date().toISOString();
@@ -199,7 +262,7 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
     assigned_to,
     action_type,
     JSON.stringify(action_payload),
-    trust_tier,
+    risk.tier,
     priority,
     confidence,
     estimated_impact,
@@ -211,7 +274,11 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   );
 
   const created = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
-  audit(business_id, 'task', id, 'create', proposed_by, null, created);
+  if (created) {
+    db.prepare('UPDATE tasks SET applicability_status = ?, applicability_reason = ?, approval_risk_evidence = ?, expected_outcome = ?, updated_at = ? WHERE id = ?')
+      .run(applicability.status, applicability.reason, JSON.stringify({ ...risk.evidence, revenue }), revenue.explanation, now, id);
+  }
+  audit(business_id, 'task', id, 'create', proposed_by, null, created, { applicability, risk, revenue });
 
   // Auto-populate target_metric for outcome tracking, then generate the
   // counterfactual estimate ("cost of inaction") so the approver sees it
@@ -228,7 +295,7 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
     }).catch(() => {});
   } catch {}
 
-  // Brain — fire-and-forget conflict detection against goals + action windows
+  // Brain â€” fire-and-forget conflict detection against goals + action windows
   (async () => {
     try {
       const { runTaskConflictCheck } = await import('../brain/conflict-engine.js');
@@ -314,7 +381,7 @@ export function updateTaskStatus(
   values.push(id);
   db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 
-  // Brain — when a task completes, record action memory so the Restraint
+  // Brain â€” when a task completes, record action memory so the Restraint
   // system knows the measurement window is in flight.
   if (newStatus === 'complete' || newStatus === 'verified') {
     try {
@@ -322,7 +389,8 @@ export function updateTaskStatus(
         try {
           const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow;
           m.recordActionMemory(task as unknown as Record<string, unknown>);
-          // Smart spacing — defer related pending tasks until the window closes
+          try { scheduleOutcomeMeasurements(id); } catch (err) { console.warn('[outcomes] phase4 scheduling failed:', (err as Error).message); }
+          // Smart spacing â€” defer related pending tasks until the window closes
           import('../jobs/constraint-check.js').then((cc) => {
             try { cc.applySmartSpacing(task); } catch {}
           }).catch(() => {});
@@ -377,16 +445,16 @@ function triggerWorkerTick(): void {
 /**
  * Approve a task.
  *
- * This is THE canonical approval path — the dashboard, BAP, Telegram, and
+ * This is THE canonical approval path â€” the dashboard, BAP, Telegram, and
  * every other surface all call this one function and nothing else (no
  * separate executeTask() call). It atomically:
  *   1. Compare-and-swaps status 'proposed' -> 'approved' (the WHERE
  *      status='proposed' clause is what makes this safe under concurrent
- *      approval attempts — e.g. dashboard and Telegram approving the same
+ *      approval attempts â€” e.g. dashboard and Telegram approving the same
  *      task at the same moment: exactly one UPDATE matches a row, the
  *      other sees changes=0 and reports "already approved/not proposed").
  *   2. Bumps the task's version and snapshots action_payload into
- *      approved_payload_snapshot — the execution job created in the same
+ *      approved_payload_snapshot â€” the execution job created in the same
  *      transaction is bound to this exact version/snapshot, so nothing
  *      that happens to the live task row afterwards can change what gets
  *      executed.
@@ -394,7 +462,7 @@ function triggerWorkerTick(): void {
  *      partial index, not just this function's own logic).
  * Trust-tier/approval-mode no longer branches into a separate immediate-
  * execution path (green+auto used to call updateTaskStatus(...,'executing',...)
- * directly here) — every approved task goes through the same queued job,
+ * directly here) â€” every approved task goes through the same queued job,
  * durable and crash-recoverable. The execution worker is woken immediately
  * afterwards for low latency, but is not relied upon for correctness: the
  * scheduled worker tick picks up any job the immediate wake-up call missed
@@ -405,22 +473,22 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   if (!existingRaw) throw new Error(`Task '${id}' not found.`);
   const existing = parseRow(existingRaw)!;
 
-  // ─── Typed Action & Executor Registry validation gate ──────────────────────
+  // â”€â”€â”€ Typed Action & Executor Registry validation gate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // "Before a task can become executable Blueprint must validate: action
   // exists, executor exists, payload matches schema, business type
   // supports action, required connectors exist, connector confidence is
   // acceptable, permissions exist, executor is healthy." Every one of
-  // those is a hard block here — this runs at the propose→approve
+  // those is a hard block here â€” this runs at the proposeâ†’approve
   // transition (not task creation) since gating creation would break
   // fixtures that build tasks before any connector exists; approval is
   // the actual "becomes executable" moment the spec means. A null
   // action_type (manual to-do) always passes untouched.
   const businessProfile = getBusinessProfile(existing.business_id);
 
-  // ─── Business Profile automation_policy: daily autonomous-task cap ─────────
+  // â”€â”€â”€ Business Profile automation_policy: daily autonomous-task cap â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // "max_autonomous_tasks_per_day" caps how many tasks Blueprint approves
   // through non-human channels (BAP, Telegram, timed auto-approval) in a
-  // calendar day — it does not cap what a human explicitly approves
+  // calendar day â€” it does not cap what a human explicitly approves
   // through the dashboard, which is always allowed to proceed.
   const dailyCap = businessProfile?.automation_policy?.max_autonomous_tasks_per_day;
   if (dailyCap != null && !approvedBy.startsWith('dashboard:')) {
@@ -434,7 +502,7 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
         business_id: existing.business_id,
         issue_type: 'automation_policy_daily_cap_reached',
         severity: 'warning',
-        title: `Task "${existing.title}" cannot be auto-approved — daily autonomous task cap reached`,
+        title: `Task "${existing.title}" cannot be auto-approved â€” daily autonomous task cap reached`,
         description: `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
         related_task_id: id,
         related_action_type: existing.action_type,
@@ -446,6 +514,27 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       );
     }
   }
+
+  const approvalApplicability = evaluateApplicability({
+    businessId: existing.business_id,
+    candidateType: 'task_approval',
+    candidateKey: existing.action_type ?? existing.title,
+    actionType: existing.action_type,
+    title: existing.title,
+    description: existing.description,
+    payload: existing.action_payload,
+    sourceType: 'task_approval',
+    sourceId: id,
+    recordSuppression: true,
+  });
+  if (approvalApplicability.status === 'not_applicable') {
+    db.prepare('UPDATE tasks SET applicability_status = ?, applicability_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+      .run(approvalApplicability.status, approvalApplicability.reason, id);
+    throw new Error(`Task cannot be approved: ${approvalApplicability.reason}`);
+  }
+  const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status });
+  db.prepare('UPDATE tasks SET trust_tier = ?, approval_risk_evidence = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+    .run(approvalRisk.tier, JSON.stringify(approvalRisk.evidence), id);
 
   const connectors = db.prepare('SELECT * FROM connectors WHERE business_id = ?').all(existing.business_id) as Connector[];
   const actionValidation = validateAction({
@@ -462,7 +551,7 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       business_id: existing.business_id,
       issue_type: 'action_validation_failure',
       severity: 'error',
-      title: `Task "${existing.title}" cannot be approved — action validation failed`,
+      title: `Task "${existing.title}" cannot be approved â€” action validation failed`,
       description: actionValidation.issues.map((i) => i.message).join(' '),
       related_task_id: id,
       related_action_type: existing.action_type,
@@ -488,7 +577,7 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     `).run(approvedBy, now, now, JSON.stringify(existing.action_payload ?? {}), id);
 
     if (!result.changes) {
-      // CAS lost — re-check current status for an accurate error message.
+      // CAS lost â€” re-check current status for an accurate error message.
       const current = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus };
       throw new Error(`Cannot approve task in status '${current.status}'. Task must be 'proposed'.`);
     }
@@ -526,7 +615,7 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
  * Cancel a task that hasn't started executing yet (proposed/approved), or
  * whose execution job is sitting in manual_review awaiting a human
  * decision. A task already 'executing' cannot be cancelled through this
- * path — see execution-jobs.ts's job states for why (it may be mid
+ * path â€” see execution-jobs.ts's job states for why (it may be mid
  * external-write; cancelling blindly would risk exactly the ambiguity
  * this whole framework exists to avoid).
  */

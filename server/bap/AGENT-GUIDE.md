@@ -79,11 +79,25 @@ PATCH /api/bap/v1/signals/:id               — update status
 
 ### Tasks
 ```
-GET   /api/bap/v1/businesses/:id/tasks      — list tasks
-POST  /api/bap/v1/businesses/:id/tasks      — propose task
+GET   /api/bap/v1/businesses/:id/tasks      - list tasks
+GET   /api/bap/v1/businesses/:id/kanban-cards - canonical Hermes card sync feed
+GET   /api/bap/v1/tasks/:id/kanban-card      - canonical Hermes card projection
+POST  /api/bap/v1/businesses/:id/tasks      - propose task; returns 400 with structured `issues` when action schema/applicability blocks the proposal
 PATCH /api/bap/v1/tasks/:id                 — approve/reject
 ```
 
+### Trust
+```
+GET  /api/bap/v1/businesses/:id/capabilities                 - capability registry
+POST /api/bap/v1/businesses/:id/applicability/evaluate       - applicability status and suppression reason
+GET  /api/bap/v1/businesses/:id/suppressions                 - active applicability suppressions
+GET  /api/bap/v1/businesses/:id/corrections                  - correction history
+GET  /api/bap/v1/businesses/:id/corrections/:correctionId/impacts - affected records from a correction
+POST /api/bap/v1/businesses/:id/corrections/propose          - propose a correction for human review
+GET  /api/bap/v1/businesses/:id/revenue-paths                - revenue paths
+GET  /api/bap/v1/businesses/:id/scorecards                   - agent scorecard snapshot
+GET  /api/bap/v1/provider-preflight                          - provider/model preflight cache
+```
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB

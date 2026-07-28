@@ -38,6 +38,7 @@ const { createTask, approveTask } = await import('./task-queue.js');
 const { enqueueExecutionJob, getExecutionJob } = await import('./execution-jobs.js');
 const { getActionRegistryEntry } = await import('./action-registry.js');
 const { saveProviderCredentials } = await import('../lib/llm-providers.js');
+const { listSystemIssues } = await import('../system/system-issues.js');
 
 const BIZ = 'biz_research_connector_test';
 
@@ -76,6 +77,7 @@ afterEach(() => {
   db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM system_issues WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(BIZ);
+  db.prepare(`DELETE FROM outcome_measurement_runs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
 });
 
@@ -90,15 +92,19 @@ describe('research_connector — payload_schema enforcement (issue #29)', () => 
     });
   });
 
-  test('a task with no description is blocked at approval, before it ever reaches the executor', () => {
-    const task = createTask({
+  test('a task with no description is blocked at proposal, before it ever reaches approval or the executor', () => {
+    expect(() => createTask({
       business_id: BIZ, title: 'Research a connector', proposed_by: 'test',
       action_type: 'research_connector', action_payload: {},
       approval_mode: 'requires_approval',
-    })!;
-    expect(() => approveTask(task.id, 'dashboard:test')).toThrow(/payload_schema_mismatch|description/i);
-    const reloaded = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as any;
-    expect(reloaded.status).toBe('proposed'); // never advanced to approved
+    })).toThrow(/cannot be proposed|payload_schema_mismatch|description/i);
+
+    const tasks = db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE business_id = ?').get(BIZ) as { count: number };
+    expect(tasks.count).toBe(0);
+
+    const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
+    expect(issues.some((issue) => (issue.metadata as any)?.stage === 'proposal'
+      && (issue.metadata as any)?.issues?.some((validation: any) => validation.code === 'payload_schema_mismatch'))).toBe(true);
   });
 
   test('a task with a valid description passes payload validation and approves', () => {

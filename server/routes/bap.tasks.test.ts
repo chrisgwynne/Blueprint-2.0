@@ -64,13 +64,13 @@ beforeAll(async () => {
   db.prepare(`
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
     VALUES (?, 'Tasks Test Agent A', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
-  `).run('agt_tasks_a', await hashApiKey(keyA), keyPrefix(keyA), JSON.stringify(['tasks:read', 'tasks:approve']), JSON.stringify([BIZ_A]));
+  `).run('agt_tasks_a', await hashApiKey(keyA), keyPrefix(keyA), JSON.stringify(['tasks:read', 'tasks:approve', 'tasks:propose']), JSON.stringify([BIZ_A]));
 
   keyAllPerms = generateApiKey();
   db.prepare(`
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
     VALUES (?, 'Tasks Test Agent AllPerms', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
-  `).run('agt_tasks_allperms', await hashApiKey(keyAllPerms), keyPrefix(keyAllPerms), JSON.stringify(['tasks:read', 'tasks:approve']), JSON.stringify([BIZ_A, BIZ_B]));
+  `).run('agt_tasks_allperms', await hashApiKey(keyAllPerms), keyPrefix(keyAllPerms), JSON.stringify(['tasks:read', 'tasks:approve', 'tasks:propose']), JSON.stringify([BIZ_A, BIZ_B]));
 
   const app = express();
   app.use(express.json());
@@ -86,6 +86,10 @@ afterAll(() => {
   db.prepare(`DELETE FROM execution_jobs WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id IN (?, ?))`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM tasks WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM applicability_suppressions WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM business_capabilities WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM goals WHERE business_id IN (?, ?) AND title LIKE 'Kanban%'`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM measurement_policies WHERE id = 'policy_kanban_test'`).run();
   db.prepare(`DELETE FROM signals WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM idempotency_keys WHERE agent_id IN ('agt_tasks_a', 'agt_tasks_allperms')`).run();
   db.prepare(`DELETE FROM bap_audit WHERE agent_id IN ('agt_tasks_a', 'agt_tasks_allperms')`).run();
@@ -211,6 +215,101 @@ describe('GET /businesses/:id/tasks — search, filters, sort, pagination', () =
   });
 });
 
+describe('POST /businesses/:id/tasks - applicability errors', () => {
+  test('returns 400 when applicability blocks an inapplicable proposal', async () => {
+    db.prepare(`
+      INSERT INTO business_capabilities (id, business_id, capability_key, display_name, status, evidence_source, confidence, created_at, updated_at)
+      VALUES (?, ?, 'google_merchant_center', 'Google Merchant Center', 'unavailable', 'test', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(business_id, capability_key) DO UPDATE SET status = 'unavailable', updated_at = CURRENT_TIMESTAMP
+    `).run(generateId(), BIZ_A);
+
+    const { status, body } = await post(`/api/bap/v1/businesses/${BIZ_A}/tasks`, {
+      title: 'Update Merchant Center feed',
+      description: 'This Google Merchant Center task should be blocked by applicability.',
+      action_type: 'content_draft',
+      action_payload: { topic: 'Google Merchant Center feed' },
+    }, { 'BAP-Key': keyA, 'Idempotency-Key': generateId() });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain('not actionable');
+    const suppression = db.prepare(`SELECT reason FROM applicability_suppressions WHERE business_id = ? AND capability_key = 'google_merchant_center' AND status = 'active'`).get(BIZ_A) as { reason: string } | undefined;
+    expect(suppression?.reason).toContain('google_merchant_center');
+  });
+
+
+  test('returns structured 400 issues when an action payload fails proposal-time schema validation', async () => {
+    const title = `Incomplete connector research ${generateId()}`;
+    const { status, body } = await post(`/api/bap/v1/businesses/${BIZ_A}/tasks`, {
+      title,
+      description: 'Missing required research_connector description in action_payload.',
+      action_type: 'research_connector',
+      action_payload: {},
+    }, { 'BAP-Key': keyA, 'Idempotency-Key': generateId() });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain('cannot be proposed');
+    expect(body.issues.some((issue: any) => issue.code === 'payload_schema_mismatch')).toBe(true);
+
+    const created = db.prepare('SELECT id FROM tasks WHERE business_id = ? AND title = ?').get(BIZ_A, title);
+    expect(created).toBeNull();
+  });
+});
+describe('Hermes Kanban card contract', () => {
+  test('GET /tasks/:taskId/kanban-card returns the canonical card handoff fields', async () => {
+    const signalId = generateId();
+    const goalId = generateId();
+    db.prepare(`INSERT INTO signals (id, business_id, rule_id, type, severity, title, status, created_at) VALUES (?, ?, 'kanban', 'anomaly', 'warning', 'Kanban signal', 'open', CURRENT_TIMESTAMP)`).run(signalId, BIZ_A);
+    db.prepare(`INSERT INTO goals (id, business_id, title, status, created_at, updated_at) VALUES (?, ?, 'Kanban revenue goal', 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(goalId, BIZ_A);
+    const taskId = insertTask({ title: 'Kanban card fixture', signal_id: signalId, action_type: 'github_pr', priority: 'p1', confidence: 0.91 });
+    db.prepare(`INSERT OR REPLACE INTO measurement_policies (id, business_id, name, checkpoints_json, final_day, active) VALUES ('policy_kanban_test', ?, 'Kanban test policy', '[0,7]', 7, 1)`).run(BIZ_A);
+    db.prepare(`UPDATE tasks SET goal_id = ?, assigned_to = 'hermes', trust_tier = 'orange', expected_outcome = 'Draft PR ready for human review', measurement_policy_id = 'policy_kanban_test', approval_risk_evidence = ?, action_payload = ? WHERE id = ?`).run(
+      goalId,
+      JSON.stringify({ calculated_tier: 'orange', financial_exposure_gbp: 0 }),
+      JSON.stringify({ executor: 'github', acceptance_criteria: ['draft PR opened', 'tests listed'], expected_outcome: 'Draft PR ready for human review' }),
+      taskId,
+    );
+
+    const { status, body } = await get(`/api/bap/v1/tasks/${taskId}/kanban-card`, { 'BAP-Key': keyA });
+
+    expect(status).toBe(200);
+    expect(body.card).toMatchObject({
+      blueprint_task_id: taskId,
+      business_id: BIZ_A,
+      goal_id: goalId,
+      signal_id: signalId,
+      approval_tier: 'orange',
+      approval_state: 'awaiting_approval',
+      executor: 'github',
+      expected_outcome: 'Draft PR ready for human review',
+      kanban_column: 'backlog',
+    });
+    expect(body.card.acceptance_criteria).toEqual(['draft PR opened', 'tests listed']);
+    expect(body.card.measurement_policy.id).toBe('policy_kanban_test');
+    expect(body.card.measurement_policy.checkpoints_json).toEqual([0, 7]);
+  });
+
+  test('GET /businesses/:id/kanban-cards lists business-scoped cards with pagination and status filters', async () => {
+    db.prepare(`DELETE FROM tasks WHERE business_id = ? AND title LIKE 'Kanban feed%'`).run(BIZ_A);
+    insertTask({ title: 'Kanban feed proposed', status: 'proposed' });
+    insertTask({ title: 'Kanban feed approved', status: 'approved' });
+    insertTask({ title: 'Kanban feed cancelled', status: 'cancelled' });
+
+    const { status, body } = await get(`/api/bap/v1/businesses/${BIZ_A}/kanban-cards?status=proposed,approved&limit=10`, { 'BAP-Key': keyA });
+
+    expect(status).toBe(200);
+    expect(body.cards.every((c: any) => ['proposed', 'approved'].includes(c.task_status))).toBe(true);
+    expect(body.cards.some((c: any) => c.title === 'Kanban feed proposed')).toBe(true);
+    expect(body.cards.some((c: any) => c.title === 'Kanban feed approved')).toBe(true);
+    expect(body.cards.some((c: any) => c.title === 'Kanban feed cancelled')).toBe(false);
+    expect(body.pagination.limit).toBe(10);
+  });
+
+  test('kanban-card detail is tenant-isolated', async () => {
+    const taskId = insertTask({ business_id: BIZ_B, title: 'Kanban B private task' });
+    const { status } = await get(`/api/bap/v1/tasks/${taskId}/kanban-card`, { 'BAP-Key': keyA });
+    expect(status).toBe(403);
+  });
+});
 describe('PATCH /tasks/:taskId — cancel action', () => {
   test('cancels a proposed task', async () => {
     const taskId = insertTask({ title: 'Cancel me' });
@@ -263,7 +362,7 @@ describe('Concurrent reads', () => {
   test('20 simultaneous GET /tasks/:id detail requests for the same task all return identical data', async () => {
     const taskId = insertTask({ title: 'Concurrent detail fixture' });
     const responses = await Promise.all(
-      Array.from({ length: 20 }, () => get(`/api/bap/v1/tasks/${taskId}`, { 'BAP-Key': keyA }))
+      Array.from({ length: 20 }, () => get(`/api/bap/v1/tasks/${taskId}`, { 'BAP-Key': keyAllPerms }))
     );
     for (const r of responses) {
       expect(r.status).toBe(200);

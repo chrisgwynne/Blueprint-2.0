@@ -26,6 +26,40 @@ import {
 import { getInstanceId } from '../jobs/scheduler-lock.js';
 
 const MAX_JOBS_PER_TICK = 10;
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
+  return `{${entries.map(([key, val]) => `${JSON.stringify(key)}:${stableStringify(val)}`).join(',')}}`;
+}
+
+function payloadChangedFromApproval(task: ReturnType<typeof getTask>, job: ExecutionJobRow): { changed: boolean; reason?: string; evidence?: Record<string, unknown> } {
+  if (!task) return { changed: true, reason: 'Task no longer exists.' };
+  if (Number(task.version ?? 0) !== Number(job.task_version ?? 0)) {
+    return {
+      changed: true,
+      reason: `Task version changed after approval (approved version ${job.task_version}, current version ${task.version}).`,
+      evidence: { approved_version: job.task_version, current_version: task.version },
+    };
+  }
+  if (!task.approved_payload_snapshot) {
+    return {
+      changed: true,
+      reason: 'Task has no approved payload snapshot; reapproval is required before execution.',
+      evidence: { current_action_payload: task.action_payload },
+    };
+  }
+  const approved = stableStringify(task.approved_payload_snapshot);
+  const current = stableStringify(task.action_payload ?? {});
+  if (approved !== current) {
+    return {
+      changed: true,
+      reason: 'Task action payload changed after approval; reapproval is required before execution.',
+      evidence: { approved_payload_snapshot: task.approved_payload_snapshot, current_action_payload: task.action_payload },
+    };
+  }
+  return { changed: false };
+}
 
 /**
  * Claim and run up to MAX_JOBS_PER_TICK eligible jobs. Safe to call
@@ -58,6 +92,19 @@ async function runOneJob(job: ExecutionJobRow, owner: string): Promise<void> {
   // here too in case of any other path), or somehow moved on, don't run.
   if (task.status !== 'approved') {
     failJob(job.id, `Task status is '${task.status}', expected 'approved' — not executing.`);
+    return;
+  }
+
+  const integrity = payloadChangedFromApproval(task, job);
+  if (integrity.changed) {
+    try {
+      updateTaskStatus(task.id, 'manual_review', 'system:execution-integrity', {
+        outcome: integrity.reason,
+        outcome_data: integrity.evidence ?? {},
+        reason: integrity.reason,
+      });
+    } catch {}
+    markManualReview(job.id, integrity.reason ?? 'Approved task changed before execution; reapproval is required.');
     return;
   }
 

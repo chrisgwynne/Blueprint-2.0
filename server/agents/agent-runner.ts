@@ -10,12 +10,13 @@ import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest, DANGEROUS_ACTION_TYPES } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
-import { runLLM, resolveProfileLLM, getFallbackLLM } from '../lib/llm-providers.js';
+import { runLLM, resolveProfileLLM, getFallbackLLM, performProviderPreflight } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
 import type { InboxEntry } from './agent-inbox.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 import { detectAnomalousOutput } from '../lib/security-monitor.js';
 import { SecurityError } from '../lib/outbound-allowlist.js';
+import { checkRunCancellation, markRunCancelled, recordProviderPreflight, recordRunEvent, updateRunHeartbeat } from '../trust/trust-engine.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -297,10 +298,11 @@ export function recoverStaleAgentRuns(): { markedStale: number } {
 
   for (const run of stale) {
     db.prepare(`
-      UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+      UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?
       WHERE id = ? AND status = 'running'
     `).run(
       `Run exceeded the maximum duration (${timeoutMinutes} min) with no completion — marked stale by the scheduler. Likely a crashed process or a hung LLM/tool call; retry if the underlying work is still needed.`,
+      'stale_timeout',
       run.id,
     );
     import('../lib/sse-bus.js')
@@ -1234,11 +1236,11 @@ export async function runAgent(
   // Create the run record
   db.prepare(`
     INSERT INTO agent_runs (
-      id, agent_id, business_id, trigger, trigger_id, status, started_at,
+      id, agent_id, business_id, trigger, trigger_id, status, queued_at, started_at, heartbeat_at, heartbeat_expires_at, timeout_at,
       trigger_type, work_reasons
-    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    runId, agentId, businessId, trigger, triggerId, startedAt,
+    runId, agentId, businessId, trigger, triggerId, startedAt, startedAt, startedAt, new Date(Date.now() + 120000).toISOString(), new Date(Date.now() + DEFAULT_AGENT_RUN_TIMEOUT_MINUTES * 60000).toISOString(),
     triggerType,
     workResult.reasons?.length ? JSON.stringify(workResult.reasons) : null,
   );
@@ -1292,6 +1294,21 @@ export async function runAgent(
 
     // 9. Run LLM (with fallback)
     const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig, { tier });
+    let actualProviderId = providerId;
+    let actualModel = model;
+    recordRunEvent(runId, 'preflight', `Checking provider ${providerId}/${model}.`, { status: 'attempted' });
+    const preflight = await performProviderPreflight(providerId, model, { timeoutMs: 60_000 });
+    const evidence = recordProviderPreflight(preflight.provider, preflight.model, preflight.status, preflight.evidence);
+    if (preflight.status !== 'passed') {
+      db.prepare("UPDATE agent_runs SET status = 'blocked', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?, actual_provider = ?, actual_model = ? WHERE id = ?")
+        .run('Provider preflight failed.', JSON.stringify(evidence), providerId || null, model || null, runId);
+      recordRunEvent(runId, 'preflight', 'Provider preflight blocked the run before any LLM work started.', { status: 'blocked', metadata: evidence });
+      return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'provider_preflight_failed' };
+    }
+    recordRunEvent(runId, 'preflight', 'Provider preflight passed before LLM dispatch.', { status: 'verified', metadata: evidence });
+    db.prepare('UPDATE agent_runs SET actual_provider = ?, actual_model = ? WHERE id = ?').run(providerId, model, runId);
+    updateRunHeartbeat(runId);
+    if (checkRunCancellation(runId)) { markRunCancelled(runId); return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'cancelled' }; }
 
     let llmResult: LLMResult;
     try {
@@ -1311,6 +1328,14 @@ export async function runAgent(
           temperature,
           max_tokens,
         });
+        recordRunEvent(runId, 'preflight', `Checking fallback provider ${fbPid}/${fbModel}.`, { status: 'attempted' });
+        const fallbackPreflight = await performProviderPreflight(fbPid, fbModel, { timeoutMs: 60_000 });
+        const fallbackEvidence = recordProviderPreflight(fallbackPreflight.provider, fallbackPreflight.model, fallbackPreflight.status, fallbackPreflight.evidence);
+        if (fallbackPreflight.status !== 'passed') throw new Error(`Fallback provider preflight failed: ${String(fallbackPreflight.evidence.diagnostic ?? fallbackPreflight.status)}`);
+        recordRunEvent(runId, 'preflight', 'Fallback provider preflight passed before LLM dispatch.', { status: 'verified', metadata: fallbackEvidence });
+        actualProviderId = fbPid;
+        actualModel = fbModel;
+        db.prepare('UPDATE agent_runs SET actual_provider = ?, actual_model = ? WHERE id = ?').run(actualProviderId, actualModel, runId);
         llmResult = await runLLM(fbPid, fbModel, {
           messages: [{ role: 'user', content: userContext }],
           system: systemPrompt,
@@ -1385,6 +1410,8 @@ export async function runAgent(
       }
     }
 
+    updateRunHeartbeat(runId);
+    if (checkRunCancellation(runId)) { markRunCancelled(runId); return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'cancelled' }; }
     let tasksToCreate: ProposedTask[] = Array.isArray(parsed.tasks) ? parsed.tasks : [];
     const signalsDetected = parsed.signals_detected ?? relevantSignals.length;
 
@@ -1506,6 +1533,8 @@ export async function runAgent(
     // 11. Insert tasks (with brain restraint check)
     const createdTasks: TaskRow[] = [];
     for (const taskDef of tasksToCreate) {
+      updateRunHeartbeat(runId);
+      if (checkRunCancellation(runId)) { markRunCancelled(runId); break; }
       if (!taskDef.title) continue;
       try {
         // Brain — check restraint before creating
@@ -1542,6 +1571,7 @@ export async function runAgent(
           approvalMode = 'requires_approval';
         }
 
+        recordRunEvent(runId, 'task_proposed', 'Creating task proposal: ' + taskDef.title, { status: 'attempted' });
         const task = createTask({
           business_id: businessId,
           signal_id: triggerId && trigger === 'signal' ? triggerId : null,
@@ -1659,7 +1689,7 @@ export async function runAgent(
           completion_tokens = completion_tokens + excluded.completion_tokens,
           cost_usd = cost_usd + excluded.cost_usd,
           run_count = run_count + 1
-      `).run(agentId, businessId, providerId,
+      `).run(agentId, businessId, actualProviderId,
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
@@ -1689,8 +1719,8 @@ export async function runAgent(
       trigger,
       trigger_id: triggerId,
       business_id: businessId,
-      provider: providerId,
-      model,
+      provider: actualProviderId,
+      model: actualModel,
       cost_usd: costUsd,
       input_tokens: llmResult.usage?.input_tokens ?? 0,
       output_tokens: llmResult.usage?.output_tokens ?? 0,
@@ -1787,7 +1817,7 @@ ${signalsDetected} signal(s) reviewed.
 
   } catch (err) {
     db.prepare(`
-      UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP
+      UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?
       WHERE id = ?
     `).run((err as Error).message, runId);
 

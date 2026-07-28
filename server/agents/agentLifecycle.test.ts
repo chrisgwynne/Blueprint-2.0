@@ -39,14 +39,18 @@ function ensureBusiness(): void {
 }
 
 function resetDb(): void {
+  db.prepare('DELETE FROM outcome_measurement_runs').run();
+  db.prepare('DELETE FROM task_events').run();
+  db.prepare('DELETE FROM execution_jobs').run();
   db.prepare('DELETE FROM tasks').run();
+  db.prepare('DELETE FROM agent_runs').run();
   db.prepare('DELETE FROM agents').run();
   db.prepare('DELETE FROM agent_lifecycle_events').run();
   db.prepare('DELETE FROM agent_activations').run();
   ensureBusiness();
 }
 
-describe('VALID_AGENT_TRANSITIONS — invariants', () => {
+describe('VALID_AGENT_TRANSITIONS â€” invariants', () => {
   test('hired only goes to standby or archived (never straight to working)', () => {
     expect(VALID_AGENT_TRANSITIONS.hired).toContain('standby');
     expect(VALID_AGENT_TRANSITIONS.hired).not.toContain('working');
@@ -86,7 +90,7 @@ describe('lifecycleToLegacyStatus bridge', () => {
   });
 });
 
-describe('transitionAgent — enforcement', () => {
+describe('transitionAgent â€” enforcement', () => {
   beforeEach(resetDb);
 
   test('legal transition succeeds and records an event', () => {
@@ -114,7 +118,7 @@ describe('transitionAgent — enforcement', () => {
   });
 });
 
-describe('cooldown — blocked agents do not retry endlessly', () => {
+describe('cooldown â€” blocked agents do not retry endlessly', () => {
   beforeEach(resetDb);
 
   test('computeCooldownUntil grows with failures and is in the future', () => {
@@ -148,7 +152,7 @@ describe('cooldown — blocked agents do not retry endlessly', () => {
   });
 });
 
-describe('matchAgent (DB-backed) — best-match + manual routing', () => {
+describe('matchAgent (DB-backed) â€” best-match + manual routing', () => {
   beforeEach(() => {
     resetDb();
     // Seed two live specialists with real scopes via setLifecycleState +
@@ -183,7 +187,7 @@ describe('matchAgent (DB-backed) — best-match + manual routing', () => {
   });
 });
 
-describe('claimTaskOwnership — exactly one active owner', () => {
+describe('claimTaskOwnership â€” exactly one active owner', () => {
   beforeEach(resetDb);
 
   test('first claim wins, second claim by another agent is refused', () => {
@@ -200,7 +204,7 @@ describe('claimTaskOwnership — exactly one active owner', () => {
   });
 });
 
-describe('isScopeInFlight — no duplicate agent for the same scope', () => {
+describe('isScopeInFlight â€” no duplicate agent for the same scope', () => {
   beforeEach(() => {
     resetDb();
     seedAgent('merchant', 'working'); // busy on shopify scope
@@ -223,7 +227,7 @@ describe('isScopeInFlight — no duplicate agent for the same scope', () => {
   });
 });
 
-describe('countBusyAgents — max-active cap input', () => {
+describe('countBusyAgents â€” max-active cap input', () => {
   beforeEach(resetDb);
   test('counts only busy lifecycle states', () => {
     seedAgent('a1', 'working');

@@ -19,7 +19,7 @@ import { resolve, join, relative, dirname, basename, sep, isAbsolute } from 'pat
 import {
   mkdirSync, existsSync, readdirSync, statSync, readFileSync,
   writeFileSync, unlinkSync, realpathSync,
-  openSync, writeSync, closeSync, constants as fsConstants,
+  openSync, writeSync, closeSync, lstatSync, constants as fsConstants,
 } from 'fs';
 import matter from 'gray-matter';
 import { scanForSensitiveData } from '../lib/content-sanitiser.js';
@@ -44,6 +44,13 @@ import { scanForSensitiveData } from '../lib/content-sanitiser.js';
 // (a single local server process, no untrusted concurrent filesystem writer).
 export function openNoFollow(path: string, flags: number, mode?: number): number {
   try {
+    try {
+      if (lstatSync(path).isSymbolicLink()) {
+        throw new KBPathError('Invalid KB path: refusing to follow a symlink at the target path.');
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
     return mode === undefined ? openSync(path, flags) : openSync(path, flags, mode);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ELOOP') {

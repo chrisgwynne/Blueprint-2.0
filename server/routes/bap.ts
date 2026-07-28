@@ -63,6 +63,7 @@ import bapActionRegistryRouter from './bap-action-registry.js';
 import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
 import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
+import bapTrustRouter from './bap-trust.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -83,6 +84,60 @@ function safeJSON(val: unknown, fallback: unknown = []): unknown {
 function stripThink(text: string | null | undefined): string | null {
   if (!text) return text ?? null;
   return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim() || null;
+}
+
+function kanbanColumnForStatus(status: string): string {
+  if (['proposed', 'deferred'].includes(status)) return 'backlog';
+  if (['approved', 'manual_review', 'blocked'].includes(status)) return 'ready';
+  if (['executing', 'draft_ready'].includes(status)) return 'doing';
+  if (['complete', 'verified'].includes(status)) return 'done';
+  if (['failed', 'rejected', 'cancelled'].includes(status)) return 'closed';
+  return 'backlog';
+}
+
+function approvalStateForTask(row: Record<string, unknown>): string {
+  const status = String(row.status ?? 'proposed');
+  if (status === 'proposed' || status === 'deferred') return 'awaiting_approval';
+  if (status === 'approved' || status === 'executing' || status === 'draft_ready' || status === 'manual_review' || status === 'blocked') return 'approved';
+  if (status === 'rejected') return 'rejected';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'complete' || status === 'verified') return 'completed';
+  return 'unknown';
+}
+
+function buildKanbanCard(row: Record<string, unknown>): Record<string, unknown> {
+  const payload = safeJSON(row.action_payload, {}) as Record<string, unknown>;
+  const riskEvidence = safeJSON(row.approval_risk_evidence, null) as Record<string, unknown> | null;
+  const measurementPolicy = row.measurement_policy_id
+    ? db.prepare('SELECT id, name, checkpoints_json, final_day, connector_freshness_hours FROM measurement_policies WHERE id = ?').get(String(row.measurement_policy_id)) ?? null
+    : null;
+  const acceptanceCriteria = payload.acceptance_criteria ?? payload.acceptanceCriteria ?? payload.success_criteria ?? payload.successCriteria ?? row.description ?? null;
+  return normalizeTimestamps({
+    blueprint_task_id: row.id,
+    business_id: row.business_id,
+    goal_id: row.goal_id ?? null,
+    signal_id: row.signal_id ?? null,
+    title: row.title,
+    description: row.description ?? null,
+    kanban_column: kanbanColumnForStatus(String(row.status ?? 'proposed')),
+    task_status: row.status,
+    approval_tier: row.trust_tier ?? null,
+    approval_state: approvalStateForTask(row),
+    approval_mode: row.approval_mode ?? null,
+    approval_risk_evidence: riskEvidence,
+    executor: payload.executor ?? row.assigned_to ?? null,
+    action_type: row.action_type ?? null,
+    action_payload: payload,
+    acceptance_criteria: acceptanceCriteria,
+    expected_outcome: row.expected_outcome ?? payload.expected_outcome ?? payload.expectedOutcome ?? null,
+    measurement_policy: measurementPolicy ? { ...(measurementPolicy as Record<string, unknown>), checkpoints_json: safeJSON((measurementPolicy as Record<string, unknown>).checkpoints_json, []) } : null,
+    priority: row.priority ?? null,
+    confidence: row.confidence ?? null,
+    proposed_by: row.proposed_by ?? null,
+    external_reference: payload.external_reference ?? payload.externalReference ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  }, ['created_at', 'updated_at']);
 }
 
 function businessRow(businessId: string): Record<string, unknown> | undefined {
@@ -242,6 +297,7 @@ router.use(bapActionRegistryRouter);
 router.use(bapConnectorConfidenceRouter);
 router.use(bapWorldModelRouter);
 router.use(bapSystemIssuesRouter);
+router.use(bapTrustRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
@@ -712,11 +768,50 @@ router.get('/businesses/:businessId/tasks', requirePermission('tasks:read'), asy
   }
 });
 
+/** GET /tasks/:taskId/kanban-card - canonical Blueprint-to-Hermes card projection. */
+router.get('/tasks/:taskId/kanban-card', requirePermission('tasks:read'), (req: Request, res: Response) => {
+  try {
+    const taskId = String(req.params.taskId);
+    const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined;
+    if (!row) return res.status(404).json({ error: `Task '${taskId}' not found.` });
+
+    const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+    if (!hasPermission(bapAgent, 'tasks:read', row.business_id as string)) {
+      return res.status(403).json({ error: 'Permission denied: task does not belong to an authorized business.' });
+    }
+
+    return res.json({ card: buildKanbanCard(row) });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+/** GET /businesses/:businessId/kanban-cards - business-scoped card sync feed for Hermes. */
+router.get('/businesses/:businessId/kanban-cards', requirePermission('tasks:read'), (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    const { status, updated_from } = req.query;
+    const conditions: string[] = ['business_id = ?'];
+    const params: Array<string | number | null> = [businessId];
+    if (status) {
+      const statuses = String(status).split(',').map((s) => s.trim()).filter(Boolean);
+      if (statuses.length) {
+        conditions.push(`status IN (${statuses.map(() => '?').join(',')})`);
+        params.push(...statuses);
+      }
+    }
+    if (updated_from) { conditions.push('updated_at >= ?'); params.push(String(updated_from)); }
+    const { page, limit, offset } = parsePagination(req.query as Record<string, unknown>);
+    const where = conditions.join(' AND ');
+    const total = (db.prepare(`SELECT COUNT(*) as n FROM tasks WHERE ${where}`).get(...params) as { n: number }).n;
+    const rows = db.prepare(`SELECT * FROM tasks WHERE ${where} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`).all(...params, limit, offset) as Array<Record<string, unknown>>;
+    return res.json({ cards: rows.map(buildKanbanCard), total, pagination: paginationMeta(total, page, limit) });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
 /**
- * GET /tasks/:taskId — single-task detail. No :businessId in the path (a
- * task ID is already globally unique), so ownership is re-derived from the
- * fetched row and checked against the caller's business_access, same
- * pattern as PATCH /tasks/:taskId.
+ * GET /tasks/:taskId - single-task detail. No :businessId in the path, so ownership is re-derived from the fetched row.
  */
 router.get('/tasks/:taskId', requirePermission('tasks:read'), (req: Request, res: Response) => {
   try {
@@ -899,8 +994,11 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
       };
     });
   } catch (err) {
-    if ((err as Error).message.includes('not found')) return res.status(400).json({ error: (err as Error).message });
-    return res.status(500).json({ error: (err as Error).message });
+    const message = (err as Error).message;
+    const issues = (err as Error & { issues?: unknown }).issues;
+    if (Array.isArray(issues)) return res.status(400).json({ error: message, issues });
+    if (message.includes('not found') || message.includes('not actionable') || message.includes('cannot be proposed')) return res.status(400).json({ error: message });
+    return res.status(500).json({ error: message });
   }
 });
 

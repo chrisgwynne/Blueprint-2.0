@@ -20,6 +20,7 @@ function seedStandby(id: string): void {
 }
 
 function reset(): void {
+  db.prepare('DELETE FROM agent_runs').run();
   db.prepare('DELETE FROM agents').run();
   db.prepare('DELETE FROM agent_activations').run();
   db.prepare('DELETE FROM agent_lifecycle_events').run();
@@ -86,7 +87,7 @@ describe('runWithActivation', () => {
     expect(isInCooldown('merchant')).toBe(true);
   });
 
-  test('the lifecycle passes through triggered → working during the run', async () => {
+  test('the lifecycle passes through triggered â†’ working during the run', async () => {
     seedStandby('merchant');
     const statesSeen: (string | null)[] = [];
     await runWithActivation({

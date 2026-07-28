@@ -18,7 +18,7 @@ info:
     It is never open to unauthenticated callers.
 
     Three `GET /agents-admin/*` routes use the dashboard's own session
-    cookie instead of `BAP-Key` — they're operator-only and are documented
+    cookie instead of `BAP-Key` â€” they're operator-only and are documented
     separately at the bottom of this spec with the `sessionAuth` scheme.
 
     ## Idempotency
@@ -37,7 +37,7 @@ info:
     `50`, max `200`) query parameters and returns a `pagination` object:
     `{page, limit, total, pages}`. Some endpoints additionally return a
     top-level `total` field for backward compatibility with earlier,
-    pre-Phase-2 response shapes — both always agree.
+    pre-Phase-2 response shapes â€” both always agree.
 
     ## Timestamps
 
@@ -58,7 +58,7 @@ info:
     Every error response has the shape `{error, code, request_id}` at
     minimum (`error` is a human-readable string; `code` is one of
     `validation_error | not_found | permission_denied | conflict |
-    rate_limited | internal_error`, new as of Phase 2 — treat as
+    rate_limited | internal_error`, new as of Phase 2 â€” treat as
     best-effort/additive, some older routes may omit `code`/`request_id`).
 
   contact:
@@ -70,7 +70,7 @@ servers:
 security:
   - bapKey: []
 
-# ─────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 components:
   securitySchemes:
     bapKey:
@@ -87,7 +87,7 @@ components:
       type: apiKey
       in: cookie
       name: connect.sid
-      description: Dashboard session cookie — operator-only routes (/agents-admin/*), not part of the external-agent BAP surface.
+      description: Dashboard session cookie â€” operator-only routes (/agents-admin/*), not part of the external-agent BAP surface.
 
   parameters:
     Page:
@@ -109,7 +109,7 @@ components:
       in: header
       required: false
       schema: { type: string }
-      description: Optional — ties this call to others in the same logical workflow. Echoed back and persisted.
+      description: Optional â€” ties this call to others in the same logical workflow. Echoed back and persisted.
     BusinessIdPath:
       name: businessId
       in: path
@@ -189,7 +189,7 @@ components:
         action_type: { type: string, nullable: true }
         action_payload: { type: object }
         status: { $ref: '#/components/schemas/TaskStatus' }
-        trust_tier: { type: string, enum: [green, yellow, red] }
+        trust_tier: { type: string, enum: [green, yellow, orange, red] }
         priority: { type: string, enum: [p1, p2, p3] }
         confidence: { type: number, nullable: true }
         estimated_impact: { type: string, nullable: true }
@@ -207,6 +207,35 @@ components:
     TaskStatus:
       type: string
       enum: [proposed, approved, executing, complete, verified, failed, blocked, rejected, cancelled, manual_review, deferred, draft_ready]
+
+    KanbanCard:
+      type: object
+      description: Canonical Blueprint-to-Hermes task card projection. Blueprint remains the source of truth; external Kanban systems should mirror these identifiers, not invent a strategic backlog.
+      properties:
+        blueprint_task_id: { type: string }
+        business_id: { type: string }
+        goal_id: { type: string, nullable: true }
+        signal_id: { type: string, nullable: true }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        kanban_column: { type: string, enum: [backlog, ready, doing, done, closed] }
+        task_status: { $ref: '#/components/schemas/TaskStatus' }
+        approval_tier: { type: string, enum: [green, yellow, orange, red], nullable: true }
+        approval_state: { type: string, enum: [awaiting_approval, approved, rejected, cancelled, completed, unknown] }
+        approval_mode: { type: string, nullable: true }
+        approval_risk_evidence: { type: object, nullable: true }
+        executor: { type: string, nullable: true }
+        action_type: { type: string, nullable: true }
+        action_payload: { type: object }
+        acceptance_criteria: { nullable: true }
+        expected_outcome: { type: string, nullable: true }
+        measurement_policy: { type: object, nullable: true }
+        priority: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        proposed_by: { type: string, nullable: true }
+        external_reference: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     TaskDetail:
       type: object
@@ -334,7 +363,7 @@ components:
         milestones: { type: array, items: { type: object }, description: "Merges the real goal_milestones table (Phase 3) with any legacy free-form JSON milestones." }
         dependencies:
           type: array
-          description: "Phase 3 — real goal-to-goal dependencies from goal_dependencies, replacing the earlier project_id-only proxy."
+          description: "Phase 3 â€” real goal-to-goal dependencies from goal_dependencies, replacing the earlier project_id-only proxy."
           items:
             type: object
             properties:
@@ -378,7 +407,7 @@ components:
         business_id: { type: string }
         type: { type: string }
         name: { type: string }
-        status: { type: string, enum: [live, stale, error, disconnected], description: "Live-computed freshness status — see raw_status for the underlying DB column." }
+        status: { type: string, enum: [live, stale, error, disconnected], description: "Live-computed freshness status â€” see raw_status for the underlying DB column." }
         raw_status: { type: string, description: "The unprocessed connectors.status DB column value." }
         last_sync: { type: string, format: date-time, nullable: true }
         last_error: { type: string, nullable: true }
@@ -394,7 +423,7 @@ components:
       enum: [pending, measuring, successful, neutral, unsuccessful, abandoned]
       description: |
         Mapped from the underlying task_outcomes.verdict vocabulary
-        (improved/worsened/no_change) — null means the task was never
+        (improved/worsened/no_change) â€” null means the task was never
         eligible for outcome tracking (no target_metric).
 
     Outcome:
@@ -435,12 +464,12 @@ components:
         entity_id: { type: string }
         action: { type: string }
         actor: { type: string }
-        before_state: { type: object, nullable: true, description: "Key-shaped redaction applied — see spec description." }
+        before_state: { type: object, nullable: true, description: "Key-shaped redaction applied â€” see spec description." }
         after_state: { type: object, nullable: true }
         metadata: { type: object, nullable: true }
         created_at: { type: string, format: date-time }
 
-    # ── Phase 3 ──────────────────────────────────────────────────────────
+    # â”€â”€ Phase 3 â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
     Opportunity:
       type: object
       description: "Backed by goal_suggestions (server/brain/goal-suggester.ts), extended in Phase 3."
@@ -474,7 +503,7 @@ components:
 
     Decision:
       type: object
-      description: "Read-only from BAP — written by decision-memory.ts's recordDecision(), called by the engine that made the decision (task-queue.ts, goal-reasoner.ts, conflict-engine.ts, goal-suggester.ts)."
+      description: "Read-only from BAP â€” written by decision-memory.ts's recordDecision(), called by the engine that made the decision (task-queue.ts, goal-reasoner.ts, conflict-engine.ts, goal-suggester.ts)."
       properties:
         id: { type: string }
         business_id: { type: string }
@@ -488,7 +517,7 @@ components:
         confidence: { type: number, nullable: true }
         alternatives_rejected: { type: array, items: { type: object } }
         author: { type: string }
-        related_goal_id: { type: string, nullable: true, description: "Soft reference — not a foreign key." }
+        related_goal_id: { type: string, nullable: true, description: "Soft reference â€” not a foreign key." }
         related_task_id: { type: string, nullable: true }
         related_signal_id: { type: string, nullable: true }
         related_outcome_id: { type: string, nullable: true }
@@ -498,7 +527,7 @@ components:
     GraphNode:
       type: object
       properties:
-        id: { type: string, description: "kg_entities.id, an opaque graph node id — not the same as ref_id." }
+        id: { type: string, description: "kg_entities.id, an opaque graph node id â€” not the same as ref_id." }
         entity_type: { type: string, description: "e.g. goal, task, signal, decision, or a standalone type (competitor, product, customer, campaign, person)." }
         label: { type: string }
         ref_table: { type: string, nullable: true, description: "The backing table (goals/tasks/signals/decisions/...), null for standalone entities." }
@@ -548,7 +577,7 @@ components:
               properties:
                 success_rate: { type: number, nullable: true }
                 sample_size: { type: integer }
-            linked_kb: { type: array, items: { type: object }, description: "Only populated for the top 5 (explanation_depth) — [] otherwise, not missing/omitted." }
+            linked_kb: { type: array, items: { type: object }, description: "Only populated for the top 5 (explanation_depth) â€” [] otherwise, not missing/omitted." }
             linked_signals: { type: array, items: { type: object } }
             linked_metrics: { type: object, nullable: true }
 
@@ -616,7 +645,7 @@ components:
 
     CrossBusinessPattern:
       type: object
-      description: "No business_id, name, URL, or task title — enforced structurally, the underlying table has no such column."
+      description: "No business_id, name, URL, or task title â€” enforced structurally, the underlying table has no such column."
       properties:
         pattern_key: { type: string }
         action_type: { type: string }
@@ -628,7 +657,7 @@ components:
 
     GoalAssessment:
       type: object
-      description: "One row per strategic-planning pass (goal-reasoner.ts) — append-only history, not overwritten."
+      description: "One row per strategic-planning pass (goal-reasoner.ts) â€” append-only history, not overwritten."
       properties:
         id: { type: string }
         goal_id: { type: string }
@@ -650,7 +679,7 @@ components:
 
     GoalStrategy:
       type: object
-      description: "One durable, individually comparable candidate path per goal — previously only existed inside a JSON blob and a rendered KB page."
+      description: "One durable, individually comparable candidate path per goal â€” previously only existed inside a JSON blob and a rendered KB page."
       properties:
         id: { type: string }
         goal_id: { type: string }
@@ -674,15 +703,120 @@ components:
 
     TimelineEvent:
       type: object
-      description: "One merged, chronological feed — GET /goals/{goalId}/timeline."
+      description: "One merged, chronological feed â€” GET /goals/{goalId}/timeline."
       properties:
         at: { type: string, format: date-time, nullable: true }
         type: { type: string, enum: [goal_created, progress_check, strategic_assessment, strategy_proposed, conflict_detected, decision, goal_achieved] }
         summary: { type: string }
         data: { type: object, description: "The underlying row this event summarizes." }
 
-# ─────────────────────────────────────────────────────────────────────────
+# â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 paths:
+  /businesses/{businessId}/capabilities:
+    get:
+      summary: List business capabilities
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Capability registry rows for the business. }
+    post:
+      summary: Confirm or update a business capability
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Updated capability row. }
+  /businesses/{businessId}/capabilities/propose:
+    post:
+      summary: Propose a capability correction without mutating facts
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202': { description: Proposed correction row. }
+  /businesses/{businessId}/applicability/evaluate:
+    post:
+      summary: Evaluate whether a candidate applies to this business
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Applicability status, capability keys and reason. }
+  /businesses/{businessId}/suppressions:
+    get:
+      summary: List active applicability suppressions
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Suppression records. }
+  /businesses/{businessId}/corrections:
+    get:
+      summary: List human corrections
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Correction history. }
+  /businesses/{businessId}/corrections/propose:
+    post:
+      summary: Propose a human correction for review
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '202': { description: Proposed correction row; does not mutate capability state. }
+  /businesses/{businessId}/corrections/{correctionId}/impacts:
+    get:
+      summary: List records affected by a confirmed correction
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - name: correctionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Correction impact rows scoped to the requested business. }
+        '404': { description: Correction not found for this business. }
+  /businesses/{businessId}/revenue-paths:
+    get:
+      summary: List revenue paths
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Revenue path rows. }
+    post:
+      summary: Create or update a revenue path
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200': { description: Updated revenue path. }
+  /businesses/{businessId}/measurement-policies:
+    get:
+      summary: List outcome measurement policies
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Measurement policies. }
+  /businesses/{businessId}/approval-policies:
+    get:
+      summary: Read approval policy tiers and defaults
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Approval tier defaults. }
+  /provider-preflight:
+    get:
+      summary: Read provider/model preflight cache
+      responses:
+        '200': { description: Preflight cache rows. }
+  /businesses/{businessId}/scorecards:
+    get:
+      summary: Read agent scorecards
+      parameters:
+        - $ref: '#/components/parameters/BusinessIdPath'
+      responses:
+        '200': { description: Agent scorecard metrics, calibration, uncertainty and policy effects. }
+
   /register:
     post:
       operationId: register
@@ -719,7 +853,7 @@ paths:
                   permissions: { type: array, items: { type: string } }
                   business_access: { type: array, items: { type: string } }
                   webhook_secret: { type: string, nullable: true }
-        '401': { description: Unauthenticated — no session and no valid X-Registration-Secret. }
+        '401': { description: Unauthenticated â€” no session and no valid X-Registration-Secret. }
 
   /discover:
     get:
@@ -757,7 +891,7 @@ paths:
   /businesses/{businessId}/signals:
     get:
       operationId: listSignals
-      summary: List signals — search, filter, paginate
+      summary: List signals â€” search, filter, paginate
       x-bap-permission: signals:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -815,7 +949,7 @@ paths:
   /signals/{signalId}:
     get:
       operationId: getSignalDetail
-      summary: Signal detail — evidence, attribution, related signals/tasks, connector freshness, resolution history
+      summary: Signal detail â€” evidence, attribution, related signals/tasks, connector freshness, resolution history
       x-bap-permission: signals:read
       parameters: [{ name: signalId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -832,7 +966,7 @@ paths:
       x-bap-permission: signals:read
       description: >-
         Despite mutating state, this route is gated by `signals:read` (not a
-        `signals:update` permission, which does not exist) — this matches the
+        `signals:update` permission, which does not exist) â€” this matches the
         actual server implementation exactly. The idempotency store keys on
         the internal scope string `"signals:update"`, but that is not a
         checked permission.
@@ -861,10 +995,50 @@ paths:
         '403': { $ref: '#/components/responses/PermissionDenied' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /tasks/{taskId}/kanban-card:
+    get:
+      operationId: getTaskKanbanCard
+      summary: Canonical Blueprint-to-Hermes Kanban card projection for one task
+      x-bap-permission: tasks:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card: { $ref: '#/components/schemas/KanbanCard' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/kanban-cards:
+    get:
+      operationId: listKanbanCards
+      summary: Business-scoped Blueprint-to-Hermes Kanban card sync feed
+      x-bap-permission: tasks:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string }, description: Comma-separated task statuses. }
+        - { name: updated_from, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cards: { type: array, items: { $ref: '#/components/schemas/KanbanCard' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
   /tasks/{taskId}:
     get:
       operationId: getTaskDetail
-      summary: Task detail — approval status, execution state, linked signal/goals/jobs, outcome, audit summary
+      summary: Task detail â€” approval status, execution state, linked signal/goals/jobs, outcome, audit summary
       x-bap-permission: tasks:read
       parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -915,7 +1089,7 @@ paths:
   /tasks/{taskId}/outcome:
     get:
       operationId: getTaskOutcome
-      summary: Single-task outcome detail — baseline, checks, confidence, recommendation
+      summary: Single-task outcome detail â€” baseline, checks, confidence, recommendation
       x-bap-permission: outcomes:read
       parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -948,7 +1122,7 @@ paths:
   /businesses/{businessId}/tasks:
     get:
       operationId: listTasks
-      summary: List tasks — search, filter, sort, paginate
+      summary: List tasks â€” search, filter, sort, paginate
       x-bap-permission: tasks:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1004,13 +1178,28 @@ paths:
                 action_payload: { type: object }
       responses:
         '201': { description: "{ task_id, status, trust_tier, approval_required: true }" }
-        '400': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '400':
+          description: Missing Idempotency-Key, invalid request, inapplicable proposal, or action schema failure. Action schema failures include `issues` with validation codes such as `payload_schema_mismatch` or `unknown_action_type`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/ErrorResponse' }
+                  - type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string }
+                            message: { type: string }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /businesses/{businessId}/execution-jobs:
     get:
       operationId: listExecutionJobs
-      summary: List durable execution jobs (Phase 1 — approval → job → worker)
+      summary: List durable execution jobs (Phase 1 â€” approval â†’ job â†’ worker)
       x-bap-permission: tasks:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1071,10 +1260,10 @@ paths:
       x-bap-permission: kb:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
-        - { name: path, in: path, required: true, schema: { type: string }, description: "Wildcard — the KB-relative file path." }
+        - { name: path, in: path, required: true, schema: { type: string }, description: "Wildcard â€” the KB-relative file path." }
       responses:
         '200': { description: File content + frontmatter + backlinks. }
-        '400': { description: "Path escapes the KB root — see containPath() in kb-engine.ts." }
+        '400': { description: "Path escapes the KB root â€” see containPath() in kb-engine.ts." }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /businesses/{businessId}/kb/search:
@@ -1196,7 +1385,7 @@ paths:
   /businesses/{businessId}/runs:
     get:
       operationId: listAgentRuns
-      summary: List agent runs — filter by agent_id/status/trigger, paginated
+      summary: List agent runs â€” filter by agent_id/status/trigger, paginated
       x-bap-permission: agents:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1220,10 +1409,10 @@ paths:
   /runs/{runId}/cancel:
     post:
       operationId: cancelRun
-      summary: Mark a running agent run as cancelled (DB-status flip only — see description)
+      summary: Mark a running agent run as cancelled (DB-status flip only â€” see description)
       description: |
         This does NOT interrupt an in-flight LLM call or task creation
-        already under way — server/agents/agent-runner.ts's runAgent() has
+        already under way â€” server/agents/agent-runner.ts's runAgent() has
         no abort signal or mid-run checkpoint. It stops Blueprint from
         treating the run as active for tracking/cost-cap purposes.
       x-bap-permission: agents:trigger
@@ -1238,14 +1427,14 @@ paths:
   /runs/{runId}/retry:
     post:
       operationId: retryRun
-      summary: Re-trigger a failed run (same agent_id/business_id — a fresh run, not a true replay)
+      summary: Re-trigger a failed run (same agent_id/business_id â€” a fresh run, not a true replay)
       x-bap-permission: agents:trigger
       parameters:
         - { name: runId, in: path, required: true, schema: { type: string } }
         - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202': { description: "{ run_id (new), retried_from, agent_id, status: 'queued' }" }
-        '422': { description: "Run is not 'failed' — only failed runs can be retried." }
+        '422': { description: "Run is not 'failed' â€” only failed runs can be retried." }
         '404': { $ref: '#/components/responses/NotFound' }
 
   /me/webhook:
@@ -1281,11 +1470,11 @@ paths:
         '200': { description: OK }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  # ── Phase 2: Goals ──────────────────────────────────────────────────────
+  # â”€â”€ Phase 2: Goals â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/goals:
     get:
       operationId: listGoals
-      summary: List goals — search, filter, paginate
+      summary: List goals â€” search, filter, paginate
       x-bap-permission: goals:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1336,7 +1525,7 @@ paths:
                 owner: { type: string, description: "Phase 3." }
                 confidence: { type: number, description: "Phase 3." }
                 priority: { type: string, enum: [p1, p2, p3], default: p2, description: "Phase 3." }
-                depends_on: { type: array, items: { type: string }, description: "Phase 3. Goal IDs this goal depends on — invalid/unknown IDs are silently dropped, not an error." }
+                depends_on: { type: array, items: { type: string }, description: "Phase 3. Goal IDs this goal depends on â€” invalid/unknown IDs are silently dropped, not an error." }
       responses:
         '201': { description: "{ goal }" }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -1345,7 +1534,7 @@ paths:
   /goals/{goalId}:
     get:
       operationId: getGoalDetail
-      summary: Goal detail — progress, linked metrics/tasks/signals/outcomes, blockers, conflicts, strategic planning
+      summary: Goal detail â€” progress, linked metrics/tasks/signals/outcomes, blockers, conflicts, strategic planning
       x-bap-permission: goals:read
       parameters: [{ name: goalId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -1360,7 +1549,7 @@ paths:
                   linked_metrics: { type: object, nullable: true }
                   linked_tasks: { type: array, items: { type: object } }
                   linked_signals: { type: array, items: { type: object } }
-                  linked_outcomes: { type: array, items: { type: object }, description: "Phase 3 — via task_outcomes.goal_id." }
+                  linked_outcomes: { type: array, items: { type: object }, description: "Phase 3 â€” via task_outcomes.goal_id." }
                   progress:
                     type: object
                     properties:
@@ -1375,7 +1564,7 @@ paths:
                   conflicts: { type: array, items: { $ref: '#/components/schemas/Conflict' } }
                   strategic_planning:
                     type: object
-                    description: "Phase 3 — summary; see GET /goals/{goalId}/assessment and /strategies for full detail."
+                    description: "Phase 3 â€” summary; see GET /goals/{goalId}/assessment and /strategies for full detail."
                     properties:
                       latest_assessment: { allOf: [{ $ref: '#/components/schemas/GoalAssessment' }], nullable: true }
                       strategy_count: { type: integer }
@@ -1412,7 +1601,7 @@ paths:
                 owner: { type: string, description: "Phase 3." }
                 confidence: { type: number, description: "Phase 3." }
                 priority: { type: string, enum: [p1, p2, p3], description: "Phase 3." }
-                depends_on: { type: array, items: { type: string }, description: "Phase 3. Replaces the goal's full dependency set (goal_dependencies) — not a merge." }
+                depends_on: { type: array, items: { type: string }, description: "Phase 3. Replaces the goal's full dependency set (goal_dependencies) â€” not a merge." }
       responses:
         '200': { description: "{ goal }" }
         '400': { $ref: '#/components/responses/ValidationError' }
@@ -1453,7 +1642,7 @@ paths:
         '200': { description: "{ conflicts }" }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  # ── Phase 3: Strategic Planning Engine + Multi-Strategy Planning ───────
+  # â”€â”€ Phase 3: Strategic Planning Engine + Multi-Strategy Planning â”€â”€â”€â”€â”€â”€â”€
   /goals/{goalId}/timeline:
     get:
       operationId: getGoalTimeline
@@ -1488,7 +1677,7 @@ paths:
                 type: object
                 properties:
                   assessment: { $ref: '#/components/schemas/GoalAssessment' }
-        '404': { description: "No assessment exists yet — trigger one with POST /goals/{goalId}/plan." }
+        '404': { description: "No assessment exists yet â€” trigger one with POST /goals/{goalId}/plan." }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
   /goals/{goalId}/assessments:
@@ -1541,7 +1730,7 @@ paths:
       summary: (Re-)run strategic planning for a goal now
       x-bap-permission: goals:update
       description: >-
-        Fire-and-forget — a fresh LLM-backed planning pass can take many
+        Fire-and-forget â€” a fresh LLM-backed planning pass can take many
         seconds. Poll GET /goals/{goalId}/assessment and
         GET /goals/{goalId}/strategies for the result.
       parameters:
@@ -1552,15 +1741,15 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 3: Conflicts (general, business-wide) ─────────────────────────
+  # â”€â”€ Phase 3: Conflicts (general, business-wide) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/conflicts:
     get:
       operationId: listConflicts
-      summary: List conflicts — every conflict_type, filterable, paginated
+      summary: List conflicts â€” every conflict_type, filterable, paginated
       x-bap-permission: conflicts:read
       description: >-
         The general, business-wide conflict surface (see also
-        GET /goals/{goalId}/conflicts for the goal-scoped view). Read-only —
+        GET /goals/{goalId}/conflicts for the goal-scoped view). Read-only â€”
         resolving or dismissing a conflict remains a dashboard-only action.
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1600,11 +1789,11 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 3: Opportunity Engine ─────────────────────────────────────────
+  # â”€â”€ Phase 3: Opportunity Engine â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/opportunities:
     get:
       operationId: listOpportunities
-      summary: List quantified opportunities — filterable, paginated
+      summary: List quantified opportunities â€” filterable, paginated
       x-bap-permission: opportunities:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1648,7 +1837,7 @@ paths:
       summary: Trigger a fresh opportunity scan now
       x-bap-permission: opportunities:trigger
       description: >-
-        Fire-and-forget — an LLM-backed pattern scan over connector data.
+        Fire-and-forget â€” an LLM-backed pattern scan over connector data.
         Poll GET /businesses/{businessId}/opportunities for results.
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1658,11 +1847,11 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 3: Decision Memory (read-only) ────────────────────────────────
+  # â”€â”€ Phase 3: Decision Memory (read-only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/decisions:
     get:
       operationId: listDecisions
-      summary: Recall decisions — search/filter/paginate
+      summary: Recall decisions â€” search/filter/paginate
       x-bap-permission: decisions:read
       description: >-
         Read-only: decisions are written by the engines that make them
@@ -1709,7 +1898,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 3: Knowledge Graph ─────────────────────────────────────────────
+  # â”€â”€ Phase 3: Knowledge Graph â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/graph:
     get:
       operationId: traverseGraph
@@ -1723,7 +1912,7 @@ paths:
         - { name: edge_types, in: query, schema: { type: string }, description: "CSV of caused,supports,blocks,depends_on,relates_to,mentions,supersedes,contradicts,improves,regresses." }
       responses:
         '200':
-          description: "OK. { nodes: [], edges: [] } if the starting entity has no graph node yet — not a 404."
+          description: "OK. { nodes: [], edges: [] } if the starting entity has no graph node yet â€” not a 404."
           content:
             application/json:
               schema:
@@ -1742,7 +1931,7 @@ paths:
       summary: Recompute every derivable edge for a business now
       x-bap-permission: graph:trigger
       description: >-
-        Synchronous (200, not 202) — idempotent (upserts), safe to call
+        Synchronous (200, not 202) â€” idempotent (upserts), safe to call
         repeatedly. Returns total entity/edge counts afterward, not how many
         changed.
       parameters:
@@ -1753,7 +1942,7 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 3: Review surfaces (recommendations, retrospectives, calibration, patterns) ─
+  # â”€â”€ Phase 3: Review surfaces (recommendations, retrospectives, calibration, patterns) â”€
   /businesses/{businessId}/recommendations:
     get:
       operationId: listRecommendations
@@ -1800,7 +1989,7 @@ paths:
   /retrospectives/{retrospectiveId}:
     get:
       operationId: getRetrospectiveDetail
-      summary: Retrospective detail — full report
+      summary: Retrospective detail â€” full report
       x-bap-permission: retrospectives:read
       parameters: [{ name: retrospectiveId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -1821,7 +2010,7 @@ paths:
       summary: Trigger a retrospective now
       x-bap-permission: retrospectives:trigger
       description: >-
-        Fire-and-forget — an LLM call over a month of data plus a KB write.
+        Fire-and-forget â€” an LLM call over a month of data plus a KB write.
         Poll GET /businesses/{businessId}/retrospectives for the result.
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1834,7 +2023,7 @@ paths:
   /businesses/{businessId}/calibration:
     get:
       operationId: getCalibration
-      summary: Agent calibration — latest per agent, or full history for one agent
+      summary: Agent calibration â€” latest per agent, or full history for one agent
       x-bap-permission: calibration:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1858,9 +2047,9 @@ paths:
   /businesses/{businessId}/patterns:
     get:
       operationId: listCrossBusinessPatterns
-      summary: Cross-business learning — abstracted patterns only, no tenant-identifying data
+      summary: Cross-business learning â€” abstracted patterns only, no tenant-identifying data
       x-bap-permission: recommendations:read
-      description: "No separate patterns:read permission — reuses recommendations:read."
+      description: "No separate patterns:read permission â€” reuses recommendations:read."
       parameters: [{ $ref: '#/components/parameters/BusinessIdPath' }]
       responses:
         '200':
@@ -1874,11 +2063,11 @@ paths:
                   total: { type: integer }
         '404': { $ref: '#/components/responses/NotFound' }
 
-  # ── Phase 2: Connectors ─────────────────────────────────────────────────
+  # â”€â”€ Phase 2: Connectors â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/connectors:
     get:
       operationId: listConnectors
-      summary: List connectors — status, freshness, config summary (no secrets)
+      summary: List connectors â€” status, freshness, config summary (no secrets)
       x-bap-permission: connectors:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1901,7 +2090,7 @@ paths:
   /connectors/{connectorId}:
     get:
       operationId: getConnectorDetail
-      summary: Connector detail — health, sync stats
+      summary: Connector detail â€” health, sync stats
       x-bap-permission: connectors:read
       parameters: [{ name: connectorId, in: path, required: true, schema: { type: string } }]
       responses:
@@ -1912,7 +2101,7 @@ paths:
   /connectors/{connectorId}/syncs:
     get:
       operationId: listConnectorSyncs
-      summary: Sync history — filterable, paginated
+      summary: Sync history â€” filterable, paginated
       x-bap-permission: connectors:read
       parameters:
         - { name: connectorId, in: path, required: true, schema: { type: string } }
@@ -1935,11 +2124,11 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '403': { $ref: '#/components/responses/PermissionDenied' }
 
-  # ── Phase 2: Outcomes ───────────────────────────────────────────────────
+  # â”€â”€ Phase 2: Outcomes â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/outcomes:
     get:
       operationId: listOutcomes
-      summary: List outcomes across tasks with a target_metric — filterable by mapped status, action_type, proposed_by
+      summary: List outcomes across tasks with a target_metric â€” filterable by mapped status, action_type, proposed_by
       x-bap-permission: outcomes:read
       parameters:
         - { $ref: '#/components/parameters/BusinessIdPath' }
@@ -1960,7 +2149,7 @@ paths:
                   total: { type: integer }
                   pagination: { $ref: '#/components/schemas/Pagination' }
 
-  # ── Phase 2: Audit ──────────────────────────────────────────────────────
+  # â”€â”€ Phase 2: Audit â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   /businesses/{businessId}/audit:
     get:
       operationId: listAuditEntries
@@ -1989,7 +2178,7 @@ paths:
                   pagination: { $ref: '#/components/schemas/Pagination' }
         '400': { description: "entity_type contains a value outside the whitelist." }
 
-  # ── Operator-only (session auth, not part of the external-agent surface) ─
+  # â”€â”€ Operator-only (session auth, not part of the external-agent surface) â”€
   /agents-admin:
     get:
       operationId: listBapAgentsAdmin

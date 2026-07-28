@@ -492,3 +492,18 @@ export const getWorldModel = (businessId: string) => get(`/intelligence/world-mo
 export const getWorldModelHistory = (businessId: string, params?: Params) => get(`/intelligence/world-model/${businessId}/history`, params)
 export const getSystemIssues = (businessId: string, params?: Params) => get(`/intelligence/system-issues/${businessId}`, params)
 export const updateSystemIssue = (issueId: string, status: string) => patch(`/intelligence/system-issues/issue/${issueId}`, { status })
+
+// ============================================
+// Phase 4 Trust and Autonomy
+// ============================================
+export const getTrustCapabilities = (businessId: string) => get(`/trust/capabilities/${businessId}`)
+export const saveTrustCapability = (businessId: string, data: unknown) => post(`/trust/capabilities/${businessId}`, data)
+export const getTrustCorrections = (businessId: string) => get(`/trust/corrections/${businessId}`)
+export const getTrustCorrectionImpacts = (businessId: string, correctionId: string) => get(`/trust/corrections/${businessId}/${correctionId}/impacts`)
+export const saveTrustCorrection = (businessId: string, data: unknown) => post(`/trust/corrections/${businessId}`, data)
+export const getTrustRevenuePaths = (businessId: string) => get(`/trust/revenue-paths/${businessId}`)
+export const saveTrustRevenuePath = (businessId: string, data: unknown) => post(`/trust/revenue-paths/${businessId}`, data)
+export const getTrustLifecycle = (businessId: string) => get(`/trust/signals/${businessId}/lifecycle`)
+export const getTrustMeasurementPolicies = (businessId: string) => get(`/trust/measurement-policies/${businessId}`)
+export const getTrustPreflight = () => get('/trust/provider-preflight')
+export const getTrustScorecard = (businessId: string, agentId = 'conductor') => get(`/trust/scorecards/${businessId}`, { agent_id: agentId })

@@ -143,6 +143,46 @@ export interface RunLLMResult {
   cost_usd: number;
 }
 
+export interface ProviderPreflightRequirements {
+  toolCalling?: boolean;
+  structuredOutput?: boolean;
+  minContextTokens?: number;
+  timeoutMs?: number;
+}
+
+export interface ProviderPreflightResult {
+  provider: string;
+  model: string;
+  status: 'passed' | 'failed' | 'blocked';
+  temporary: boolean;
+  evidence: Record<string, unknown>;
+}
+
+const PROVIDER_CAPABILITIES: Record<string, {
+  tool_calling: boolean | 'unknown';
+  structured_output: boolean | 'unknown';
+  vision: boolean | 'unknown';
+  max_context_tokens: number | 'unknown';
+  locality: 'local' | 'cloud' | 'cli' | 'unknown';
+  cost_class: 'free_local' | 'low' | 'medium' | 'high' | 'unknown';
+}> = {
+  anthropic: { tool_calling: true, structured_output: true, vision: true, max_context_tokens: 200000, locality: 'cloud', cost_class: 'high' },
+  openai: { tool_calling: true, structured_output: true, vision: true, max_context_tokens: 128000, locality: 'cloud', cost_class: 'medium' },
+  google: { tool_calling: true, structured_output: true, vision: true, max_context_tokens: 1000000, locality: 'cloud', cost_class: 'medium' },
+  minimax: { tool_calling: true, structured_output: true, vision: false, max_context_tokens: 200000, locality: 'cloud', cost_class: 'medium' },
+  ollama: { tool_calling: 'unknown', structured_output: 'unknown', vision: 'unknown', max_context_tokens: 'unknown', locality: 'local', cost_class: 'free_local' },
+  lmstudio: { tool_calling: 'unknown', structured_output: 'unknown', vision: 'unknown', max_context_tokens: 'unknown', locality: 'local', cost_class: 'free_local' },
+  custom: { tool_calling: 'unknown', structured_output: 'unknown', vision: 'unknown', max_context_tokens: 'unknown', locality: 'unknown', cost_class: 'unknown' },
+  'claude-cli': { tool_calling: false, structured_output: false, vision: 'unknown', max_context_tokens: 200000, locality: 'cli', cost_class: 'unknown' },
+};
+
+function safeDiagnostic(err: unknown): string {
+  return String((err as Error)?.message ?? err ?? 'Unknown provider preflight failure.')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/sk-[A-Za-z0-9._-]+/gi, 'sk-[redacted]')
+    .slice(0, 500);
+}
+
 export async function runLLM(providerId: string, model: string, { messages, system, temperature, max_tokens }: RunLLMOptions): Promise<RunLLMResult> {
   const entry = PROVIDER_MAP[providerId];
   if (!entry) throw new Error(`Unknown LLM provider: ${providerId}`);
@@ -182,6 +222,118 @@ export async function listModels(providerId: string): Promise<string[]> {
   } catch {
     return entry.default_models;
   }
+}
+
+export async function performProviderPreflight(
+  providerId: string,
+  model: string,
+  requirements: ProviderPreflightRequirements = {},
+): Promise<ProviderPreflightResult> {
+  const entry = PROVIDER_MAP[providerId];
+  const caps = PROVIDER_CAPABILITIES[providerId] ?? {
+    tool_calling: 'unknown', structured_output: 'unknown', vision: 'unknown', max_context_tokens: 'unknown', locality: 'unknown', cost_class: 'unknown',
+  };
+  const evidence: Record<string, unknown> = {
+    provider_reachable: 'unknown',
+    authentication: 'unknown',
+    model_exists: 'unknown',
+    model_enabled: 'unknown',
+    tool_calling: caps.tool_calling,
+    structured_output: caps.structured_output,
+    vision: caps.vision,
+    context_window: caps.max_context_tokens,
+    expected_latency: caps.locality === 'local' ? 'local-runtime-dependent' : 'network-dependent',
+    locality: caps.locality,
+    cost_class: caps.cost_class,
+    timeout_configuration: requirements.timeoutMs && requirements.timeoutMs > 0 ? 'verified' : 'default',
+    rate_limit_state: 'unknown',
+    budget_policy: 'unknown',
+    placeholder_response: 'unknown',
+  };
+
+  if (!entry) {
+    evidence.diagnostic = `Unknown LLM provider: ${providerId}`;
+    return { provider: providerId, model, status: 'blocked', temporary: false, evidence };
+  }
+  if (!providerId || !model || /unavailable|missing|disabled|mock|placeholder/i.test(`${providerId} ${model}`)) {
+    evidence.model_exists = false;
+    evidence.model_enabled = false;
+    evidence.diagnostic = 'Provider/model is missing, disabled, placeholder, or explicitly unavailable before the run began.';
+    return { provider: providerId || 'unknown', model: model || 'unknown', status: 'blocked', temporary: false, evidence };
+  }
+  if (requirements.toolCalling && caps.tool_calling !== true) {
+    evidence.diagnostic = 'Selected provider/model has no verified tool-calling support for this run.';
+    return { provider: providerId, model, status: 'blocked', temporary: false, evidence };
+  }
+  if (requirements.structuredOutput && caps.structured_output !== true) {
+    evidence.diagnostic = 'Selected provider/model has no verified structured-output support for this run.';
+    return { provider: providerId, model, status: 'blocked', temporary: false, evidence };
+  }
+  if (requirements.minContextTokens && typeof caps.max_context_tokens === 'number' && caps.max_context_tokens < requirements.minContextTokens) {
+    evidence.diagnostic = `Selected provider/model context window ${caps.max_context_tokens} is below required ${requirements.minContextTokens}.`;
+    return { provider: providerId, model, status: 'blocked', temporary: false, evidence };
+  }
+
+  const creds = getProviderCredentials(providerId);
+  try {
+    const authOk = await entry.adapter.validateApiKey({ ...creds, validationModel: model } as ProviderCredentials & { validationModel?: string });
+    evidence.provider_reachable = authOk ? 'observed' : 'failed';
+    evidence.authentication = authOk ? 'verified' : 'failed';
+    if (!authOk) {
+      evidence.diagnostic = 'Provider credential validation failed before the run began.';
+      return { provider: providerId, model, status: 'failed', temporary: true, evidence };
+    }
+  } catch (err) {
+    evidence.provider_reachable = 'failed';
+    evidence.authentication = 'failed';
+    evidence.diagnostic = safeDiagnostic(err);
+    return { provider: providerId, model, status: 'failed', temporary: true, evidence };
+  }
+
+  try {
+    const models = await entry.adapter.listModels(creds);
+    evidence.available_model_count = models.length;
+    if (models.length > 0) {
+      evidence.model_exists = models.includes(model);
+      if (!models.includes(model)) {
+        evidence.model_enabled = false;
+        evidence.diagnostic = `Selected model '${model}' was not returned by provider model listing.`;
+        return { provider: providerId, model, status: 'blocked', temporary: false, evidence };
+      }
+    }
+  } catch (err) {
+    evidence.model_exists = 'unknown';
+    evidence.model_listing_error = safeDiagnostic(err);
+  }
+
+  try {
+    const probe = await entry.adapter.complete({
+      ...creds,
+      model,
+      messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
+      temperature: 0,
+      max_tokens: 3,
+    });
+    const content = String(probe.content ?? '').trim();
+    const placeholder = !content || /mock|placeholder|lorem ipsum|not implemented/i.test(content);
+    evidence.provider_reachable = 'verified';
+    evidence.authentication = 'verified';
+    evidence.model_exists = evidence.model_exists === 'unknown' ? 'observed' : evidence.model_exists;
+    evidence.model_enabled = true;
+    evidence.placeholder_response = placeholder ? 'failed' : 'verified';
+    evidence.probe_usage = probe.usage ?? null;
+    if (placeholder) {
+      evidence.diagnostic = 'Provider probe returned an empty, mocked, or placeholder response.';
+      return { provider: providerId, model, status: 'failed', temporary: false, evidence };
+    }
+  } catch (err) {
+    evidence.model_enabled = false;
+    evidence.diagnostic = safeDiagnostic(err);
+    return { provider: providerId, model, status: 'failed', temporary: true, evidence };
+  }
+
+  evidence.diagnostic = 'Provider authentication, selected model, and a minimal completion probe passed before request dispatch.';
+  return { provider: providerId, model, status: 'passed', temporary: false, evidence };
 }
 
 // ─── Provider status (are credentials configured?) ───────────────────────────

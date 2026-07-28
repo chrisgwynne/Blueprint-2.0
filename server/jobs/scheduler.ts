@@ -740,6 +740,20 @@ export function startScheduler(): void {
     }
   });
 
+
+  // Phase 4: signal lifecycle and outcome measurement sweeps.
+  scheduleWithLock('*/15 * * * *', async () => {
+    try {
+      const { evaluateSignalLifecycle, evaluateDueOutcomeMeasurements } = await import('../trust/trust-engine.js') as any;
+      const lifecycle = evaluateSignalLifecycle();
+      const measurements = evaluateDueOutcomeMeasurements();
+      if (lifecycle.changed > 0 || measurements.changed > 0) {
+        console.log(`[scheduler] Trust sweeps: ${lifecycle.changed} signal lifecycle transition(s), ${measurements.changed} measurement update(s).`);
+      }
+    } catch (err: any) {
+      console.error('[scheduler] Trust sweeps failed:', err.message);
+    }
+  });
   // Idempotency-key housekeeping — daily.
   scheduleWithLock('0 5 * * *', () => {
     try {

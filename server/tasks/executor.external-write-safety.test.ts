@@ -36,6 +36,12 @@ const BIZ = 'biz_ews_test';
 
 beforeAll(() => {
   db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'EWS Test', 'ews-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
+  db.prepare(`DELETE FROM signal_lifecycle_events WHERE signal_id IN (SELECT id FROM signals WHERE business_id = ? AND connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github'))`).run(BIZ, BIZ);
+  db.prepare(`DELETE FROM signals WHERE business_id = ? AND connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github')`).run(BIZ, BIZ);
+  db.prepare(`DELETE FROM metrics WHERE business_id = ? AND connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github')`).run(BIZ, BIZ);
+  db.prepare(`DELETE FROM connector_syncs WHERE connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github')`).run(BIZ);
+  db.prepare(`DELETE FROM connector_confidence WHERE business_id = ? AND connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github')`).run(BIZ, BIZ);
+  db.prepare(`UPDATE business_capabilities SET connector_id = NULL WHERE business_id = ? AND connector_id IN (SELECT id FROM connectors WHERE business_id = ? AND type = 'github')`).run(BIZ, BIZ);
   db.prepare(`DELETE FROM connectors WHERE business_id = ? AND type = 'github'`).run(BIZ);
   db.prepare(`
     INSERT INTO connectors (id, business_id, type, name, credentials, config, status, created_at)
@@ -48,6 +54,7 @@ afterEach(() => {
   searchByMarker.mockClear();
   db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(BIZ);
+  db.prepare(`DELETE FROM outcome_measurement_runs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
 });
 

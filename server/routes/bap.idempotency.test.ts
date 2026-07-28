@@ -98,7 +98,7 @@ describe('Phase 1 exit criterion — duplicate proposal dedup', () => {
     // while an identical one is still being handled, rather than
     // guessing at a response that doesn't exist yet.)
     const idempotencyKey = generateId();
-    const payload = { title: 'Duplicate-prone proposal', action_type: 'kb_write', action_payload: { note: 'x' } };
+    const payload = { title: 'Duplicate-prone proposal', action_type: 'content_draft', action_payload: { note: 'x' } };
 
     const responses: TestResponse[] = [];
     for (let i = 0; i < 10; i++) {

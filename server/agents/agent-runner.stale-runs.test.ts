@@ -1,27 +1,31 @@
 /**
  * Regression coverage for issue #25: agent_runs left in status='running'
  * indefinitely (crashed process, or an LLM/tool call that hung) with no
- * completed_at/error and no timeout — BAP/dashboard then treat stale work
+ * completed_at/error and no timeout â€” BAP/dashboard then treat stale work
  * as still in-flight. recoverStaleAgentRuns() is the periodic sweep that
  * closes this out, mirroring execution-worker.ts's recoverStuckJobs() for
  * execution_jobs.
  */
-import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
+import { describe, test, expect, beforeAll, beforeEach, afterEach } from 'bun:test';
 import db, { generateId } from '../db/db.js';
 import { recoverStaleAgentRuns } from './agent-runner.js';
 
 const BIZ = 'biz_stale_runs_test';
 const AGENT_ID = 'agent_stale_runs_test';
 
+function cleanup() {
+  db.prepare(`DELETE FROM agent_runs WHERE business_id = ?`).run(BIZ);
+  db.prepare("DELETE FROM settings WHERE key = 'agent_run_timeout_minutes'").run();
+}
+
 beforeAll(() => {
+  cleanup();
   db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Stale Runs Test', 'stale-runs-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
   db.prepare(`INSERT INTO agents (id, profile_path, name) VALUES (?, 'agents/stale', 'Stale Test Agent') ON CONFLICT(id) DO NOTHING`).run(AGENT_ID);
 });
 
-afterEach(() => {
-  db.prepare(`DELETE FROM agent_runs WHERE business_id = ?`).run(BIZ);
-  db.prepare(`DELETE FROM settings WHERE key = 'agent_run_timeout_minutes'`).run();
-});
+beforeEach(cleanup);
+afterEach(cleanup);
 
 function insertRun(status: string, startedMinutesAgo: number): string {
   const id = generateId();
