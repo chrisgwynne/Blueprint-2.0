@@ -499,6 +499,7 @@ export const updateSystemIssue = (issueId: string, status: string) => patch(`/in
 export const getTrustCapabilities = (businessId: string) => get(`/trust/capabilities/${businessId}`)
 export const saveTrustCapability = (businessId: string, data: unknown) => post(`/trust/capabilities/${businessId}`, data)
 export const getTrustCorrections = (businessId: string) => get(`/trust/corrections/${businessId}`)
+export const getTrustCorrectionImpacts = (businessId: string, correctionId: string) => get(`/trust/corrections/${businessId}/${correctionId}/impacts`)
 export const saveTrustCorrection = (businessId: string, data: unknown) => post(`/trust/corrections/${businessId}`, data)
 export const getTrustRevenuePaths = (businessId: string) => get(`/trust/revenue-paths/${businessId}`)
 export const saveTrustRevenuePath = (businessId: string, data: unknown) => post(`/trust/revenue-paths/${businessId}`, data)

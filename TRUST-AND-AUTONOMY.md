@@ -5,7 +5,7 @@ Phase 4 adds a trust layer around autonomous business work. Blueprint now record
 The implementation follows the empirical-honesty rule: unknown data is represented as unknown, failed preflight blocks a run, completed execution does not imply successful outcome, and human corrections preserve history rather than deleting earlier assumptions.
 
 Implemented surfaces:
-- Dashboard route: `/trust`
+- Dashboard route: `/trust`, including capability controls, correction history and affected-record readback
 - Session API: `/api/trust/*`
 - BAP API: `/api/bap/v1/businesses/:businessId/{capabilities,corrections,revenue-paths,measurement-policies,approval-policies,scorecards,kanban-cards}` plus applicability, single-task Kanban-card and provider-preflight routes
 - Scheduler: signal lifecycle sweeps and due outcome measurement evaluation under the existing leader lock

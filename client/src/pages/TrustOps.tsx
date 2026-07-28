@@ -1,11 +1,68 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import useStore from '../lib/store.js'
-import { getTrustCapabilities, getTrustCorrections, getTrustLifecycle, getTrustMeasurementPolicies, getTrustPreflight, getTrustRevenuePaths, getTrustScorecard, saveTrustCapability, saveTrustCorrection, saveTrustRevenuePath } from '../lib/api.js'
+import {
+  getTrustCapabilities,
+  getTrustCorrectionImpacts,
+  getTrustCorrections,
+  getTrustLifecycle,
+  getTrustMeasurementPolicies,
+  getTrustPreflight,
+  getTrustRevenuePaths,
+  getTrustScorecard,
+  saveTrustCapability,
+  saveTrustCorrection,
+  saveTrustRevenuePath,
+} from '../lib/api.js'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return <section className="bp-panel" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}><h2 style={{ fontSize: 14, fontWeight: 700, margin: 0 }}>{title}</h2>{children}</section>
 }
 function JsonBlock({ value }: { value: unknown }) { return <pre style={{ margin: 0, maxHeight: 260, overflow: 'auto', fontSize: 11 }}>{JSON.stringify(value, null, 2)}</pre> }
+function Empty({ children }: { children: React.ReactNode }) { return <div style={{ color: 'var(--bp-text-3)', fontSize: 12, padding: '10px 0' }}>{children}</div> }
+
+function Pill({ children, tone = 'grey' }: { children: React.ReactNode; tone?: 'green' | 'amber' | 'red' | 'blue' | 'grey' }) {
+  return <span className={`bp-pill bp-pill-${tone}`} style={{ fontSize: 10, padding: '2px 6px' }}>{children}</span>
+}
+
+function toneForStatus(status: string) {
+  if (['confirmed', 'available', 'open', 'successful'].includes(status)) return 'green'
+  if (['proposed', 'review-required', 'stale', 'manual_review'].includes(status)) return 'amber'
+  if (['invalidated', 'cancelled', 'unavailable', 'failed', 'blocked'].includes(status)) return 'red'
+  return 'grey'
+}
+
+function CorrectionHistory({ corrections, impacts }: { corrections: any[]; impacts: Record<string, any[]> }) {
+  if (!corrections.length) return <Empty>No corrections recorded for this business.</Empty>
+  return <div style={{ display: 'grid', gap: 10 }}>
+    {corrections.map((c) => {
+      const rows = impacts[c.id] ?? []
+      return <div key={c.id} style={{ border: '1px solid var(--bp-border)', borderRadius: 6, padding: 12, background: 'rgba(0,0,0,0.10)' }}>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+          <Pill tone={toneForStatus(String(c.status)) as any}>{c.status}</Pill>
+          <Pill tone="blue">{c.correction_type}</Pill>
+          <span style={{ color: 'var(--bp-text-3)', fontSize: 11 }}>{c.created_at}</span>
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--bp-text)', lineHeight: 1.4 }}>{c.assertion_key}: {c.corrected_value}</div>
+        {c.explanation ? <div style={{ color: 'var(--bp-text-2)', fontSize: 12, lineHeight: 1.45, marginTop: 4 }}>{c.explanation}</div> : null}
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+          <Pill tone="grey">confidence {Number(c.confidence ?? 0).toFixed(2)}</Pill>
+          <Pill tone="grey">{c.permanence}</Pill>
+          {c.evidence_source ? <Pill tone="grey">evidence {c.evidence_source}</Pill> : null}
+        </div>
+        <div style={{ marginTop: 10, borderTop: '1px solid var(--bp-border)', paddingTop: 10 }}>
+          <div style={{ color: 'var(--bp-text-3)', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0, marginBottom: 6 }}>Affected records</div>
+          {rows.length === 0 ? <Empty>No impacted records recorded.</Empty> : <div style={{ display: 'grid', gap: 6 }}>
+            {rows.map((i) => <div key={i.id} style={{ display: 'grid', gridTemplateColumns: '90px 1fr auto', gap: 8, alignItems: 'center', fontSize: 11 }}>
+              <Pill tone={toneForStatus(String(i.new_status)) as any}>{i.entity_type}</Pill>
+              <span style={{ color: 'var(--bp-text-2)', overflow: 'hidden', textOverflow: 'ellipsis' }}>{i.entity_id}</span>
+              <span style={{ color: 'var(--bp-text-3)' }}>{i.previous_status ?? 'unknown'} -&gt; {i.new_status}</span>
+            </div>)}
+          </div>}
+        </div>
+      </div>
+    })}
+  </div>
+}
 
 export default function TrustOps() {
   const business = useStore((s) => s.currentBusiness)
@@ -22,10 +79,21 @@ export default function TrustOps() {
       const [capabilities, corrections, revenue, lifecycle, policies, preflight, scorecard] = await Promise.all([
         getTrustCapabilities(business.id), getTrustCorrections(business.id), getTrustRevenuePaths(business.id), getTrustLifecycle(business.id), getTrustMeasurementPolicies(business.id), getTrustPreflight(), getTrustScorecard(business.id),
       ])
-      setState({ loading: false, capabilities, corrections, revenue, lifecycle, policies, preflight, scorecard })
+      const correctionRows = Array.isArray((corrections as any).corrections) ? (corrections as any).corrections : []
+      const impactPairs = await Promise.all(correctionRows.map(async (c: any) => {
+        try {
+          const result = await getTrustCorrectionImpacts(business.id, c.id)
+          return [c.id, Array.isArray((result as any).impacts) ? (result as any).impacts : []] as const
+        } catch {
+          return [c.id, []] as const
+        }
+      }))
+      setState({ loading: false, capabilities, corrections, correctionImpacts: Object.fromEntries(impactPairs), revenue, lifecycle, policies, preflight, scorecard })
     } catch (err: any) { setState({ loading: false, error: err.message }) }
   }
   useEffect(() => { load() }, [business?.id])
+
+  const correctionRows = useMemo(() => Array.isArray(state.corrections?.corrections) ? state.corrections.corrections : [], [state.corrections])
 
   if (!business) return <div className="p-6">No business selected.</div>
   if (state.loading) return <div className="p-6">Loading trust operations...</div>
@@ -41,7 +109,7 @@ export default function TrustOps() {
       <Section title="Human Corrections">
         <textarea className="bp-input" value={correction} onChange={e => setCorrection(e.target.value)} rows={3} />
         <button className="bp-btn bp-btn-primary" onClick={async () => { await saveTrustCorrection(business.id, { assertion_key: capabilityKey, corrected_value: correction, explanation: correction, affected_capability: capabilityKey }); load() }}>Record correction</button>
-        <JsonBlock value={state.corrections} />
+        <CorrectionHistory corrections={correctionRows} impacts={state.correctionImpacts ?? {}} />
       </Section>
       <Section title="Revenue Paths">
         <div style={{ display: 'flex', gap: 8 }}><input className="bp-input" value={revenueName} onChange={e => setRevenueName(e.target.value)} /><button className="bp-btn bp-btn-primary" onClick={async () => { await saveTrustRevenuePath(business.id, { name: revenueName, role: 'primary', business_model_type: 'operational_enablement', evidence_status: 'observed', priority: 10 }); load() }}>Save primary</button></div>

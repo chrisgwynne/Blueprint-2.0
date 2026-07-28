@@ -11,7 +11,7 @@ Implemented in this branch:
 - Risk-tier evidence on task creation/approval
 - Cooperative cancellation request/heartbeat/run-event recording
 - Agent scorecard snapshots and BAP read access
-- Dashboard Trust Ops page
+- Dashboard Trust Ops page with structured correction history and affected-record readback
 - BAP Hermes/Kanban card projection endpoints
 
 Verification performed:
