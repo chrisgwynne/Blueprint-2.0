@@ -763,7 +763,8 @@ paths:
         - $ref: '#/components/parameters/BusinessIdPath'
         - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '202': { description: Proposed correction row; does not mutate capability state. }  /businesses/{businessId}/corrections/{correctionId}/impacts:
+        '202': { description: Proposed correction row; does not mutate capability state. }
+  /businesses/{businessId}/corrections/{correctionId}/impacts:
     get:
       summary: List records affected by a confirmed correction
       parameters:

@@ -16,7 +16,14 @@ router.post('/applicability/:businessId/evaluate', (req: Request, res: Response)
 router.get('/suppressions/:businessId', (req: Request, res: Response) => res.json({ suppressions: db.prepare('SELECT * FROM applicability_suppressions WHERE business_id = ? ORDER BY created_at DESC').all(String(req.params.businessId)) }));
 router.get('/corrections/:businessId', (req: Request, res: Response) => res.json({ corrections: db.prepare('SELECT * FROM human_corrections WHERE business_id = ? ORDER BY created_at DESC').all(String(req.params.businessId)) }));
 router.post('/corrections/:businessId', (req: Request, res: Response) => { try { res.status(201).json({ correction: createCorrection({ ...(req.body as Record<string, unknown>), business_id: String(req.params.businessId) }) }); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
-router.get('/corrections/:businessId/:correctionId/impacts', (req: Request, res: Response) => res.json({ impacts: db.prepare('SELECT * FROM correction_impacts WHERE business_id = ? AND correction_id = ? ORDER BY created_at DESC').all(String(req.params.businessId), String(req.params.correctionId)) }));
+router.get('/corrections/:businessId/:correctionId/impacts', (req: Request, res: Response) => {
+  const businessId = String(req.params.businessId);
+  const correctionId = String(req.params.correctionId);
+  const correction = db.prepare('SELECT id FROM human_corrections WHERE id = ? AND business_id = ?').get(correctionId, businessId);
+  if (!correction) return res.status(404).json({ error: `Correction '${correctionId}' not found for this business.` });
+  const impacts = db.prepare('SELECT * FROM correction_impacts WHERE business_id = ? AND correction_id = ? ORDER BY created_at DESC, id DESC').all(businessId, correctionId);
+  return res.json({ correction_id: correctionId, business_id: businessId, impacts });
+});
 router.get('/revenue-paths/:businessId', (req: Request, res: Response) => res.json({ revenue_paths: listRevenuePaths(String(req.params.businessId)) }));
 router.post('/revenue-paths/:businessId', (req: Request, res: Response) => { try { res.status(201).json({ revenue_path: upsertRevenuePath(String(req.params.businessId), req.body as Record<string, unknown>) }); } catch (err) { res.status(400).json({ error: (err as Error).message }); } });
 router.get('/signals/:businessId/lifecycle', (req: Request, res: Response) => res.json({ events: db.prepare('SELECT * FROM signal_lifecycle_events WHERE business_id = ? ORDER BY created_at DESC LIMIT 200').all(String(req.params.businessId)) }));
