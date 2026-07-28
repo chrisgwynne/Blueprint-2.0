@@ -1,5 +1,6 @@
 import db, { generateId } from '../db/db.js';
 import { generateApiKey, hashApiKey, keyPrefix } from '../bap/auth.js';
+import { runExecutionWorkerTick } from '../tasks/execution-worker.js';
 import {
   checkRunCancellation,
   createCorrection,
@@ -181,6 +182,21 @@ const highRiskTask = await request(`/businesses/${businessId}/tasks`, {
 });
 assert(highRiskTask.trust_tier === 'red', `Expected high-risk proposal to escalate to red, got ${highRiskTask.trust_tier}.`);
 remember('approval escalation over BAP task proposal', highRiskTask);
+
+const driftTaskId = `task_${generateId()}`;
+const driftJobId = `job_${generateId()}`;
+const approvedPayload = { description: 'Approved connector research payload' };
+const changedPayload = { description: 'Changed after approval and before execution' };
+db.prepare(`INSERT INTO tasks (id, business_id, title, description, proposed_by, assigned_to, action_type, action_payload, status, trust_tier, priority, confidence, approval_mode, version, approved_payload_snapshot, created_at, updated_at) VALUES (?, ?, 'Execution drift verifier task', 'Payload drift should require reapproval before execution.', 'bap:agt_live_trust_autonomy', 'hermes', 'research_connector', ?, 'approved', 'orange', 'p2', 0.8, 'requires_approval', 2, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(driftTaskId, businessId, JSON.stringify(changedPayload), JSON.stringify(approvedPayload));
+db.prepare(`INSERT INTO execution_jobs (id, task_id, task_version, business_id, action_type, status, created_at, updated_at) VALUES (?, ?, 2, ?, 'research_connector', 'queued', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(driftJobId, driftTaskId, businessId);
+const driftWorker = await runExecutionWorkerTick();
+const driftTask = db.prepare('SELECT status, outcome_data FROM tasks WHERE id = ?').get(driftTaskId) as Record<string, unknown>;
+const driftJob = db.prepare('SELECT status, last_error FROM execution_jobs WHERE id = ?').get(driftJobId) as Record<string, unknown>;
+assert(driftWorker.claimed >= 1, 'Execution worker did not claim the drift verification job.');
+assert(driftTask.status === 'manual_review', 'Changed approved task payload did not require manual review.');
+assert(driftJob.status === 'manual_review', 'Changed approved task payload did not move the execution job to manual review.');
+assert(String(driftJob.last_error ?? '').includes('payload changed after approval'), 'Execution drift reason was not recorded on the job.');
+remember('execution integrity blocks changed approved payload before side effects', { driftTask, driftJob });
 const invalidTask = await fetch(`${apiBase}/businesses/${businessId}/tasks`, {
   method: 'POST',
   headers: { 'BAP-Key': apiKey, 'Content-Type': 'application/json', 'Idempotency-Key': generateId() },

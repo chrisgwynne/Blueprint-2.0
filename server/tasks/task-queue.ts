@@ -96,7 +96,7 @@ function fireWebhook(event: string, data: unknown): void {
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   proposed: ['approved', 'rejected', 'cancelled'],
-  approved: ['executing', 'rejected', 'cancelled'],
+  approved: ['executing', 'rejected', 'cancelled', 'manual_review'],
   // 'approved' here is deliberately narrow: it's ONLY used by
   // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
   // (its job's lease expired mid-execution, and the recovery classifier
