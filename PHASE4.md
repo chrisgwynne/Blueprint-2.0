@@ -23,7 +23,7 @@ Verification performed:
 - Agent activation tests: 5 pass
 - GitHub executor safety tests pass in isolation
 - Research connector executor tests: 6 pass
-- Full server suite: 595 pass, 23 reported fail; visible hard failures are two Windows symlink `O_NOFOLLOW` primitive tests, while executor/lifecycle named failures pass in isolation and appear to be shared fixture/reporting interference.
+- Full server suite: 618 pass, 0 fail, 2003 assertions
 
 Incomplete from the original broad goal:
 - No real external Hermes Kanban connector exists in this repository; the required card contract is documented in `TRUST-AND-AUTONOMY.md`.

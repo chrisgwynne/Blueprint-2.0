@@ -39,6 +39,9 @@ function ensureBusiness(): void {
 }
 
 function resetDb(): void {
+  db.prepare('DELETE FROM outcome_measurement_runs').run();
+  db.prepare('DELETE FROM task_events').run();
+  db.prepare('DELETE FROM execution_jobs').run();
   db.prepare('DELETE FROM tasks').run();
   db.prepare('DELETE FROM agent_runs').run();
   db.prepare('DELETE FROM agents').run();
