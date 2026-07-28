@@ -1044,8 +1044,18 @@ async function executeShopifyProductCreate(task: Task, job: ExecutionJobRow | nu
 async function executeShopifyProductUpdate(task: Task): Promise<ExecuteResult> {
   const payload = task.action_payload ?? {};
   const { shopify, credentials, config } = await getShopify(task);
-  const productId = payload.product_id as string | undefined;
+  let productId = payload.product_id as string | undefined;
   if (!productId) throw new Error('product_id is required in action_payload.');
+
+  // Agents sometimes pass a Shopify handle (e.g. "love-you-bye-door-topper")
+  // instead of the numeric REST product ID. Resolve handles before calling
+  // /products/:id so approved tasks do not fail with a misleading 404.
+  if (!/^\d+$/.test(String(productId))) {
+    const product = await (shopify as Record<string, unknown> & { findProductByHandle(creds: Record<string, string>, handle: string): Promise<{ id: number; title?: string; body_html?: string } | null> })
+      .findProductByHandle(credentials, String(productId));
+    if (!product?.id) throw new Error(`Shopify product handle not found: ${productId}`);
+    productId = String(product.id);
+  }
 
   // Save current state for rollback
   const current = await (shopify as Record<string, unknown> & { fetchProduct(creds: Record<string, string>, config: Record<string, unknown>, id: string): Promise<Record<string, unknown>> }).fetchProduct(credentials, config, productId);
@@ -1056,8 +1066,8 @@ async function executeShopifyProductUpdate(task: Task): Promise<ExecuteResult> {
   };
 
   const updates: Record<string, unknown> = {};
-  if (payload.new_description !== undefined || payload.body_html !== undefined) {
-    updates.body_html = payload.new_description ?? payload.body_html;
+  if (payload.proposed_description !== undefined || payload.new_description !== undefined || payload.body_html !== undefined) {
+    updates.body_html = payload.proposed_description ?? payload.new_description ?? payload.body_html;
     (rollback.previous_state as Record<string, unknown>).body_html = current.body_html;
   }
   if (payload.title !== undefined) {
@@ -1074,6 +1084,7 @@ async function executeShopifyProductUpdate(task: Task): Promise<ExecuteResult> {
       (rollback.previous_state as Record<string, unknown>)[k] = (current[k] as unknown) ?? null;
     }
   }
+  if (Object.keys(updates).length === 0) throw new Error('No product update fields supplied.');
 
   await (shopify as Record<string, unknown> & { updateProduct(creds: Record<string, string>, config: Record<string, unknown>, id: string, updates: Record<string, unknown>): Promise<unknown> }).updateProduct(credentials, config, productId, updates);
   db.prepare('UPDATE tasks SET rollback_data = ? WHERE id = ?')
@@ -1088,6 +1099,41 @@ async function executeShopifyProductUpdate(task: Task): Promise<ExecuteResult> {
       changes: Object.keys(updates),
     },
   };
+}
+
+async function executeShopifyMetaUpdate(task: Task): Promise<ExecuteResult> {
+  const payload = task.action_payload ?? {};
+  const { shopify, credentials, config } = await getShopify(task);
+  const resourceType = (payload.resource_type as string | undefined) ?? 'product';
+  const resourceId = payload.resource_id as string | undefined;
+  if (!resourceId) throw new Error('shopify_meta_update requires action_payload.resource_id.');
+
+  if (resourceType === 'collection') {
+    let collectionId = resourceId;
+    if (!/^\d+$/.test(String(collectionId))) {
+      const collection = await (shopify as Record<string, unknown> & { findCollectionByHandle(creds: Record<string, string>, handle: string): Promise<{ id: number; title?: string; handle?: string } | null> })
+        .findCollectionByHandle(credentials, String(collectionId));
+      if (!collection?.id) throw new Error(`Shopify collection handle not found: ${collectionId}`);
+      collectionId = String(collection.id);
+    }
+    await (shopify as Record<string, unknown> & { updateCollectionSeo(creds: Record<string, string>, config: Record<string, unknown>, id: string, seo: { title?: string; description?: string }): Promise<unknown> })
+      .updateCollectionSeo(credentials, config, collectionId, {
+        title: payload.seo_title as string | undefined,
+        description: payload.seo_description as string | undefined,
+      });
+    return {
+      outcome: `Shopify collection SEO metadata updated (ID: ${collectionId})`,
+      outcome_data: {
+        resource_type: 'collection',
+        resource_id: collectionId,
+        changes: ['metafields_global_title_tag', 'metafields_global_description_tag'],
+      },
+    };
+  }
+
+  return await fileInstructionDraft(task, payload, 'shopify_meta_update',
+    `Update Shopify ${resourceType} SEO metadata for ${resourceId}\n\nSEO title: ${(payload.seo_title as string | undefined) ?? '(unchanged)'}\nSEO description: ${(payload.seo_description as string | undefined) ?? '(unchanged)'}`
+  );
 }
 
 async function executeShopifyPageCreate(task: Task, job: ExecutionJobRow | null): Promise<ExecuteResult> {
@@ -1447,8 +1493,8 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
       case 'meta_update':              result = await executeMetaUpdate(task);    break;
       case 'shopify_product_create':   result = await executeShopifyProductCreate(task, job); break;
       case 'shopify_product_update':
-      case 'shopify_description_update':
-      case 'shopify_meta_update':      result = await executeShopifyProductUpdate(task); break;
+      case 'shopify_description_update': result = await executeShopifyProductUpdate(task); break;
+      case 'shopify_meta_update':       result = await executeShopifyMetaUpdate(task); break;
       case 'shopify_page_create':      result = await executeShopifyPageCreate(task, job); break;
       case 'shopify_page_update':      result = await executeShopifyPageUpdate(task); break;
       case 'shopify_blog_post_create': result = await executeShopifyBlogPostCreate(task, job); break;

@@ -435,10 +435,10 @@ const connector = {
 
   async updateProduct(credentials: Creds, _config: unknown, productId: number | string, updates: Record<string, unknown>): Promise<unknown> {
     const url = `/products/${productId}.json`;
-    const res = await shopifyFetch(credentials, url, { product: { id: productId, ...updates } });
+    const res = await shopifyFetch(credentials, url, { product: { id: productId, ...updates } }, 'PUT');
     if (!res.ok) {
       const err = await res.json().catch(() => ({})) as { errors?: unknown };
-      throw new Error(`Shopify updateProduct failed: ${JSON.stringify(err.errors ?? err)}`);
+      throw new Error(`Shopify updateProduct failed (${res.status}): ${JSON.stringify(err.errors ?? err)}`);
     }
     return res.json();
   },
@@ -452,6 +452,13 @@ const connector = {
     if (!res.ok) throw new Error(`Shopify fetchProduct ${productId} failed (${res.status})`);
     const data = await res.json() as { product: unknown };
     return data.product;
+  },
+
+  async findProductByHandle(credentials: Creds, handle: string): Promise<{ id: number; title?: string; handle?: string; body_html?: string } | null> {
+    const res = await shopifyFetch(credentials, `/products.json?handle=${encodeURIComponent(handle)}&limit=1&fields=id,title,handle,body_html`);
+    if (!res.ok) throw new Error(`Shopify findProductByHandle ${handle} failed (${res.status})`);
+    const data = await res.json() as { products?: Array<{ id: number; title?: string; handle?: string; body_html?: string }> };
+    return data.products?.[0] ?? null;
   },
 
   async createPage(credentials: Creds, _config: unknown, pageData: Record<string, unknown>): Promise<unknown> {
@@ -468,10 +475,10 @@ const connector = {
   async updatePage(credentials: Creds, _config: unknown, pageId: number | string, updates: Record<string, unknown>): Promise<unknown> {
     const res = await shopifyFetch(credentials, `/pages/${pageId}.json`, {
       page: { id: pageId, ...updates },
-    });
+    }, 'PUT');
     if (!res.ok) {
       const err = await res.json().catch(() => ({})) as { errors?: unknown };
-      throw new Error(`Shopify updatePage failed: ${JSON.stringify(err.errors ?? err)}`);
+      throw new Error(`Shopify updatePage failed (${res.status}): ${JSON.stringify(err.errors ?? err)}`);
     }
     return res.json();
   },
@@ -526,6 +533,23 @@ const connector = {
     }
     const data = await res.json() as { custom_collections?: unknown[] };
     return data.custom_collections ?? [];
+  },
+
+  async findCollectionByHandle(credentials: Creds, handle: string): Promise<{ id: number; title?: string; handle?: string; body_html?: string } | null> {
+    const collections = await connector.fetchCollections(credentials) as Array<{ id: number; title?: string; handle?: string; body_html?: string }>;
+    return collections.find(c => c.handle === handle) ?? null;
+  },
+
+  async updateCollectionSeo(credentials: Creds, _config: unknown, collectionId: number | string, seo: { title?: string; description?: string }): Promise<unknown> {
+    const custom_collection: Record<string, unknown> = { id: collectionId };
+    if (seo.title !== undefined) custom_collection.metafields_global_title_tag = seo.title;
+    if (seo.description !== undefined) custom_collection.metafields_global_description_tag = seo.description;
+    const res = await shopifyFetch(credentials, `/custom_collections/${collectionId}.json`, { custom_collection }, 'PUT');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({})) as { errors?: unknown };
+      throw new Error(`Shopify updateCollectionSeo ${collectionId} failed (${res.status}): ${JSON.stringify(err.errors ?? err)}`);
+    }
+    return res.json();
   },
 
   async updateCollectionDescription(credentials: Creds, _config: unknown, collectionId: number | string, bodyHtml: string): Promise<unknown> {
