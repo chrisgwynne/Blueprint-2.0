@@ -68,6 +68,7 @@ function cleanupVerifierRecords() {
     db.prepare('DELETE FROM outcome_measurement_runs WHERE task_id = ?').run(task.id);
     db.prepare('DELETE FROM task_events WHERE task_id = ?').run(task.id);
   }
+  db.prepare('DELETE FROM execution_jobs WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM tasks WHERE business_id = ?').run(businessId);
   const runIds = db.prepare('SELECT id FROM agent_runs WHERE business_id = ? OR agent_id = ?').all(businessId, internalAgentId) as Array<{ id: string }>;
   for (const run of runIds) db.prepare('DELETE FROM agent_run_events WHERE run_id = ?').run(run.id);
@@ -197,6 +198,21 @@ assert(driftTask.status === 'manual_review', 'Changed approved task payload did 
 assert(driftJob.status === 'manual_review', 'Changed approved task payload did not move the execution job to manual review.');
 assert(String(driftJob.last_error ?? '').includes('payload changed after approval'), 'Execution drift reason was not recorded on the job.');
 remember('execution integrity blocks changed approved payload before side effects', { driftTask, driftJob });
+
+const invalidSchemaTask = await fetch(`${apiBase}/businesses/${businessId}/tasks`, {
+  method: 'POST',
+  headers: { 'BAP-Key': apiKey, 'Content-Type': 'application/json', 'Idempotency-Key': generateId() },
+  body: JSON.stringify({
+    title: 'Incomplete connector research',
+    description: 'Missing required research_connector payload description should be rejected before task creation.',
+    action_type: 'research_connector',
+    action_payload: {},
+  }),
+});
+const invalidSchemaBody = await invalidSchemaTask.json() as { issues?: Array<Record<string, unknown>> };
+assert(invalidSchemaTask.status === 400, 'Expected incomplete research_connector task to return 400, got ' + invalidSchemaTask.status + '.');
+assert(Array.isArray(invalidSchemaBody.issues) && invalidSchemaBody.issues.some((issue) => issue.code === 'payload_schema_mismatch'), 'Proposal-time schema validation did not return structured BAP issues.');
+remember('proposal-time action schema rejection over BAP', invalidSchemaBody);
 const invalidTask = await fetch(`${apiBase}/businesses/${businessId}/tasks`, {
   method: 'POST',
   headers: { 'BAP-Key': apiKey, 'Content-Type': 'application/json', 'Idempotency-Key': generateId() },

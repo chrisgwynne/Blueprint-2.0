@@ -213,6 +213,7 @@ async function createGapTask({
         connector_name,
         requested_by: source,
         reason: reason ?? null,
+        description: use_case ?? reason ?? connector_name,
         use_case: use_case ?? null,
         implied_by: implied_by ?? null,
       },

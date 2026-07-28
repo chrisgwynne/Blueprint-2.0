@@ -482,7 +482,7 @@ let an approved task actually execute automatically (rather than sitting in
 `manual_review`) â€” supply them whenever the action is a known automatable
 type. `priority` values: `p1` urgent Â· `p2` normal Â· `p3` low.
 
-**Response:** `{ "task_id": "tsk_xxx", "status": "proposed", "trust_tier": "yellow", "approval_required": true }` (201).
+**Response:** `{ "task_id": "tsk_xxx", "status": "proposed", "trust_tier": "yellow", "approval_required": true }` (201). If Blueprint returns 400 with an `issues` array such as `payload_schema_mismatch` or `unknown_action_type`, fix the proposed `action_type`/`action_payload` or report the block; do not retry the same invalid proposal.
 
 After proposing, tell the human:
 *"I've proposed [title] in Blueprint â€” it's waiting for your approval."*

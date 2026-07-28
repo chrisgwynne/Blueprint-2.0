@@ -995,7 +995,9 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
     });
   } catch (err) {
     const message = (err as Error).message;
-    if (message.includes('not found') || message.includes('not actionable')) return res.status(400).json({ error: message });
+    const issues = (err as Error & { issues?: unknown }).issues;
+    if (Array.isArray(issues)) return res.status(400).json({ error: message, issues });
+    if (message.includes('not found') || message.includes('not actionable') || message.includes('cannot be proposed')) return res.status(400).json({ error: message });
     return res.status(500).json({ error: message });
   }
 });

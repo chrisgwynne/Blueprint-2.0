@@ -1178,7 +1178,22 @@ paths:
                 action_payload: { type: object }
       responses:
         '201': { description: "{ task_id, status, trust_tier, approval_required: true }" }
-        '400': { $ref: '#/components/responses/IdempotencyKeyRequired' }
+        '400':
+          description: Missing Idempotency-Key, invalid request, inapplicable proposal, or action schema failure. Action schema failures include `issues` with validation codes such as `payload_schema_mismatch` or `unknown_action_type`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/ErrorResponse' }
+                  - type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            code: { type: string }
+                            message: { type: string }
         '409': { $ref: '#/components/responses/Conflict' }
 
   /businesses/{businessId}/execution-jobs:

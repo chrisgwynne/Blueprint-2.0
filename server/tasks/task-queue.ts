@@ -1,10 +1,11 @@
 import db, { generateId, audit } from '../db/db.js';
 import { enqueueExecutionJob, getActiveJobForTask, cancelJob as cancelExecutionJob } from './execution-jobs.js';
 import { recordDecision } from '../brain/decision-memory.js';
-import { validateAction } from './action-registry.js';
+import { getActionRegistryEntry, validateAction, validatePayloadAgainstSchema } from './action-registry.js';
 import { getBusinessProfile } from '../business/business-profile.js';
 import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
+import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -130,6 +131,12 @@ function safeJSON<T>(raw: unknown, fallback: T): T {
   }
 }
 
+function createProposalValidationError(message: string, issues: ValidationIssue[]): Error & { issues: ValidationIssue[]; statusCode: number } {
+  const err = new Error(message) as Error & { issues: ValidationIssue[]; statusCode: number };
+  err.issues = issues;
+  err.statusCode = 400;
+  return err;
+}
 function parseRow(row: Record<string, unknown> | null): TaskRow | null {
   if (!row) return null;
   return {
@@ -176,6 +183,44 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (goal_id) {
     const goal = db.prepare('SELECT id FROM goals WHERE id = ? AND business_id = ?').get(goal_id, business_id);
     if (!goal) throw new Error(`Goal '${goal_id}' not found for this business.`);
+  }
+
+  if (action_type) {
+    const entry = getActionRegistryEntry(action_type);
+    if (!entry || entry.active === false) {
+      const issues: ValidationIssue[] = [{
+        code: 'unknown_action_type',
+        message: `Action type '${action_type}' is not registered in the Typed Action Registry.`,
+      }];
+      createSystemIssue({
+        business_id,
+        issue_type: 'action_validation_failure',
+        severity: 'warning',
+        title: `Task action '${action_type}' cannot be proposed`,
+        description: issues[0]!.message,
+        related_action_type: action_type,
+        metadata: { stage: 'proposal', issues },
+      });
+      throw createProposalValidationError(`Task action '${action_type}' cannot be proposed: ${issues[0]!.message}`, issues);
+    }
+
+    const payloadIssues = validatePayloadAgainstSchema(entry.payload_schema, action_payload ?? {});
+    if (payloadIssues.length > 0) {
+      const issues: ValidationIssue[] = [{
+        code: 'payload_schema_mismatch',
+        message: `action_type '${action_type}' payload does not match its schema: ${payloadIssues.map((issue) => issue.message).join('; ')}`,
+      }];
+      createSystemIssue({
+        business_id,
+        issue_type: 'action_validation_failure',
+        severity: 'warning',
+        title: `Task action '${action_type}' payload cannot be proposed`,
+        description: issues[0]!.message,
+        related_action_type: action_type,
+        metadata: { stage: 'proposal', issues, payload_issues: payloadIssues },
+      });
+      throw createProposalValidationError(`Task action '${action_type}' cannot be proposed: ${issues[0]!.message}`, issues);
+    }
   }
 
   const applicability = evaluateApplicability({

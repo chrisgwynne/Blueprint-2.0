@@ -82,7 +82,7 @@ PATCH /api/bap/v1/signals/:id               — update status
 GET   /api/bap/v1/businesses/:id/tasks      - list tasks
 GET   /api/bap/v1/businesses/:id/kanban-cards - canonical Hermes card sync feed
 GET   /api/bap/v1/tasks/:id/kanban-card      - canonical Hermes card projection
-POST  /api/bap/v1/businesses/:id/tasks      — propose task
+POST  /api/bap/v1/businesses/:id/tasks      - propose task; returns 400 with structured `issues` when action schema/applicability blocks the proposal
 PATCH /api/bap/v1/tasks/:id                 — approve/reject
 ```
 

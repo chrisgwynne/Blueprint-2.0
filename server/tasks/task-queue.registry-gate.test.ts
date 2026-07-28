@@ -57,16 +57,17 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(after!.status).toBe('approved');
   });
 
-  test('an unregistered action_type blocks approval and files a system issue', () => {
-    const task = propose('this_action_type_does_not_exist_anywhere');
-    expect(() => approveTask(task.id, 'tester')).toThrow(/not registered in the Typed Action Registry/);
+  test('an unregistered action_type blocks proposal and files a system issue', () => {
+    expect(() => propose('this_action_type_does_not_exist_anywhere')).toThrow(/not registered in the Typed Action Registry/);
 
-    const stillProposed = db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id) as { status: string };
-    expect(stillProposed.status).toBe('proposed');
+    const tasks = db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE business_id = ?').get(BIZ) as { count: number };
+    expect(tasks.count).toBe(0);
 
     const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
     expect(issues.length).toBeGreaterThan(0);
-    expect(issues[0]!.related_task_id).toBe(task.id);
+    expect(issues[0]!.related_action_type).toBe('this_action_type_does_not_exist_anywhere');
+    expect((issues[0]!.metadata as any)?.stage).toBe('proposal');
+    expect((issues[0]!.metadata as any)?.issues?.[0]?.code).toBe('unknown_action_type');
   });
 
   // product_suggestion (like the shopify_* family) is ecommerce-only, but —

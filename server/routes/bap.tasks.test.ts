@@ -235,6 +235,24 @@ describe('POST /businesses/:id/tasks - applicability errors', () => {
     const suppression = db.prepare(`SELECT reason FROM applicability_suppressions WHERE business_id = ? AND capability_key = 'google_merchant_center' AND status = 'active'`).get(BIZ_A) as { reason: string } | undefined;
     expect(suppression?.reason).toContain('google_merchant_center');
   });
+
+
+  test('returns structured 400 issues when an action payload fails proposal-time schema validation', async () => {
+    const title = `Incomplete connector research ${generateId()}`;
+    const { status, body } = await post(`/api/bap/v1/businesses/${BIZ_A}/tasks`, {
+      title,
+      description: 'Missing required research_connector description in action_payload.',
+      action_type: 'research_connector',
+      action_payload: {},
+    }, { 'BAP-Key': keyA, 'Idempotency-Key': generateId() });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain('cannot be proposed');
+    expect(body.issues.some((issue: any) => issue.code === 'payload_schema_mismatch')).toBe(true);
+
+    const created = db.prepare('SELECT id FROM tasks WHERE business_id = ? AND title = ?').get(BIZ_A, title);
+    expect(created).toBeNull();
+  });
 });
 describe('Hermes Kanban card contract', () => {
   test('GET /tasks/:taskId/kanban-card returns the canonical card handoff fields', async () => {
