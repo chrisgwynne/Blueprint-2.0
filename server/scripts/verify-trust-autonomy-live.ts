@@ -1,16 +1,21 @@
 import db, { generateId } from '../db/db.js';
 import { generateApiKey, hashApiKey, keyPrefix } from '../bap/auth.js';
 import {
+  checkRunCancellation,
   createCorrection,
+  evaluateDueOutcomeMeasurements,
   evaluateSignalLifecycle,
+  markRunCancelled,
   recordProviderPreflight,
   scheduleOutcomeMeasurements,
+  updateRunHeartbeat,
 } from '../trust/trust-engine.js';
 
 const baseUrl = (process.env.BLUEPRINT_LIVE_URL ?? 'http://127.0.0.1:4100').replace(/\/$/, '');
 const apiBase = `${baseUrl}/api/bap/v1`;
 const businessId = process.env.BLUEPRINT_VERIFY_BUSINESS_ID ?? 'biz_live_trust_autonomy';
 const agentId = 'agt_live_trust_autonomy';
+const internalAgentId = `bap:${agentId}`;
 
 const permissions = [
   'capabilities:read',
@@ -24,6 +29,8 @@ const permissions = [
   'approval_policies:read',
   'provider_preflight:read',
   'scorecards:read',
+  'agents:read',
+  'agents:trigger',
   'tasks:read',
   'tasks:propose',
   'signals:read',
@@ -61,6 +68,9 @@ function cleanupVerifierRecords() {
     db.prepare('DELETE FROM task_events WHERE task_id = ?').run(task.id);
   }
   db.prepare('DELETE FROM tasks WHERE business_id = ?').run(businessId);
+  const runIds = db.prepare('SELECT id FROM agent_runs WHERE business_id = ? OR agent_id = ?').all(businessId, internalAgentId) as Array<{ id: string }>;
+  for (const run of runIds) db.prepare('DELETE FROM agent_run_events WHERE run_id = ?').run(run.id);
+  db.prepare('DELETE FROM agent_runs WHERE business_id = ? OR agent_id = ?').run(businessId, internalAgentId);
   db.prepare('DELETE FROM signal_lifecycle_events WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM signals WHERE business_id = ?').run(businessId);
   const connectorIds = db.prepare('SELECT id FROM connectors WHERE business_id = ?').all(businessId) as Array<{ id: string }>;
@@ -75,6 +85,7 @@ function cleanupVerifierRecords() {
   db.prepare('DELETE FROM agent_scorecard_snapshots WHERE business_id = ?').run(businessId);
   db.prepare('DELETE FROM bap_audit WHERE agent_id = ?').run(agentId);
   db.prepare('DELETE FROM bap_agents WHERE id = ?').run(agentId);
+  db.prepare('DELETE FROM agents WHERE id = ?').run(internalAgentId);
 }
 
 cleanupVerifierRecords();
@@ -91,6 +102,7 @@ db.prepare(`
   VALUES (?, 'Live Trust Autonomy Verifier', ?, ?, 'active', ?, ?, 'yellow', CURRENT_TIMESTAMP)
 `).run(agentId, await hashApiKey(apiKey), keyPrefix(apiKey), JSON.stringify(permissions), JSON.stringify([businessId]));
 
+db.prepare("INSERT INTO agents (id, profile_path, name, status, created_at) VALUES (?, 'server/agents/live-verifier/profile.yaml', 'Live Trust Autonomy Verifier', 'active', CURRENT_TIMESTAMP) ON CONFLICT(id) DO NOTHING").run(internalAgentId);
 await request(`/businesses/${businessId}/capabilities`, {
   method: 'POST',
   idempotencyKey: generateId(),
@@ -145,8 +157,30 @@ const validTask = await request(`/businesses/${businessId}/tasks`, {
   }),
 });
 assert(validTask.task_id, 'BAP valid task proposal did not return a task id.');
-remember('valid BAP task proposed', validTask);
+assert(validTask.trust_tier === 'orange', `Expected low-risk draft GitHub issue proposal to be orange, got ${validTask.trust_tier}.`);
+remember('valid low-risk draft BAP task proposed with orange approval tier', validTask);
 
+const highRiskTask = await request(`/businesses/${businessId}/tasks`, {
+  method: 'POST',
+  idempotencyKey: generateId(),
+  body: JSON.stringify({
+    title: 'Bulk operational change with high financial exposure',
+    description: 'Large-scope operational task should escalate approval risk before any execution.',
+    action_type: 'github_issue',
+    action_payload: {
+      repository: 'chrisgwynne/Blueprint-2.0',
+      title: 'High-risk verifier issue draft',
+      acceptance_criteria: ['Human review confirms no live side effect occurs automatically'],
+      executor: 'hermes',
+      affected_records: 5000,
+      financial_exposure_gbp: 1000,
+    },
+    assigned_to: 'hermes',
+    confidence: 0.82,
+  }),
+});
+assert(highRiskTask.trust_tier === 'red', `Expected high-risk proposal to escalate to red, got ${highRiskTask.trust_tier}.`);
+remember('approval escalation over BAP task proposal', highRiskTask);
 const invalidTask = await fetch(`${apiBase}/businesses/${businessId}/tasks`, {
   method: 'POST',
   headers: { 'BAP-Key': apiKey, 'Content-Type': 'application/json', 'Idempotency-Key': generateId() },
@@ -252,7 +286,12 @@ const scheduledAgain = scheduleOutcomeMeasurements(validTask.task_id);
 assert(scheduledAgain === 0, 'Outcome checkpoint scheduling was not idempotent.');
 const measurementPolicies = await request(`/businesses/${businessId}/measurement-policies`);
 assert(measurementPolicies.policies.some((p: Record<string, unknown>) => p.id === policyId), 'Measurement policy is not readable through BAP.');
-remember('outcome policy read and idempotent scheduling', { scheduled, scheduledAgain });
+db.prepare("UPDATE outcome_measurement_runs SET checkpoint_at = datetime('now','-1 minute') WHERE task_id = ?").run(validTask.task_id);
+const dueMeasurements = evaluateDueOutcomeMeasurements();
+assert(dueMeasurements.changed >= 1, 'Due outcome measurement evaluator did not process scheduled checkpoints.');
+const blockedMeasurement = db.prepare("SELECT state, verdict, diagnostic FROM outcome_measurement_runs WHERE task_id = ? AND state = 'blocked_by_missing_data' LIMIT 1").get(validTask.task_id) as Record<string, unknown> | undefined;
+assert(blockedMeasurement?.verdict === 'blocked', 'Missing-baseline outcome was not marked blocked by missing data.');
+remember('outcome policy read, idempotent scheduling and due blocked evaluation', { scheduled, scheduledAgain, dueMeasurements, blockedMeasurement });
 
 recordProviderPreflight('live-verifier', 'unavailable-model', 'blocked', { evidence_status: 'blocked', diagnostic: 'Synthetic unavailable model for live verifier.' });
 const preflights = await request('/provider-preflight?provider=live-verifier&model=unavailable-model');
@@ -263,7 +302,24 @@ const approvalPolicy = await request(`/businesses/${businessId}/approval-policie
 assert(approvalPolicy.tiers.includes('orange') && approvalPolicy.tiers.includes('red'), 'Approval policy tiers are incomplete.');
 remember('approval policy read over BAP', approvalPolicy);
 
-const scorecard = await request(`/businesses/${businessId}/scorecards?agent_id=bap:${agentId}&action_category=github_issue`);
+const runId = `run_${generateId()}`;
+db.prepare("INSERT INTO agent_runs (id, agent_id, business_id, trigger, trigger_id, status, started_at) VALUES (?, ?, ?, 'live-verifier', ?, 'running', CURRENT_TIMESTAMP)").run(runId, `bap:${agentId}`, businessId, 'live-verifier');
+updateRunHeartbeat(runId, 60000);
+const cancelResponse = await request(`/runs/${runId}/cancel`, {
+  method: 'POST',
+  idempotencyKey: generateId(),
+  body: JSON.stringify({ reason: 'Live verifier cooperative cancellation check.' }),
+});
+assert(cancelResponse.status === 'cancellation_requested', 'BAP run cancellation did not request cooperative cancellation.');
+assert(checkRunCancellation(runId), 'Run cancellation checkpoint does not observe the cancellation request.');
+markRunCancelled(runId, 'Live verifier stopped at a cooperative safe point before new side effects.');
+const cancelledRun = db.prepare('SELECT status, heartbeat_at, heartbeat_expires_at, cancellation_requested_at, cancellation_completed_at, terminal_reason FROM agent_runs WHERE id = ?').get(runId) as Record<string, unknown>;
+const runEvents = db.prepare('SELECT event_type, status, summary FROM agent_run_events WHERE run_id = ? ORDER BY created_at ASC').all(runId) as Array<Record<string, unknown>>;
+assert(cancelledRun.status === 'cancelled', 'Run did not reach truthful cancelled terminal state.');
+assert(runEvents.some((e) => e.event_type === 'cancellation_requested'), 'Cancellation request event was not recorded.');
+assert(runEvents.some((e) => e.event_type === 'cancelled'), 'Cancellation completion event was not recorded.');
+remember('BAP agent cancellation with heartbeat and structured events', { cancelResponse, cancelledRun, runEvents });
+const scorecard = await request(`/businesses/${businessId}/scorecards?agent_id=${encodeURIComponent(internalAgentId)}&action_category=github_issue`);
 assert(scorecard.scorecard.uncertainty.interval === 'wide', 'Scorecard did not preserve small-sample uncertainty.');
 remember('agent scorecard read over BAP', scorecard.scorecard.uncertainty);
 
