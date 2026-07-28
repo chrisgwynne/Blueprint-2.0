@@ -20,6 +20,7 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  db.prepare(`DELETE FROM outcome_measurement_runs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM execution_jobs WHERE business_id = ?`).run(BIZ);
   db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
 });
