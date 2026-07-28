@@ -12,6 +12,6 @@ Implemented surfaces:
 - Agent runner: provider/model preflight, heartbeat, cooperative cancellation checks, structured run events
 
 Known limits:
-- Provider preflight currently verifies configured provider/model state and blocks obvious unavailable/mock/placeholder configurations; deep live provider capability probing is not implemented for every provider SDK.
+- Provider preflight resolves the selected provider/model, validates credentials through the provider adapter, lists models where available, runs a minimal completion probe, rejects placeholder/mock output, records capability descriptors, and blocks the agent run before dispatch when the probe fails.
 - Kanban/Hermes card creation is documented as a contract only in this repository; no external Kanban API integration was present to wire.
-- Full server tests still report two Windows `O_NOFOLLOW` symlink primitive failures unrelated to Phase 4 behavior.
+- Windows KB symlink protection is covered by an `lstatSync` target-path guard before `O_NOFOLLOW`; `server/kb/kb-engine.security.test.ts` passes on this workspace.

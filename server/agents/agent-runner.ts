@@ -10,7 +10,7 @@ import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest, DANGEROUS_ACTION_TYPES } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
-import { runLLM, resolveProfileLLM, getFallbackLLM } from '../lib/llm-providers.js';
+import { runLLM, resolveProfileLLM, getFallbackLLM, performProviderPreflight } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
 import type { InboxEntry } from './agent-inbox.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
@@ -1294,22 +1294,18 @@ export async function runAgent(
 
     // 9. Run LLM (with fallback)
     const { providerId, model, temperature, max_tokens } = resolveProfileLLM(llmConfig, { tier });
+    let actualProviderId = providerId;
+    let actualModel = model;
     recordRunEvent(runId, 'preflight', `Checking provider ${providerId}/${model}.`, { status: 'attempted' });
-    if (!providerId || !model || /unavailable|missing|disabled|mock|placeholder/i.test(`${providerId} ${model}`)) {
-      const evidence = recordProviderPreflight(providerId || 'unknown', model || 'unknown', 'blocked', {
-        provider_reachable: 'unknown', authentication: 'unknown', model_exists: false,
-        model_enabled: false, tool_calling: 'unknown', structured_output: 'unknown', context_window: 'unknown',
-        diagnostic: 'Provider/model is missing, disabled, placeholder, or explicitly unavailable before the run began.',
-      });
+    const preflight = await performProviderPreflight(providerId, model, { timeoutMs: 60_000 });
+    const evidence = recordProviderPreflight(preflight.provider, preflight.model, preflight.status, preflight.evidence);
+    if (preflight.status !== 'passed') {
       db.prepare("UPDATE agent_runs SET status = 'blocked', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?, actual_provider = ?, actual_model = ? WHERE id = ?")
         .run('Provider preflight failed.', JSON.stringify(evidence), providerId || null, model || null, runId);
       recordRunEvent(runId, 'preflight', 'Provider preflight blocked the run before any LLM work started.', { status: 'blocked', metadata: evidence });
       return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'provider_preflight_failed' };
     }
-    recordProviderPreflight(providerId, model, 'passed', {
-      provider_reachable: 'observed', authentication: 'observed', model_exists: 'observed', model_enabled: 'observed',
-      tool_calling: 'unknown', structured_output: 'unknown', context_window: 'unknown', diagnostic: 'Provider selected and no local configuration blocker was detected before request dispatch.',
-    });
+    recordRunEvent(runId, 'preflight', 'Provider preflight passed before LLM dispatch.', { status: 'verified', metadata: evidence });
     db.prepare('UPDATE agent_runs SET actual_provider = ?, actual_model = ? WHERE id = ?').run(providerId, model, runId);
     updateRunHeartbeat(runId);
     if (checkRunCancellation(runId)) { markRunCancelled(runId); return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'cancelled' }; }
@@ -1332,6 +1328,14 @@ export async function runAgent(
           temperature,
           max_tokens,
         });
+        recordRunEvent(runId, 'preflight', `Checking fallback provider ${fbPid}/${fbModel}.`, { status: 'attempted' });
+        const fallbackPreflight = await performProviderPreflight(fbPid, fbModel, { timeoutMs: 60_000 });
+        const fallbackEvidence = recordProviderPreflight(fallbackPreflight.provider, fallbackPreflight.model, fallbackPreflight.status, fallbackPreflight.evidence);
+        if (fallbackPreflight.status !== 'passed') throw new Error(`Fallback provider preflight failed: ${String(fallbackPreflight.evidence.diagnostic ?? fallbackPreflight.status)}`);
+        recordRunEvent(runId, 'preflight', 'Fallback provider preflight passed before LLM dispatch.', { status: 'verified', metadata: fallbackEvidence });
+        actualProviderId = fbPid;
+        actualModel = fbModel;
+        db.prepare('UPDATE agent_runs SET actual_provider = ?, actual_model = ? WHERE id = ?').run(actualProviderId, actualModel, runId);
         llmResult = await runLLM(fbPid, fbModel, {
           messages: [{ role: 'user', content: userContext }],
           system: systemPrompt,
@@ -1685,7 +1689,7 @@ export async function runAgent(
           completion_tokens = completion_tokens + excluded.completion_tokens,
           cost_usd = cost_usd + excluded.cost_usd,
           run_count = run_count + 1
-      `).run(agentId, businessId, providerId,
+      `).run(agentId, businessId, actualProviderId,
         llmResult.usage?.input_tokens ?? 0, llmResult.usage?.output_tokens ?? 0, costUsd);
     } catch {}
 
@@ -1715,8 +1719,8 @@ export async function runAgent(
       trigger,
       trigger_id: triggerId,
       business_id: businessId,
-      provider: providerId,
-      model,
+      provider: actualProviderId,
+      model: actualModel,
       cost_usd: costUsd,
       input_tokens: llmResult.usage?.input_tokens ?? 0,
       output_tokens: llmResult.usage?.output_tokens ?? 0,
