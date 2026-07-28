@@ -64,13 +64,13 @@ beforeAll(async () => {
   db.prepare(`
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
     VALUES (?, 'Tasks Test Agent A', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
-  `).run('agt_tasks_a', await hashApiKey(keyA), keyPrefix(keyA), JSON.stringify(['tasks:read', 'tasks:approve']), JSON.stringify([BIZ_A]));
+  `).run('agt_tasks_a', await hashApiKey(keyA), keyPrefix(keyA), JSON.stringify(['tasks:read', 'tasks:approve', 'tasks:propose']), JSON.stringify([BIZ_A]));
 
   keyAllPerms = generateApiKey();
   db.prepare(`
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
     VALUES (?, 'Tasks Test Agent AllPerms', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
-  `).run('agt_tasks_allperms', await hashApiKey(keyAllPerms), keyPrefix(keyAllPerms), JSON.stringify(['tasks:read', 'tasks:approve']), JSON.stringify([BIZ_A, BIZ_B]));
+  `).run('agt_tasks_allperms', await hashApiKey(keyAllPerms), keyPrefix(keyAllPerms), JSON.stringify(['tasks:read', 'tasks:approve', 'tasks:propose']), JSON.stringify([BIZ_A, BIZ_B]));
 
   const app = express();
   app.use(express.json());
@@ -86,6 +86,8 @@ afterAll(() => {
   db.prepare(`DELETE FROM execution_jobs WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id IN (?, ?))`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM tasks WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM applicability_suppressions WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM business_capabilities WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM goals WHERE business_id IN (?, ?) AND title LIKE 'Kanban%'`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM measurement_policies WHERE id = 'policy_kanban_test'`).run();
   db.prepare(`DELETE FROM signals WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
@@ -213,6 +215,27 @@ describe('GET /businesses/:id/tasks — search, filters, sort, pagination', () =
   });
 });
 
+describe('POST /businesses/:id/tasks - applicability errors', () => {
+  test('returns 400 when applicability blocks an inapplicable proposal', async () => {
+    db.prepare(`
+      INSERT INTO business_capabilities (id, business_id, capability_key, display_name, status, evidence_source, confidence, created_at, updated_at)
+      VALUES (?, ?, 'google_merchant_center', 'Google Merchant Center', 'unavailable', 'test', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ON CONFLICT(business_id, capability_key) DO UPDATE SET status = 'unavailable', updated_at = CURRENT_TIMESTAMP
+    `).run(generateId(), BIZ_A);
+
+    const { status, body } = await post(`/api/bap/v1/businesses/${BIZ_A}/tasks`, {
+      title: 'Update Merchant Center feed',
+      description: 'This Google Merchant Center task should be blocked by applicability.',
+      action_type: 'content_draft',
+      action_payload: { topic: 'Google Merchant Center feed' },
+    }, { 'BAP-Key': keyA, 'Idempotency-Key': generateId() });
+
+    expect(status).toBe(400);
+    expect(body.error).toContain('not actionable');
+    const suppression = db.prepare(`SELECT reason FROM applicability_suppressions WHERE business_id = ? AND capability_key = 'google_merchant_center' AND status = 'active'`).get(BIZ_A) as { reason: string } | undefined;
+    expect(suppression?.reason).toContain('google_merchant_center');
+  });
+});
 describe('Hermes Kanban card contract', () => {
   test('GET /tasks/:taskId/kanban-card returns the canonical card handoff fields', async () => {
     const signalId = generateId();

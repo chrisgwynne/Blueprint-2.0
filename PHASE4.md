@@ -24,9 +24,10 @@ Verification performed:
 - Agent activation tests: 5 pass
 - GitHub executor safety tests pass in isolation
 - Research connector executor tests: 6 pass
-- Full server suite: 624 pass, 0 fail, 2028 assertions
+- Full server suite: 625 pass, 0 fail, 2031 assertions
+- Live HTTP/BAP verifier: `bun server/scripts/verify-trust-autonomy-live.ts` passed against `http://127.0.0.1:4100`
 
 Incomplete from the original broad goal:
 - No real external Hermes Kanban connector exists in this repository; Blueprint now exposes canonical BAP card projections for Hermes to mirror, but remote card creation remains outside this codebase.
 - Provider preflight now uses provider adapters for credential validation, model-listing evidence and a minimal completion probe. Capability descriptors are still static for some local/BYO providers where the runtime cannot advertise exact tool/structured-output support.
-- Live browser workflow verification was not completed in this run.
+- Live browser workflow verification was not completed in this run because the Browser runtime failed on this Windows workspace with `EPERM` while reading `C:\Users\admin\AppData`; live HTTP/BAP workflow verification is covered by `server/scripts/verify-trust-autonomy-live.ts`.

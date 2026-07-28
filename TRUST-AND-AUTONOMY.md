@@ -11,6 +11,11 @@ Implemented surfaces:
 - Scheduler: signal lifecycle sweeps and due outcome measurement evaluation under the existing leader lock
 - Agent runner: provider/model preflight, heartbeat, cooperative cancellation checks, structured run events
 
+Live verification:
+- Start Blueprint locally, for example with `$env:PORT='4100'; bun run --cwd server start` in PowerShell.
+- Run `bun server/scripts/verify-trust-autonomy-live.ts` from the repository root. Set `BLUEPRINT_LIVE_URL` to target a different local URL.
+- The verifier seeds a scoped BAP agent and business, then exercises capability suppression, persisted suppression diagnostics, valid and inapplicable task proposal paths, Hermes Kanban-card projection, revenue-path update/read, confirmed correction invalidation with BAP readback, idempotent outcome checkpoint scheduling, provider-preflight diagnostics, approval-policy readback, and scorecard uncertainty.
+
 Known limits:
 - Provider preflight resolves the selected provider/model, validates credentials through the provider adapter, lists models where available, runs a minimal completion probe, rejects placeholder/mock output, records capability descriptors, and blocks the agent run before dispatch when the probe fails.
 - Hermes/Kanban handoff is exposed as read-only BAP card projections (`/tasks/:taskId/kanban-card` and `/businesses/:businessId/kanban-cards`). No external Kanban write API exists in this repository, so actual remote card creation remains an integration outside Blueprint.

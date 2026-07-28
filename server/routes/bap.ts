@@ -994,8 +994,9 @@ router.post('/businesses/:businessId/tasks', requirePermission('tasks:propose'),
       };
     });
   } catch (err) {
-    if ((err as Error).message.includes('not found')) return res.status(400).json({ error: (err as Error).message });
-    return res.status(500).json({ error: (err as Error).message });
+    const message = (err as Error).message;
+    if (message.includes('not found') || message.includes('not actionable')) return res.status(400).json({ error: message });
+    return res.status(500).json({ error: message });
   }
 });
 
