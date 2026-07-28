@@ -405,6 +405,26 @@ unsuccessful | abandoned | null` (`null` when the task has no
 
 ---
 
+### BLUEPRINT_KANBAN_CARD
+
+Read the canonical card projection for Hermes or another external Kanban executor. Blueprint remains the source of truth; mirror `blueprint_task_id`, `business_id`, `goal_id`, `signal_id`, approval fields, acceptance criteria, expected outcome and measurement policy into external cards.
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/tasks/$TASK_ID/kanban-card" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+For a business sync feed:
+
+```bash
+curl "$BLUEPRINT_URL/api/bap/v1/businesses/$BLUEPRINT_BUSINESS_ID/kanban-cards?status=proposed,approved,executing" \
+  -H "BAP-Key: $BLUEPRINT_API_KEY"
+```
+
+Do not create a separate strategic backlog in Hermes. A Hermes card should point back to `blueprint_task_id` and preserve the Blueprint approval state and measurement policy.
+
+---
+
 ### BLUEPRINT_TASK_HISTORY
 
 The narrative event timeline for a task â€” the same feed the dashboard's

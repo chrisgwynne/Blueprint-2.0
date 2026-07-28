@@ -12,6 +12,7 @@ Implemented in this branch:
 - Cooperative cancellation request/heartbeat/run-event recording
 - Agent scorecard snapshots and BAP read access
 - Dashboard Trust Ops page
+- BAP Hermes/Kanban card projection endpoints
 
 Verification performed:
 - `bun run typecheck` passed
@@ -23,9 +24,9 @@ Verification performed:
 - Agent activation tests: 5 pass
 - GitHub executor safety tests pass in isolation
 - Research connector executor tests: 6 pass
-- Full server suite: 621 pass, 0 fail, 2016 assertions
+- Full server suite: 624 pass, 0 fail, 2028 assertions
 
 Incomplete from the original broad goal:
-- No real external Hermes Kanban connector exists in this repository; the required card contract is documented in `TRUST-AND-AUTONOMY.md`.
+- No real external Hermes Kanban connector exists in this repository; Blueprint now exposes canonical BAP card projections for Hermes to mirror, but remote card creation remains outside this codebase.
 - Provider preflight now uses provider adapters for credential validation, model-listing evidence and a minimal completion probe. Capability descriptors are still static for some local/BYO providers where the runtime cannot advertise exact tool/structured-output support.
 - Live browser workflow verification was not completed in this run.

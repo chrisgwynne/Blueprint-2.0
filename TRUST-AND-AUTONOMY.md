@@ -7,11 +7,11 @@ The implementation follows the empirical-honesty rule: unknown data is represent
 Implemented surfaces:
 - Dashboard route: `/trust`
 - Session API: `/api/trust/*`
-- BAP API: `/api/bap/v1/businesses/:businessId/{capabilities,corrections,revenue-paths,measurement-policies,approval-policies,scorecards}` plus applicability and provider-preflight routes
+- BAP API: `/api/bap/v1/businesses/:businessId/{capabilities,corrections,revenue-paths,measurement-policies,approval-policies,scorecards,kanban-cards}` plus applicability, single-task Kanban-card and provider-preflight routes
 - Scheduler: signal lifecycle sweeps and due outcome measurement evaluation under the existing leader lock
 - Agent runner: provider/model preflight, heartbeat, cooperative cancellation checks, structured run events
 
 Known limits:
 - Provider preflight resolves the selected provider/model, validates credentials through the provider adapter, lists models where available, runs a minimal completion probe, rejects placeholder/mock output, records capability descriptors, and blocks the agent run before dispatch when the probe fails.
-- Kanban/Hermes card creation is documented as a contract only in this repository; no external Kanban API integration was present to wire.
+- Hermes/Kanban handoff is exposed as read-only BAP card projections (`/tasks/:taskId/kanban-card` and `/businesses/:businessId/kanban-cards`). No external Kanban write API exists in this repository, so actual remote card creation remains an integration outside Blueprint.
 - Windows KB symlink protection is covered by an `lstatSync` target-path guard before `O_NOFOLLOW`; `server/kb/kb-engine.security.test.ts` passes on this workspace.

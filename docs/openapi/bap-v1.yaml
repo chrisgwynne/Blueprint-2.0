@@ -189,7 +189,7 @@ components:
         action_type: { type: string, nullable: true }
         action_payload: { type: object }
         status: { $ref: '#/components/schemas/TaskStatus' }
-        trust_tier: { type: string, enum: [green, yellow, red] }
+        trust_tier: { type: string, enum: [green, yellow, orange, red] }
         priority: { type: string, enum: [p1, p2, p3] }
         confidence: { type: number, nullable: true }
         estimated_impact: { type: string, nullable: true }
@@ -207,6 +207,35 @@ components:
     TaskStatus:
       type: string
       enum: [proposed, approved, executing, complete, verified, failed, blocked, rejected, cancelled, manual_review, deferred, draft_ready]
+
+    KanbanCard:
+      type: object
+      description: Canonical Blueprint-to-Hermes task card projection. Blueprint remains the source of truth; external Kanban systems should mirror these identifiers, not invent a strategic backlog.
+      properties:
+        blueprint_task_id: { type: string }
+        business_id: { type: string }
+        goal_id: { type: string, nullable: true }
+        signal_id: { type: string, nullable: true }
+        title: { type: string }
+        description: { type: string, nullable: true }
+        kanban_column: { type: string, enum: [backlog, ready, doing, done, closed] }
+        task_status: { $ref: '#/components/schemas/TaskStatus' }
+        approval_tier: { type: string, enum: [green, yellow, orange, red], nullable: true }
+        approval_state: { type: string, enum: [awaiting_approval, approved, rejected, cancelled, completed, unknown] }
+        approval_mode: { type: string, nullable: true }
+        approval_risk_evidence: { type: object, nullable: true }
+        executor: { type: string, nullable: true }
+        action_type: { type: string, nullable: true }
+        action_payload: { type: object }
+        acceptance_criteria: { nullable: true }
+        expected_outcome: { type: string, nullable: true }
+        measurement_policy: { type: object, nullable: true }
+        priority: { type: string, nullable: true }
+        confidence: { type: number, nullable: true }
+        proposed_by: { type: string, nullable: true }
+        external_reference: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
     TaskDetail:
       type: object
@@ -954,6 +983,46 @@ paths:
         '403': { $ref: '#/components/responses/PermissionDenied' }
         '409': { $ref: '#/components/responses/Conflict' }
 
+  /tasks/{taskId}/kanban-card:
+    get:
+      operationId: getTaskKanbanCard
+      summary: Canonical Blueprint-to-Hermes Kanban card projection for one task
+      x-bap-permission: tasks:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  card: { $ref: '#/components/schemas/KanbanCard' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /businesses/{businessId}/kanban-cards:
+    get:
+      operationId: listKanbanCards
+      summary: Business-scoped Blueprint-to-Hermes Kanban card sync feed
+      x-bap-permission: tasks:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: status, in: query, schema: { type: string }, description: Comma-separated task statuses. }
+        - { name: updated_from, in: query, schema: { type: string, format: date-time } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cards: { type: array, items: { $ref: '#/components/schemas/KanbanCard' } }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
   /tasks/{taskId}:
     get:
       operationId: getTaskDetail

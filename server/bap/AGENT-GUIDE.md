@@ -79,7 +79,9 @@ PATCH /api/bap/v1/signals/:id               — update status
 
 ### Tasks
 ```
-GET   /api/bap/v1/businesses/:id/tasks      — list tasks
+GET   /api/bap/v1/businesses/:id/tasks      - list tasks
+GET   /api/bap/v1/businesses/:id/kanban-cards - canonical Hermes card sync feed
+GET   /api/bap/v1/tasks/:id/kanban-card      - canonical Hermes card projection
 POST  /api/bap/v1/businesses/:id/tasks      — propose task
 PATCH /api/bap/v1/tasks/:id                 — approve/reject
 ```
