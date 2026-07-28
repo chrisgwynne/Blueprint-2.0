@@ -72,7 +72,7 @@ describe('recoverStuckJobs', () => {
   });
 
   test('a stuck internal_idempotent job with no external reference is safely requeued for a fresh attempt', async () => {
-    const { taskId, jobId } = approvedAndStuck('kb_write'); // not in EXTERNAL_VERIFIABLE_ACTIONS
+    const { taskId, jobId } = approvedAndStuck('content_draft'); // registered internal_idempotent action, not in EXTERNAL_VERIFIABLE_ACTIONS
 
     const stats = await recoverStuckJobs();
     expect(stats.recovered).toBe(0);
@@ -98,7 +98,7 @@ describe('recoverStuckJobs', () => {
   test('a job whose lease has not expired is left untouched', async () => {
     const task = createTask({
       business_id: BIZ, title: 'Live lease fixture', proposed_by: 'test',
-      action_type: 'kb_write', action_payload: {}, approval_mode: 'requires_approval',
+      action_type: 'content_draft', action_payload: {}, approval_mode: 'requires_approval',
     })!;
     db.prepare(`UPDATE tasks SET status = 'approved', version = version + 1 WHERE id = ?`).run(task.id);
     enqueueExecutionJob({ ...task, status: 'approved', version: (task.version ?? 1) + 1 } as TaskRow);
@@ -109,7 +109,7 @@ describe('recoverStuckJobs', () => {
   });
 
   test('two concurrent recovery sweeps do not double-process the same stuck job', async () => {
-    const { jobId } = approvedAndStuck('kb_write');
+    const { jobId } = approvedAndStuck('content_draft');
 
     const [a, b] = await Promise.all([recoverStuckJobs(), recoverStuckJobs()]);
     const totalRequeued = a.requeued + b.requeued;
