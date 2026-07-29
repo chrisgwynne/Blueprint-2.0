@@ -458,14 +458,17 @@ function triggerWorkerTick(): void {
  *      transaction is bound to this exact version/snapshot, so nothing
  *      that happens to the live task row afterwards can change what gets
  *      executed.
- *   3. Enqueues exactly one execution_jobs row (enforced by a unique
- *      partial index, not just this function's own logic).
+ *   3. For typed actions, enqueues exactly one execution_jobs row (enforced
+ *      by a unique partial index, not just this function's own logic).
+ *      Manual tasks with no action_type remain approved for an operator and
+ *      deliberately do not enter the automated worker queue.
  * Trust-tier/approval-mode no longer branches into a separate immediate-
  * execution path (green+auto used to call updateTaskStatus(...,'executing',...)
- * directly here) â€” every approved task goes through the same queued job,
- * durable and crash-recoverable. The execution worker is woken immediately
- * afterwards for low latency, but is not relied upon for correctness: the
- * scheduled worker tick picks up any job the immediate wake-up call missed
+ * directly here) â€” every approved typed action goes through the same queued
+ * job, durable and crash-recoverable. Manual tasks stay approved without a
+ * job. For typed actions, the execution worker is woken immediately for low
+ * latency, but is not relied upon for correctness: the scheduled worker tick
+ * picks up any job the immediate wake-up call missed
  * (e.g. because the process crashed right after this function returned).
  */
 export function approveTask(id: string, approvedBy: string): TaskRow | null {
@@ -583,7 +586,9 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     }
 
     const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
-    enqueueExecutionJob(after);
+    if (String(after.action_type ?? '').trim() !== '') {
+      enqueueExecutionJob(after);
+    }
     return after;
   });
 
@@ -606,7 +611,9 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     action_type: existing.action_type,
   });
 
-  triggerWorkerTick();
+  if (String(after.action_type ?? '').trim() !== '') {
+    triggerWorkerTick();
+  }
 
   return after;
 }

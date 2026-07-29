@@ -54,6 +54,25 @@ describe('approveTask', () => {
     expect(job?.task_version).toBe(2);
   });
 
+  test('approves a manual task without enqueuing an unexecutable job', () => {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Manual fixture task',
+      proposed_by: 'test',
+      action_type: null,
+      action_payload: {},
+      approval_mode: 'requires_approval',
+    })!;
+
+    const after = approveTask(task.id, 'dashboard:tester')!;
+    expect(after.status).toBe('approved');
+    expect(after.approved_payload_snapshot).toEqual({});
+    expect(getActiveJobForTask(task.id)).toBeNull();
+
+    const jobs = db.prepare('SELECT COUNT(*) as n FROM execution_jobs WHERE task_id = ?').get(task.id) as { n: number };
+    expect(jobs.n).toBe(0);
+  });
+
   test('two concurrent approvals of the same task — exactly one succeeds, exactly one job is enqueued', () => {
     const { id } = proposeTask();
 
