@@ -59,6 +59,8 @@ describe('GET /social-media/:filename — valid URL', () => {
       buffer: PNG_PIXEL,
       originalFilename: 'pixel.png',
       mimeType: 'image/png',
+      businessId: 'biz-serving-test',
+      connectorId: 'conn-serving-test',
     });
     const servingUrl = generateServingUrl(result.stagingToken);
 
@@ -84,6 +86,8 @@ describe('GET /social-media/:filename — invalid / expired URL', () => {
       buffer: PNG_PIXEL,
       originalFilename: 'pixel2.png',
       mimeType: 'image/png',
+      businessId: 'biz-serving-test',
+      connectorId: 'conn-serving-test',
     });
     const servingUrl = generateServingUrl(result.stagingToken);
     const urlObj = new URL(servingUrl);
