@@ -3,7 +3,7 @@ name: SEO Sentinel
 title: Search Intelligence Specialist
 avatar: 🔍
 version: 1.0.0
-status: pending
+status: active
 created_at: '2026-01-01'
 llm:
   temperature: 0.3
