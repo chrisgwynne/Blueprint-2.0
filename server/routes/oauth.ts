@@ -740,39 +740,90 @@ router.delete('/meta/:businessId', isAuthenticated, (req: Request, res: Response
 
 /**
  * GET /api/oauth/social
- * Initiates Facebook/Instagram (organic social) OAuth flow. Shares the
- * Meta app (META_APP_ID/SECRET) but requests a different scope set than
- * meta-ads.
+ * Initiates Facebook/Instagram (organic social) OAuth flow.
+ *
+ * State is HMAC-signed (see connectors/social/oauth-state.ts):
+ * - Cryptographically bound to the initiating user session
+ * - Cryptographically bound to the businessId
+ * - Carries a one-time nonce (replay prevention)
+ * - Expires in 10 minutes
  */
-router.get('/social', async (req: Request, res: Response) => {
+router.get('/social', isAuthenticated, async (req: Request, res: Response) => {
   const { businessId } = req.query;
+  const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
   if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
+
+  const userId = (req.session as any).userId as string;
+  if (!userId) {
+    return res.status(401).json({ error: 'Session userId is required to initiate OAuth.' });
+  }
+
   try {
     const { default: socialConnector } = await import('../connectors/social/index.js') as unknown as { default: { getAuthUrl: (state: string) => Promise<string> } };
-    const state = Buffer.from(JSON.stringify({ businessId, type: 'social' })).toString('base64url');
+    const { createOAuthState } = await import('../connectors/social/oauth-state.js');
+    const state = await createOAuthState({
+      businessId: String(businessId),
+      userId,
+      type: 'social',
+    });
     const authUrl = await socialConnector.getAuthUrl(state);
     return res.redirect(authUrl);
   } catch (err) {
     console.error('[oauth] Social init error:', err);
-    return res.status(500).json({ error: (err as Error).message });
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent((err as Error).message.substring(0, 100))}`);
   }
 });
 
 /**
  * GET /api/oauth/social/callback
  * OAuth callback from Facebook for the social connector.
+ *
+ * Validates the signed state token before processing the callback:
+ * - Signature check (HMAC-SHA256)
+ * - Expiry check (10 minute TTL)
+ * - One-time nonce check (replay prevention)
+ * - Session binding check (userId must match the initiating session)
+ * - Business binding check (businessId must match)
  */
 router.get('/social/callback', async (req: Request, res: Response) => {
   const { code, state, error, error_description } = req.query;
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
   if (error) return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(String(error_description || error))}`);
   if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
-  let parsedState: { businessId: string };
-  try {
-    parsedState = JSON.parse(Buffer.from(String(state), 'base64url').toString('utf8'));
-  } catch {
-    return res.redirect(`${clientUrl}/connectors?error=invalid_state`);
+
+  const { validateOAuthState, OAuthStateError } = await import('../connectors/social/oauth-state.js');
+  const userId = (req.session as any)?.userId as string | undefined;
+  if (!userId) {
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent('Session expired — please log in and try again.')}`);
   }
+
+  // Validate signed state: signature, expiry, nonce, user binding
+  let parsedState: { businessId: string; type: string };
+  try {
+    // Business ID is embedded in the state itself — we extract it from the token
+    // by doing a preliminary parse to get businessId, then validate that the businessId
+    // in the state matches. validateOAuthState enforces both user and business binding.
+    const rawState = String(state);
+    // Extract businessId from the signed payload for binding check
+    // (validateOAuthState will re-verify this against the signature)
+    const dotIdx = rawState.lastIndexOf('.');
+    if (dotIdx < 1) throw new OAuthStateError('Invalid state format.');
+    const encoded = rawState.slice(0, dotIdx);
+    let prelimPayload: { businessId?: string };
+    try {
+      prelimPayload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    } catch {
+      throw new OAuthStateError('Could not decode state payload.');
+    }
+    if (!prelimPayload.businessId) throw new OAuthStateError('State missing businessId.');
+
+    parsedState = await validateOAuthState(rawState, userId, prelimPayload.businessId);
+  } catch (err) {
+    const msg = (err as Error).message || 'invalid_state';
+    console.warn('[oauth] Social callback state validation failed:', msg);
+    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent(`state_invalid: ${msg.substring(0, 120)}`)}`);
+  }
+
   const { businessId } = parsedState;
   try {
     const { default: socialConnector } = await import('../connectors/social/index.js') as unknown as { default: { exchangeCode: (code: string) => Promise<any> } };

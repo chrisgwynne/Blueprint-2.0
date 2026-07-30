@@ -284,6 +284,9 @@ Windows Defender real-time scanning inspects every file Bun writes. Exclude the 
 | **CMS** | WordPress, Kirby |
 | **Marketing** | Stannp, Meta Ads |
 
+Connector-specific setup guides:
+- [Meta Social Publishing](docs/META-SOCIAL-PUBLISHING.md) — Facebook Page + Instagram publishing setup
+
 Building your own connector takes about 2 hours â€” see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Agents

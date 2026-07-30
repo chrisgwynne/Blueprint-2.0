@@ -63,7 +63,8 @@ async function request(method: string, path: string, body?: unknown, params?: Pa
 const get = (path: string, params?: Params): Promise<any> => request('GET', path, undefined, params)
 const post = (path: string, body?: unknown): Promise<any> => request('POST', path, body)
 const patch = (path: string, body?: unknown): Promise<any> => request('PATCH', path, body)
-const del = (path: string): Promise<any> => request('DELETE', path)
+const put = (path: string, body?: unknown): Promise<any> => request('PUT', path, body)
+const del = (path: string, params?: Params): Promise<any> => request('DELETE', path, undefined, params)
 
 // ============================================
 // Auth
@@ -507,3 +508,25 @@ export const getTrustLifecycle = (businessId: string) => get(`/trust/signals/${b
 export const getTrustMeasurementPolicies = (businessId: string) => get(`/trust/measurement-policies/${businessId}`)
 export const getTrustPreflight = () => get('/trust/provider-preflight')
 export const getTrustScorecard = (businessId: string, agentId = 'conductor') => get(`/trust/scorecards/${businessId}`, { agent_id: agentId })
+
+// ============================================
+// Social Publishing
+// ============================================
+
+const socialBase = (bizId: string) => `/social-publishing/${bizId}`
+
+export const getSocialPreflight = (bizId: string) => get(`${socialBase(bizId)}/preflight`)
+export const getSocialCapabilities = (bizId: string) => get(`${socialBase(bizId)}/capabilities`)
+export const getSocialAccounts = (bizId: string, connectorId?: string) => get(`${socialBase(bizId)}/accounts`, connectorId ? { connectorId } : {})
+export const discoverSocialAccounts = (bizId: string, connectorId: string) => get(`${socialBase(bizId)}/accounts/discover`, { connectorId })
+export const bindSocialAccount = (bizId: string, body: object) => post(`${socialBase(bizId)}/accounts/bind`, body)
+export const getSocialPolicy = (bizId: string, connectorId: string) => get(`${socialBase(bizId)}/policy`, { connectorId })
+export const updateSocialPolicy = (bizId: string, body: object) => put(`${socialBase(bizId)}/policy`, body)
+export const getSocialPosts = (bizId: string, params?: Params) => get(`${socialBase(bizId)}/posts`, params)
+export const getSocialPost = (bizId: string, postId: string) => get(`${socialBase(bizId)}/posts/${postId}`)
+export const createSocialDraft = (bizId: string, body: object) => post(`${socialBase(bizId)}/posts`, body)
+export const approveSocialPost = (bizId: string, postId: string) => post(`${socialBase(bizId)}/posts/${postId}/approve`)
+export const cancelSocialPost = (bizId: string, postId: string) => post(`${socialBase(bizId)}/posts/${postId}/cancel`)
+export const publishSocialPost = (bizId: string, postId: string) => post(`${socialBase(bizId)}/posts/${postId}/publish`)
+export const uploadSocialMedia = (bizId: string, body: object) => post(`${socialBase(bizId)}/media/upload`, body)
+export const deleteStagedMedia = (bizId: string, token: string, connectorId: string) => del(`${socialBase(bizId)}/media/${token}`, { connectorId })
