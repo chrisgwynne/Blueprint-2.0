@@ -3,6 +3,7 @@ import db from '../db/db.js';
 import { performProviderPreflight, saveProviderCredentials } from './llm-providers.js';
 
 let server: ReturnType<typeof Bun.serve> | null = null;
+let lastProbeMaxTokens: number | null = null;
 
 function startProvider(opts: { models?: string[]; chatContent?: string; modelsStatus?: number } = {}): string {
   server?.stop(true);
@@ -18,6 +19,8 @@ function startProvider(opts: { models?: string[]; chatContent?: string; modelsSt
         });
       }
       if (url.pathname === '/chat/completions') {
+        const body = await req.json() as { max_tokens?: number };
+        lastProbeMaxTokens = body.max_tokens ?? null;
         return new Response(JSON.stringify({
           choices: [{ message: { content: opts.chatContent ?? 'ok' } }],
           usage: { prompt_tokens: 2, completion_tokens: 1 },
@@ -32,6 +35,7 @@ function startProvider(opts: { models?: string[]; chatContent?: string; modelsSt
 afterEach(() => {
   server?.stop(true);
   server = null;
+  lastProbeMaxTokens = null;
   db.prepare("DELETE FROM settings WHERE key = 'provider_credentials_custom'").run();
 });
 
@@ -48,6 +52,7 @@ describe('performProviderPreflight', () => {
     expect(result.evidence.model_exists).toBe(true);
     expect(result.evidence.model_enabled).toBe(true);
     expect(result.evidence.placeholder_response).toBe('verified');
+    expect(lastProbeMaxTokens).toBe(128);
   });
 
   test('blocks when the selected model is absent from provider model listing', async () => {

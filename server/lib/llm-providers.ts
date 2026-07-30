@@ -312,7 +312,10 @@ export async function performProviderPreflight(
       model,
       messages: [{ role: 'user', content: 'Reply with exactly: ok' }],
       temperature: 0,
-      max_tokens: 3,
+      // Reasoning-capable models can consume a small token budget internally and
+      // return an empty content part even when the provider/model is healthy.
+      // Keep this probe bounded, but large enough to surface the requested text.
+      max_tokens: 128,
     });
     const content = String(probe.content ?? '').trim();
     const placeholder = !content || /mock|placeholder|lorem ipsum|not implemented/i.test(content);
