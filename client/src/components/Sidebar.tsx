@@ -109,6 +109,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Knowledge Base',to: '/kb',         icon: BookOpen },
   { label: 'System Health', to: '/health',     icon: Activity,        healthDot: true },
   { label: 'Trust Ops',      to: '/trust',      icon: ShieldCheck },
+  { label: 'Social Publishing', to: '/social-publishing', icon: Share2 },
   { label: 'Settings',      to: '/settings',   icon: Settings },
 ]
 

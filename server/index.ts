@@ -223,6 +223,8 @@ const mountRoutes = async () => {
   // Action Registry, Connector Confidence, World Model, System Issues.
   const { default: intelligenceRoutes } = await import('./routes/intelligence.js');
   const { default: trustRoutes } = await import('./routes/trust.js');
+  const { default: socialPublishingRoutes } = await import('./routes/social-publishing.js');
+  const { default: socialMediaServingRoutes } = await import('./routes/social-media-serving.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
   const { webhookHandler } = await import('./notifications/telegram.js');
 
@@ -264,6 +266,9 @@ const mountRoutes = async () => {
   app.use('/api/review', reviewRoutes);
   app.use('/api/intelligence', intelligenceRoutes);
   app.use('/api/trust', trustRoutes);
+  app.use('/api/social-publishing', socialPublishingRoutes);
+  // Public media serving — no auth, secured by HMAC-signed time-limited URLs
+  app.use('/social-media', socialMediaServingRoutes);
   app.get('/api/dashboard/stream/:businessId', (req, res, next) => {
     // Session-authed — uses same cookie
     if (!(req.session as any)?.userId) return res.status(401).json({ error: 'Unauthorized' });

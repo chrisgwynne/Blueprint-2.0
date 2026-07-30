@@ -1250,6 +1250,55 @@ const STARTUP_MIGRATIONS: string[] = [
   // schema still being the seed default so an operator's own edit is never
   // silently overwritten.
   `UPDATE action_registry SET payload_schema = '{"type":"object","required":["description"],"properties":{"description":{"type":"string","minLength":3}}}' WHERE action_type = 'research_connector' AND payload_schema = '{}'`,
+  // Social publishing tables (Issue #35)
+  `CREATE TABLE IF NOT EXISTS social_posts (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL REFERENCES businesses(id),
+    connector_id TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    target_id TEXT NOT NULL,
+    content_type TEXT NOT NULL,
+    caption TEXT NOT NULL,
+    media_urls JSON NOT NULL DEFAULT '[]',
+    media_alt_text TEXT,
+    status TEXT NOT NULL DEFAULT 'draft',
+    approval_mode TEXT NOT NULL DEFAULT 'requires_approval',
+    approved_by TEXT,
+    approved_at DATETIME,
+    approved_caption TEXT,
+    scheduled_at DATETIME,
+    external_id TEXT,
+    permalink TEXT,
+    verified_at DATETIME,
+    last_error TEXT,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_social_posts_business_status ON social_posts(business_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts(business_id, platform)`,
+  `CREATE INDEX IF NOT EXISTS idx_social_posts_scheduled ON social_posts(status, scheduled_at)`,
+  // OAuth nonces table for social connector state validation
+  `CREATE TABLE IF NOT EXISTS oauth_nonces (
+    nonce TEXT PRIMARY KEY,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  // Persistent staging metadata for restart-safe social media staging
+  `CREATE TABLE IF NOT EXISTS social_media_staging (
+    staging_token TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    connector_id TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    expires_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_social_media_staging_expires ON social_media_staging(expires_at)`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {

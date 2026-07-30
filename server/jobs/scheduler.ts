@@ -8,6 +8,7 @@ import type { ConnectorInterface } from '../connectors/connector.interface.js';
 import { withLeaderLock, tryAcquireOrRenewLeaderLock } from './scheduler-lock.js';
 import { runExecutionWorkerTick, recoverStuckJobs } from '../tasks/execution-worker.js';
 import { pruneExpiredIdempotencyKeys } from '../lib/idempotency.js';
+import { runSocialPublishingWorkerTick } from './social-publishing-worker.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 import { recoverStaleAgentRuns } from '../agents/agent-runner.js';
@@ -761,6 +762,16 @@ export function startScheduler(): void {
       if (pruned > 0) console.log(`[scheduler] Pruned ${pruned} expired idempotency key(s).`);
     } catch (err: any) {
       console.error('[scheduler] Idempotency key pruning failed:', err.message);
+    }
+  });
+
+  // Social publishing scheduled worker — runs every minute to check for due posts.
+  scheduleWithLock('* * * * *', async () => {
+    try {
+      const n = await runSocialPublishingWorkerTick();
+      if (n > 0) console.log(`[scheduler] Social publishing worker: processed ${n} post(s).`);
+    } catch (err: any) {
+      console.error('[scheduler] Social publishing worker failed:', err.message);
     }
   });
 
