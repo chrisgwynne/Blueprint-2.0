@@ -13,6 +13,8 @@ interface Credentials {
   refreshToken?: string;
   accessToken?: string;
   expiresAt?: number;
+  scope?: string | string[];
+  scopes?: string[];
   [key: string]: any;
 }
 
@@ -27,6 +29,10 @@ interface TokenResult {
   expiresAt: number;
 }
 
+interface GoogleAccessTokenOptions {
+  requiredScope?: string;
+}
+
 function loadCredentials(connectorRow: ConnectorRow | undefined): Credentials | null {
   if (!connectorRow?.credentials) return null;
   try { return JSON.parse(decrypt(connectorRow.credentials)); }
@@ -36,6 +42,24 @@ function loadCredentials(connectorRow: ConnectorRow | undefined): Credentials | 
 function saveCredentials(connectorId: string, creds: Credentials): void {
   db.prepare('UPDATE connectors SET credentials = ? WHERE id = ?')
     .run(encrypt(JSON.stringify(creds)), connectorId);
+}
+
+function credentialScopes(creds: Credentials): Set<string> {
+  const values = [
+    ...(Array.isArray(creds.scope) ? creds.scope : typeof creds.scope === 'string' ? creds.scope.split(/\s+/) : []),
+    ...(Array.isArray(creds.scopes) ? creds.scopes : []),
+  ];
+  return new Set(values.map(scope => scope.trim()).filter(Boolean));
+}
+
+function hasStoredScopeMetadata(creds: Credentials): boolean {
+  return creds.scope != null || creds.scopes != null;
+}
+
+function scopeCompatibility(creds: Credentials, requiredScope: string): 'compatible' | 'unknown' | 'incompatible' {
+  if (!hasStoredScopeMetadata(creds)) return 'unknown';
+  const scopes = credentialScopes(creds);
+  return scopes.has(requiredScope) ? 'compatible' : 'incompatible';
 }
 
 /**
@@ -69,10 +93,14 @@ async function refreshAccessToken(refreshToken: string): Promise<TokenResult> {
 }
 
 /**
- * Picks any connected Google connector (GSC, GA4) for this business that
- * has a refresh_token, and returns a live access token. Refreshes if expired.
+ * Picks any connected Google connector for this business that has a
+ * refresh_token, and returns a live access token. Refreshes if expired.
+ * When requiredScope is supplied, prefers credentials whose stored OAuth scopes
+ * include it. Credentials with no stored scope metadata remain eligible for
+ * legacy rows; only credentials with explicit scope metadata that lacks the
+ * required scope are skipped.
  */
-export async function getValidGoogleAccessToken(businessId: string): Promise<TokenResult | null> {
+export async function getValidGoogleAccessToken(businessId: string, options: GoogleAccessTokenOptions = {}): Promise<TokenResult | null> {
   if (!businessId) return null;
 
   const candidates = db.prepare(
@@ -83,7 +111,20 @@ export async function getValidGoogleAccessToken(businessId: string): Promise<Tok
      ORDER BY last_sync DESC NULLS LAST, created_at DESC`
   ).all(businessId) as ConnectorRow[];
 
-  for (const connector of candidates) {
+  const orderedCandidates = options.requiredScope
+    ? [
+        ...candidates.filter(connector => {
+          const creds = loadCredentials(connector);
+          return Boolean(creds?.refreshToken && scopeCompatibility(creds, options.requiredScope as string) === 'compatible');
+        }),
+        ...candidates.filter(connector => {
+          const creds = loadCredentials(connector);
+          return Boolean(creds?.refreshToken && scopeCompatibility(creds, options.requiredScope as string) === 'unknown');
+        }),
+      ]
+    : candidates;
+
+  for (const connector of orderedCandidates) {
     const creds = loadCredentials(connector);
     if (!creds?.refreshToken) continue;
 

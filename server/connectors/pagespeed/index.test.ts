@@ -8,21 +8,24 @@ const CONNECTOR_ID = 'connector-pagespeed-google-oauth';
 const ORIGINAL_ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 const ORIGINAL_PAGESPEED_API_KEY = process.env.PAGESPEED_API_KEY;
 
-function seedGoogleOAuth(): void {
+function seedGoogleOAuth(credentials: Record<string, unknown> = {}, overrides: { id?: string; type?: string; lastSync?: string | null; createdAt?: string } = {}): void {
   process.env.ENCRYPTION_KEY = '00'.repeat(32);
-  db.prepare('INSERT INTO businesses (id, name, slug) VALUES (?, ?, ?)').run(BUSINESS_ID, 'PageSpeed Auth Test', 'pagespeed-auth-test');
-  db.prepare(`
-    INSERT INTO connectors (id, business_id, type, name, status, credentials)
-    VALUES (?, ?, 'gsc', 'Google Search Console', 'active', ?)
-  `).run(CONNECTOR_ID, BUSINESS_ID, encrypt(JSON.stringify({
+  const storedCredentials = {
     refreshToken: 'test-refresh-token',
     accessToken: 'test-oauth-token',
     expiresAt: Date.now() + 3_600_000,
-  })));
+    ...(!('scope' in credentials) && !('scopes' in credentials) ? { scope: 'openid' } : {}),
+    ...credentials,
+  };
+  db.prepare('INSERT INTO businesses (id, name, slug) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING').run(BUSINESS_ID, 'PageSpeed Auth Test', 'pagespeed-auth-test');
+  db.prepare(`
+    INSERT INTO connectors (id, business_id, type, name, status, credentials, last_sync, created_at)
+    VALUES (?, ?, ?, ?, 'active', ?, ?, ?)
+  `).run(overrides.id ?? CONNECTOR_ID, BUSINESS_ID, overrides.type ?? 'gsc', overrides.type === 'gbp' ? 'Google Business Profile' : 'Google Search Console', encrypt(JSON.stringify(storedCredentials)), overrides.lastSync ?? null, overrides.createdAt ?? new Date().toISOString());
 }
 
 afterEach(() => {
-  db.prepare('DELETE FROM connectors WHERE id = ?').run(CONNECTOR_ID);
+  db.prepare('DELETE FROM connectors WHERE business_id = ?').run(BUSINESS_ID);
   db.prepare('DELETE FROM businesses WHERE id = ?').run(BUSINESS_ID);
   if (ORIGINAL_ENCRYPTION_KEY === undefined) delete process.env.ENCRYPTION_KEY;
   else process.env.ENCRYPTION_KEY = ORIGINAL_ENCRYPTION_KEY;
@@ -58,6 +61,35 @@ describe('PageSpeed authentication selection', () => {
 
     expect(auth.apiKey).toBeUndefined();
     expect(auth.accessToken).toBe('test-oauth-token');
+  });
+
+  test('skips a fresher Google OAuth credential that lacks the PageSpeed scope', async () => {
+    delete process.env.PAGESPEED_API_KEY;
+    seedGoogleOAuth({
+      refreshToken: 'gbp-refresh-token',
+      accessToken: 'gbp-token',
+      scope: 'https://www.googleapis.com/auth/business.manage',
+    }, {
+      id: 'connector-pagespeed-newer-gbp',
+      type: 'gbp',
+      lastSync: '2026-08-03T12:00:00.000Z',
+      createdAt: '2026-08-03T12:00:00.000Z',
+    });
+    seedGoogleOAuth({
+      refreshToken: 'gsc-refresh-token',
+      accessToken: 'gsc-token',
+      scopes: ['https://www.googleapis.com/auth/webmasters.readonly', 'openid'],
+    }, {
+      id: 'connector-pagespeed-older-gsc',
+      type: 'gsc',
+      lastSync: '2026-08-02T12:00:00.000Z',
+      createdAt: '2026-08-02T12:00:00.000Z',
+    });
+
+    const auth = await resolveAuth({}, { businessId: BUSINESS_ID });
+
+    expect(auth.apiKey).toBeUndefined();
+    expect(auth.accessToken).toBe('gsc-token');
   });
 
   test('uses anonymous access when neither a PageSpeed key nor business OAuth is available', async () => {

@@ -5,6 +5,7 @@ type Creds = Record<string, string | undefined>;
 
 const PSI_BASE = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 const CATEGORIES = ['PERFORMANCE', 'ACCESSIBILITY', 'SEO', 'BEST_PRACTICES'];
+const PAGESPEED_OAUTH_REQUIRED_SCOPE = 'openid';
 
 /**
  * Resolve which auth method to use for a PageSpeed request, in priority:
@@ -27,7 +28,7 @@ export async function resolveAuth(credentials: Creds, params?: Record<string, un
   const businessId = (params?.businessId || credentials?.businessId) as string | undefined;
   if (businessId) {
     try {
-      const tok = await getValidGoogleAccessToken(businessId) as { accessToken?: string } | null;
+      const tok = await getValidGoogleAccessToken(businessId, { requiredScope: PAGESPEED_OAUTH_REQUIRED_SCOPE }) as { accessToken?: string } | null;
       if (tok?.accessToken) return { accessToken: tok.accessToken };
     } catch (err) {
       console.warn('[pagespeed] OAuth lookup failed, falling back to anonymous access:', (err as Error).message);
