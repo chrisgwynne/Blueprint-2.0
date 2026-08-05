@@ -402,7 +402,9 @@ export function startScheduler(): void {
     try {
       const connectors = db.prepare(`SELECT * FROM connectors`).all() as Connector[];
       for (const connector of connectors) {
-        await syncConnector(connector);
+        await syncConnector(connector).catch((err: Error) => {
+          console.error(`[scheduler] Daily sync error for ${connector.name}:`, err.message);
+        });
       }
       console.log('[scheduler] Daily sync complete. Running post-sync conductor pass...');
       await runConductorAllBusinesses();
