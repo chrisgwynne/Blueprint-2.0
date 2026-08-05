@@ -143,7 +143,7 @@ const connector = {
 
   signalTypes: [
     'gbp_rating_drop', 'gbp_negative_review', 'gbp_review_unanswered',
-    'gbp_views_drop', 'gbp_calls_drop', 'gbp_search_drop',
+    'gbp_views_drop', 'gbp_calls_drop',
     'gbp_no_recent_posts',
   ],
 
@@ -299,10 +299,10 @@ const connector = {
 
     return {
       location,
-      reviews: reviewsData ?? { reviews: [], averageRating: 0, totalReviewCount: 0 },
-      insights: insightsData ?? { locationMetrics: [] },
-      posts: postsData?.localPosts ?? [],
-      photos: photosData?.mediaItems ?? [],
+      reviews: reviewsData,
+      insights: insightsData,
+      posts: postsData?.localPosts,
+      photos: photosData?.mediaItems,
       partial_failures: partialFailures,
       fetchedAt: new Date().toISOString(),
     };
@@ -312,20 +312,30 @@ const connector = {
     const metrics: Array<{ name: string; value: number; data: unknown }> = [];
     const d = data as Record<string, unknown> | null;
     const partialFailures = (d?.partial_failures ?? []) as Array<{ section?: unknown }>;
-    const performanceUnavailable = d?.insights == null || partialFailures.some(failure => failure.section === 'insights');
+    const failedSections = new Set(partialFailures.map(failure => failure.section).filter((section): section is string => typeof section === 'string'));
+    const hasSection = (section: string): boolean => d != null && Object.prototype.hasOwnProperty.call(d, section);
+    const performanceUnavailable = !hasSection('insights') || d?.insights == null || failedSections.has('insights');
+    const locationAvailable = hasSection('location') && d?.location != null && !failedSections.has('location');
+    const reviewsAvailable = hasSection('reviews') && d?.reviews != null
+      && Array.isArray((d.reviews as Record<string, unknown>).reviews) && !failedSections.has('reviews');
+    const postsAvailable = hasSection('posts') && Array.isArray(d?.posts) && !failedSections.has('posts');
+    const photosAvailable = hasSection('photos') && Array.isArray(d?.photos) && !failedSections.has('photos');
     const reviews = (d?.reviews ?? { reviews: [], averageRating: 0, totalReviewCount: 0 }) as Record<string, unknown>;
     const reviewList = (reviews.reviews ?? []) as Array<Record<string, unknown>>;
 
     // Accept historical reportInsights payloads and current Performance API
     // time series for metrics that still have documented equivalents.
-    const getPerformanceTotal = (metricIds: string[]): number => {
+    const getPerformanceTotal = (metricIds: string[]): number | undefined => {
       const insights = d?.insights as Record<string, unknown> | undefined;
       const groups = insights?.multiDailyMetricTimeSeries as Array<Record<string, unknown>> | undefined;
+      const matched = new Set<string>();
       let total = 0;
       for (const group of groups ?? []) {
         const series = group.dailyMetricTimeSeries as Array<Record<string, unknown>> | undefined;
         for (const metricSeries of series ?? []) {
-          if (!metricIds.includes(String(metricSeries.dailyMetric ?? ''))) continue;
+          const metricId = String(metricSeries.dailyMetric ?? '');
+          if (!metricIds.includes(metricId)) continue;
+          matched.add(metricId);
           const timeSeries = metricSeries.timeSeries as Record<string, unknown> | undefined;
           const values = timeSeries?.datedValues as Array<Record<string, unknown>> | undefined;
           for (const point of values ?? []) {
@@ -334,10 +344,10 @@ const connector = {
           }
         }
       }
-      return total;
+      return metricIds.length > 0 && metricIds.every(metricId => matched.has(metricId)) ? total : undefined;
     };
 
-    const getInsightTotal = (metricId: string): number => {
+    const getInsightTotal = (metricId: string): number | undefined => {
       const insights = d?.insights as Record<string, unknown> | undefined;
       const locationMetrics = insights?.locationMetrics as Array<Record<string, unknown>> | undefined;
       const loc = locationMetrics?.[0];
@@ -378,33 +388,40 @@ const connector = {
     const viewsMaps       = getInsightTotal('VIEWS_MAPS');
     const viewsSearch     = getInsightTotal('VIEWS_SEARCH');
 
-    metrics.push(
-      { name: 'gbp.avg_rating',         value: (reviews.averageRating as number) ?? 0,    data: null },
-      { name: 'gbp.total_reviews',      value: (reviews.totalReviewCount as number) ?? 0, data: null },
-      { name: 'gbp.unanswered_reviews', value: unansweredReviews,                          data: null },
-      { name: 'gbp.reviews_1star',      value: stars.ONE,                                  data: null },
-      { name: 'gbp.reviews_2star',      value: stars.TWO,                                  data: null },
-      { name: 'gbp.reviews_3star',      value: stars.THREE,                                data: null },
-      { name: 'gbp.reviews_4star',      value: stars.FOUR,                                 data: null },
-      { name: 'gbp.reviews_5star',      value: stars.FIVE,                                 data: null },
-      { name: 'gbp.views_maps',         value: viewsMaps,                                  data: null },
-      { name: 'gbp.views_search',       value: viewsSearch,                                data: null },
-      { name: 'gbp.views_total',        value: viewsMaps + viewsSearch,                    data: null },
-      { name: 'gbp.actions_website',    value: getInsightTotal('ACTIONS_WEBSITE'),         data: null },
-      { name: 'gbp.actions_phone',      value: getInsightTotal('ACTIONS_PHONE'),           data: null },
-      { name: 'gbp.actions_directions', value: getInsightTotal('ACTIONS_DRIVING_DIRECTIONS'), data: null },
-      { name: 'gbp.posts_live',         value: livePosts.length,                           data: null },
-      { name: 'gbp.days_since_post',    value: daysSincePost,                              data: null },
-    );
+    if (reviewsAvailable) {
+      metrics.push(
+        { name: 'gbp.avg_rating',         value: (reviews.averageRating as number) ?? 0,    data: null },
+        { name: 'gbp.total_reviews',      value: (reviews.totalReviewCount as number) ?? 0, data: null },
+        { name: 'gbp.unanswered_reviews', value: unansweredReviews,                          data: null },
+        { name: 'gbp.reviews_1star',      value: stars.ONE,                                  data: null },
+        { name: 'gbp.reviews_2star',      value: stars.TWO,                                  data: null },
+        { name: 'gbp.reviews_3star',      value: stars.THREE,                                data: null },
+        { name: 'gbp.reviews_4star',      value: stars.FOUR,                                 data: null },
+        { name: 'gbp.reviews_5star',      value: stars.FIVE,                                 data: null },
+      );
+    }
+    if (postsAvailable) {
+      metrics.push(
+        { name: 'gbp.posts_live',      value: livePosts.length, data: null },
+        { name: 'gbp.days_since_post', value: daysSincePost,    data: null },
+      );
+    }
+    const pushAvailable = (name: string, value: number | undefined): void => {
+      if (value !== undefined) metrics.push({ name, value, data: null });
+    };
+    pushAvailable('gbp.views_maps', viewsMaps);
+    pushAvailable('gbp.views_search', viewsSearch);
+    pushAvailable('gbp.views_total', viewsMaps !== undefined && viewsSearch !== undefined ? viewsMaps + viewsSearch : undefined);
+    pushAvailable('gbp.actions_website', getInsightTotal('ACTIONS_WEBSITE'));
+    pushAvailable('gbp.actions_phone', getInsightTotal('ACTIONS_PHONE'));
+    pushAvailable('gbp.actions_directions', getInsightTotal('ACTIONS_DRIVING_DIRECTIONS'));
 
     // Rich data
     const photosArr = d?.photos as Array<unknown> | undefined;
-    metrics.push(
-      { name: 'gbp.location_data', value: d?.location ? 1 : 0,      data: d?.location ?? null },
-      { name: 'gbp.reviews_data',  value: reviewList.length,          data: reviewList },
-      { name: 'gbp.posts_data',    value: posts.length,               data: posts },
-      { name: 'gbp.photos_data',   value: photosArr?.length ?? 0,     data: photosArr ?? [] },
-    );
+    if (locationAvailable) metrics.push({ name: 'gbp.location_data', value: 1, data: d?.location });
+    if (reviewsAvailable) metrics.push({ name: 'gbp.reviews_data', value: reviewList.length, data: reviewList });
+    if (postsAvailable) metrics.push({ name: 'gbp.posts_data', value: posts.length, data: posts });
+    if (photosAvailable) metrics.push({ name: 'gbp.photos_data', value: photosArr!.length, data: photosArr });
 
     if (!performanceUnavailable) return metrics;
     const performanceMetricNames = new Set([

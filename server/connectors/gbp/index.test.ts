@@ -66,6 +66,7 @@ describe('GBP optional API compatibility', () => {
     expect(metricNames).not.toContain('gbp.unanswered_qa');
     expect(metricNames).not.toContain('gbp.qa_data');
     expect(connector.signalTypes).not.toContain('gbp_unanswered_questions');
+    expect(connector.signalTypes).not.toContain('gbp_search_drop');
   });
 
   test('omits unsupported legacy metrics while preserving an observed supported zero', async () => {
@@ -88,6 +89,55 @@ describe('GBP optional API compatibility', () => {
       'gbp.photo_views',
       'gbp.photo_count',
     ]) expect(name in metrics).toBe(false);
+  });
+
+  test('treats an omitted value in a matching Performance datapoint as an observed zero', () => {
+    const metrics = Object.fromEntries(connector.extractMetrics({
+      insights: {
+        multiDailyMetricTimeSeries: [{
+          dailyMetricTimeSeries: [{
+            dailyMetric: 'CALL_CLICKS',
+            timeSeries: { datedValues: [{}] },
+          }],
+        }],
+      },
+    }).map(metric => [metric.name, metric.value]));
+
+    expect(metrics['gbp.actions_phone']).toBe(0);
+  });
+
+  test('omits a Performance scalar when its requested metric series is absent', () => {
+    const metricNames = connector.extractMetrics({
+      insights: {
+        multiDailyMetricTimeSeries: [{
+          dailyMetricTimeSeries: [{
+            dailyMetric: 'CALL_CLICKS',
+            timeSeries: { datedValues: [{ value: '4' }] },
+          }],
+        }],
+      },
+    }).map(metric => metric.name);
+
+    expect(metricNames).not.toContain('gbp.actions_website');
+    expect(metricNames).toContain('gbp.actions_phone');
+  });
+
+  test('omits a Performance aggregate and dependent total when one component series is absent', () => {
+    const metricNames = connector.extractMetrics({
+      insights: {
+        multiDailyMetricTimeSeries: [{
+          dailyMetricTimeSeries: [
+            { dailyMetric: 'BUSINESS_IMPRESSIONS_DESKTOP_MAPS', timeSeries: { datedValues: [{ value: '2' }] } },
+            { dailyMetric: 'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', timeSeries: { datedValues: [{ value: '3' }] } },
+            { dailyMetric: 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH', timeSeries: { datedValues: [{ value: '4' }] } },
+          ],
+        }],
+      },
+    }).map(metric => metric.name);
+
+    expect(metricNames).not.toContain('gbp.views_maps');
+    expect(metricNames).toContain('gbp.views_search');
+    expect(metricNames).not.toContain('gbp.views_total');
   });
 
   test('requests exactly 28 inclusive Performance dates with the documented metrics', async () => {
@@ -194,6 +244,116 @@ describe('GBP optional API compatibility', () => {
       'gbp.actions_phone',
       'gbp.actions_directions',
     ]) expect(metricNames).not.toContain(name);
+  });
+
+  test('does not turn successful incomplete section responses into observed empty metrics', async () => {
+    globalThis.fetch = mock(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.includes('mybusinessbusinessinformation.googleapis.com')) return jsonResponse({ name: 'locations/456' });
+      if (url.includes('/reviews') || url.includes('/localPosts') || url.includes('/media')) return jsonResponse({});
+      if (url.includes('businessprofileperformance.googleapis.com')) return jsonResponse({ multiDailyMetricTimeSeries: [] });
+      throw new Error(`Unexpected test URL: ${url}`);
+    }) as unknown as typeof fetch;
+
+    const data = await connector.fetch('all', {
+      accessToken: 'access-token',
+      accountId: '123',
+      locationId: 'locations/456',
+    });
+    const metricNames = connector.extractMetrics(data).map(metric => metric.name);
+
+    for (const name of [
+      'gbp.avg_rating',
+      'gbp.total_reviews',
+      'gbp.reviews_data',
+      'gbp.posts_live',
+      'gbp.days_since_post',
+      'gbp.posts_data',
+      'gbp.photos_data',
+    ]) expect(metricNames).not.toContain(name);
+  });
+
+  test('omits review scalars and rich data when reviews failed', () => {
+    const metricNames = connector.extractMetrics({
+      reviews: { reviews: [], averageRating: 0, totalReviewCount: 0 },
+      partial_failures: [{ section: 'reviews', error: 'bounded' }],
+    }).map(metric => metric.name);
+
+    for (const name of [
+      'gbp.avg_rating',
+      'gbp.total_reviews',
+      'gbp.unanswered_reviews',
+      'gbp.reviews_1star',
+      'gbp.reviews_2star',
+      'gbp.reviews_3star',
+      'gbp.reviews_4star',
+      'gbp.reviews_5star',
+      'gbp.reviews_data',
+    ]) expect(metricNames).not.toContain(name);
+  });
+
+  test('omits every scalar and rich-data metric sourced from absent sections', () => {
+    const metricNames = connector.extractMetrics({
+      insights: { multiDailyMetricTimeSeries: [] },
+    }).map(metric => metric.name);
+
+    for (const name of [
+      'gbp.location_data',
+      'gbp.avg_rating',
+      'gbp.total_reviews',
+      'gbp.unanswered_reviews',
+      'gbp.reviews_1star',
+      'gbp.reviews_2star',
+      'gbp.reviews_3star',
+      'gbp.reviews_4star',
+      'gbp.reviews_5star',
+      'gbp.reviews_data',
+      'gbp.posts_live',
+      'gbp.days_since_post',
+      'gbp.posts_data',
+      'gbp.photos_data',
+    ]) expect(metricNames).not.toContain(name);
+  });
+
+  test('omits metrics for each failed non-Performance section', () => {
+    const base = {
+      location: { name: 'locations/456' },
+      reviews: { reviews: [], averageRating: 0, totalReviewCount: 0 },
+      posts: [],
+      photos: [],
+    };
+    const cases: Array<[string, string[]]> = [
+      ['location', ['gbp.location_data']],
+      ['reviews', ['gbp.avg_rating', 'gbp.total_reviews', 'gbp.unanswered_reviews', 'gbp.reviews_1star', 'gbp.reviews_2star', 'gbp.reviews_3star', 'gbp.reviews_4star', 'gbp.reviews_5star', 'gbp.reviews_data']],
+      ['posts', ['gbp.posts_live', 'gbp.days_since_post', 'gbp.posts_data']],
+      ['photos', ['gbp.photos_data']],
+    ];
+
+    for (const [section, unavailableNames] of cases) {
+      const metricNames = connector.extractMetrics({
+        ...base,
+        partial_failures: [{ section, error: 'bounded' }],
+      }).map(metric => metric.name);
+      for (const name of unavailableNames) expect(metricNames).not.toContain(name);
+    }
+  });
+
+  test('retains observed empty and zero metrics for present successful sections', () => {
+    const metrics = new Map(connector.extractMetrics({
+      location: { name: 'locations/456' },
+      reviews: { reviews: [], averageRating: 0, totalReviewCount: 0 },
+      posts: [],
+      photos: [],
+    }).map(metric => [metric.name, metric]));
+
+    expect(metrics.get('gbp.location_data')?.value).toBe(1);
+    expect(metrics.get('gbp.avg_rating')?.value).toBe(0);
+    expect(metrics.get('gbp.total_reviews')?.value).toBe(0);
+    expect(metrics.get('gbp.reviews_data')).toMatchObject({ value: 0, data: [] });
+    expect(metrics.get('gbp.posts_live')?.value).toBe(0);
+    expect(metrics.get('gbp.days_since_post')?.value).toBe(999);
+    expect(metrics.get('gbp.posts_data')).toMatchObject({ value: 0, data: [] });
+    expect(metrics.get('gbp.photos_data')).toMatchObject({ value: 0, data: [] });
   });
 
   test('returns only a bounded provider/status classification from health checks', async () => {

@@ -1187,28 +1187,6 @@ export const rules: SignalRule[] = [
   },
 
   {
-    id: 'gbp_search_drop',
-    connectorType: 'gbp',
-    type: 'search_drop',
-    severity: 'warning',
-    name: 'GBP Search Queries Drop',
-    evaluate(current: any, previous: any): RuleResult {
-      const curr = current?.queries_total ?? 0;
-      const prev = previous?.queries_total ?? 0;
-      if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      const dropPct = (prev - curr) / prev;
-      if (dropPct < 0.2) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      return {
-        triggered: true,
-        confidence: Math.min(0.9, dropPct),
-        data: { from: prev, to: curr, dropPct: Math.round(dropPct * 100) },
-        title: `Search queries finding your business down ${Math.round(dropPct * 100)}%`,
-        description: 'Fewer searches are surfacing your business. Review categories, services, and posting cadence.',
-      };
-    },
-  },
-
-  {
     id: 'gbp_no_recent_posts',
     connectorType: 'gbp',
     type: 'posting_lapse',
@@ -1224,25 +1202,6 @@ export const rules: SignalRule[] = [
         data: { days_since_post: days },
         title: `No GBP posts in ${days} days`,
         description: 'Regular posts (offers, events, news) keep your profile active and improve visibility.',
-      };
-    },
-  },
-
-  {
-    id: 'gbp_unanswered_questions',
-    connectorType: 'gbp',
-    type: 'unanswered_questions',
-    severity: 'info',
-    name: 'Unanswered GBP Questions',
-    evaluate(current: any): RuleResult {
-      const count = current?.unanswered_qa ?? 0;
-      if (count === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
-      return {
-        triggered: true,
-        confidence: 1.0,
-        data: { count },
-        title: `${count} unanswered question${count > 1 ? 's' : ''} on your GBP listing`,
-        description: 'Customers and prospects are waiting for answers. Reply to claim authoritative voice.',
       };
     },
   },

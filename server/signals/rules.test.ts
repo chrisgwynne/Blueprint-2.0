@@ -34,6 +34,12 @@ describe('signal rules — defensive behaviour', () => {
     }
   });
 
+  test('does not advertise GBP rules whose source metrics are unsupported', () => {
+    const gbpRuleIds = rules.filter(rule => rule.connectorType === 'gbp').map(rule => rule.id);
+    expect(gbpRuleIds).not.toContain('gbp_search_drop');
+    expect(gbpRuleIds).not.toContain('gbp_unanswered_questions');
+  });
+
   test('traffic_drop_7day does not divide by zero when previous sessions are 0', () => {
     const rule = getRule('traffic_drop_7day');
     const result = rule.evaluate({ sessions: 100 }, { sessions: 0 });
