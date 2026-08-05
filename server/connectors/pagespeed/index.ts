@@ -1,39 +1,18 @@
 import fetch from 'node-fetch';
-import { getValidGoogleAccessToken } from '../google-auth.js';
 
 type Creds = Record<string, string | undefined>;
 
 const PSI_BASE = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
 const CATEGORIES = ['PERFORMANCE', 'ACCESSIBILITY', 'SEO', 'BEST_PRACTICES'];
-const PAGESPEED_OAUTH_REQUIRED_SCOPE = 'openid';
-
 /**
  * Resolve which auth method to use for a PageSpeed request, in priority:
  *   1. Connector-specific PageSpeed API key
  *   2. Env PAGESPEED_API_KEY
- *   3. OAuth token from a connected GSC/GA4/GBP connector for this business
- *   4. No auth (low anonymous quota)
- *
- * The businessId is plumbed through `params` because the connector framework
- * doesn't pass it to fetch() by default — see scheduler/post-sync wiring.
+ *   3. No auth (low anonymous quota)
  */
 export async function resolveAuth(credentials: Creds, params?: Record<string, unknown>): Promise<{ accessToken?: string; apiKey?: string | null }> {
-  // PageSpeed Insights is an API-key connector. Prefer its dedicated key
-  // before considering a Google OAuth token from another connector: that
-  // token may be valid for GSC/GA4/GBP yet lack PageSpeed scopes, causing
-  // repeat 403 insufficientPermissions failures despite a working API key.
   const apiKey = credentials?.apiKey || process.env.PAGESPEED_API_KEY || null;
   if (apiKey) return { apiKey };
-
-  const businessId = (params?.businessId || credentials?.businessId) as string | undefined;
-  if (businessId) {
-    try {
-      const tok = await getValidGoogleAccessToken(businessId, { requiredScope: PAGESPEED_OAUTH_REQUIRED_SCOPE }) as { accessToken?: string } | null;
-      if (tok?.accessToken) return { accessToken: tok.accessToken };
-    } catch (err) {
-      console.warn('[pagespeed] OAuth lookup failed, falling back to anonymous access:', (err as Error).message);
-    }
-  }
   return { apiKey: null };
 }
 
@@ -69,8 +48,6 @@ export async function runStrategy(
 ): Promise<AuditResult> {
   const { apiKey, accessToken } = auth ?? {};
   const categoryQuery = CATEGORIES.map(c => `category=${c}`).join('&');
-  // A PageSpeed API key is purpose-specific and takes precedence over an
-  // OAuth token borrowed from another Google connector.
   const keyParam = apiKey ? `&key=${encodeURIComponent(apiKey)}` : '';
   const apiUrl = `${PSI_BASE}?url=${encodeURIComponent(url)}&strategy=${strategy}&${categoryQuery}${keyParam}`;
 
@@ -81,15 +58,6 @@ export async function runStrategy(
   const res = await fetchImpl(apiUrl, { headers });
   if (!res.ok) {
     const body = await res.text();
-
-    // A token that is valid for GSC/GA4/GBP may not include the PageSpeed
-    // scope. Retry once without that bearer token so the connector can use
-    // Google's bounded anonymous quota instead of failing every scheduled
-    // sync. Purpose-specific API keys are handled above and never downgraded.
-    if (res.status === 403 && useAccessToken && /insufficient(?: authentication)? scopes|insufficientPermissions|Insufficient Permission/i.test(body)) {
-      console.warn(`[pagespeed] OAuth token lacks PageSpeed scope (${strategy}); retrying anonymously.`);
-      return runStrategy(url, strategy, {}, fetchImpl);
-    }
 
     // Google's "API key not valid" error is deliberately ambiguous — it
     // fires for a revoked key, a key for a different project, a wrong
@@ -115,13 +83,10 @@ export async function runStrategy(
       // anonymous (no OAuth token, no api key) and we hit the per-IP
       // shared quota. That means our auth wasn't applied.
       const anonymous = /583797351490/.test(body);
-      const usedAuth = apiKey ? 'API key' : (useAccessToken ? 'OAuth bearer token' : 'no auth');
+      const usedAuth = apiKey ? 'API key' : 'no auth';
       const hint = anonymous
-        ? 'Request was treated as anonymous (no OAuth or API key reached PageSpeed). '
-          + 'Most likely cause: no Google connector is connected for this business yet, OR '
-          + 'PageSpeed Insights API is not enabled on your Google Cloud project. '
-          + 'Enable it at https://console.cloud.google.com/apis/library/pagespeedonline.googleapis.com '
-          + 'on the same project that owns your OAuth client (Settings → Google OAuth shows the Client ID).'
+        ? 'Request was treated as anonymous because no PageSpeed API key was configured. '
+          + 'Add a PageSpeed Insights API key or wait for anonymous quota to reset.'
         : `Authenticated as ${usedAuth} but Google still rejected on quota. `
           + 'Daily limit reset at midnight Pacific. Add a billing account to your Cloud project to raise the limit.';
       throw new Error(`PageSpeed quota exceeded (${strategy}, status ${res.status}). ${hint}`);
@@ -242,7 +207,7 @@ const connector = {
           seo: result.scores.seo,
           accessibility: result.scores.accessibility,
           lcp_ms: result.cwv.lcp,
-          authMethod: auth.accessToken ? 'oauth' : (auth.apiKey ? 'apikey' : 'anonymous'),
+          authMethod: auth.apiKey ? 'apikey' : 'anonymous',
         },
       };
     } catch (err) {
@@ -265,7 +230,7 @@ const connector = {
       runStrategy(url, 'desktop', auth),
     ]);
 
-    return { url, mobile, desktop, fetchedAt: new Date().toISOString(), authMethod: auth.accessToken ? 'oauth' : (auth.apiKey ? 'apikey' : 'anonymous') };
+    return { url, mobile, desktop, fetchedAt: new Date().toISOString(), authMethod: auth.apiKey ? 'apikey' : 'anonymous' };
   },
 
   /**

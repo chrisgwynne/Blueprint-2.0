@@ -1,0 +1,5 @@
+[test]
+# Force every repository-root `bun test` invocation to use the same isolated
+# in-memory database preload as tests run from server/.
+preload = ["./server/test-setup.ts"]
+root = "./server"

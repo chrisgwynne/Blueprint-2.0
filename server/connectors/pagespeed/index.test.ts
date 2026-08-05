@@ -53,17 +53,16 @@ describe('PageSpeed authentication selection', () => {
     expect(auth.accessToken).toBeUndefined();
   });
 
-  test('falls back to business Google OAuth only when no PageSpeed key is configured', async () => {
+  test('uses anonymous access when no PageSpeed key is configured even if Google OAuth exists', async () => {
     delete process.env.PAGESPEED_API_KEY;
     seedGoogleOAuth();
 
     const auth = await resolveAuth({}, { businessId: BUSINESS_ID });
 
-    expect(auth.apiKey).toBeUndefined();
-    expect(auth.accessToken).toBe('test-oauth-token');
+    expect(auth).toEqual({ apiKey: null });
   });
 
-  test('skips a fresher Google OAuth credential that lacks the PageSpeed scope', async () => {
+  test('does not borrow Google OAuth credentials for PageSpeed', async () => {
     delete process.env.PAGESPEED_API_KEY;
     seedGoogleOAuth({
       refreshToken: 'gbp-refresh-token',
@@ -88,8 +87,7 @@ describe('PageSpeed authentication selection', () => {
 
     const auth = await resolveAuth({}, { businessId: BUSINESS_ID });
 
-    expect(auth.apiKey).toBeUndefined();
-    expect(auth.accessToken).toBe('gsc-token');
+    expect(auth).toEqual({ apiKey: null });
   });
 
   test('uses anonymous access when neither a PageSpeed key nor business OAuth is available', async () => {
@@ -100,15 +98,10 @@ describe('PageSpeed authentication selection', () => {
     expect(auth).toEqual({ apiKey: null });
   });
 
-  test('retries anonymously when a fallback OAuth token lacks PageSpeed scopes', async () => {
+  test('does not send OAuth bearer tokens on PageSpeed requests', async () => {
     const calls: Array<{ authorization?: string }> = [];
     const fakeFetch = async (_input: string, init?: { headers?: Record<string, string> }) => {
       calls.push({ authorization: init?.headers?.Authorization });
-      if (calls.length === 1) {
-        return new Response(JSON.stringify({
-          error: { status: 'PERMISSION_DENIED', message: 'Request had insufficient authentication scopes.' },
-        }), { status: 403 });
-      }
       return new Response(JSON.stringify({
         lighthouseResult: {
           categories: { performance: { score: 0.9 } },
@@ -117,12 +110,9 @@ describe('PageSpeed authentication selection', () => {
       }), { status: 200 });
     };
 
-    const result = await runStrategy('https://example.com/', 'mobile', { accessToken: 'wrong-scope-token' }, fakeFetch);
+    const result = await runStrategy('https://example.com/', 'mobile', {}, fakeFetch);
 
-    expect(calls).toEqual([
-      { authorization: 'Bearer wrong-scope-token' },
-      { authorization: undefined },
-    ]);
+    expect(calls).toEqual([{ authorization: undefined }]);
     expect(result.cwv.lcp).toBe(1234);
   });
 });

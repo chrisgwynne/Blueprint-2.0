@@ -71,13 +71,14 @@ const connector = {
 
   signalTypes: ['traffic_drop', 'bounce_rate_spike', 'conversion_drop'],
 
-  async healthCheck(credentials: Creds): Promise<{ ok: boolean; error?: string; details?: unknown }> {
+  async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
     try {
       const creds = await ensureFreshToken(credentials);
-      if (!credentials.propertyId) {
+      const propertyId = (config.propertyId as string | undefined) || credentials.propertyId;
+      if (!propertyId) {
         return { ok: false, error: 'GA4 propertyId is not configured.' };
       }
-      const res = await fetch(`${GA4_BASE}/${credentials.propertyId}/metadata`, {
+      const res = await fetch(`${GA4_BASE}/${propertyId}/metadata`, {
         headers: { Authorization: `Bearer ${creds.accessToken}` },
       });
       if (!res.ok) {

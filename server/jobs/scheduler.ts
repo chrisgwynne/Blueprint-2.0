@@ -12,6 +12,7 @@ import { runSocialPublishingWorkerTick } from './social-publishing-worker.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 import { recoverStaleAgentRuns } from '../agents/agent-runner.js';
+import { isDurableGoogleCredential } from '../connectors/google-auth.js';
 
 let schedulerStarted = false;
 
@@ -50,6 +51,11 @@ export async function syncConnector(connector: Connector): Promise<{ ok: boolean
       } catch {
         credentials = {};
       }
+    }
+
+    if (['gsc', 'ga4', 'gbp', 'google-ads', 'google-merchant'].includes(connector.type)) {
+      const { refreshGoogleConnectorCredentials } = await import('../connectors/google-auth.js');
+      credentials = await refreshGoogleConnectorCredentials(connector, credentials);
     }
 
     const config: Record<string, unknown> = connector.config ? JSON.parse(connector.config as unknown as string) : {};
@@ -137,15 +143,20 @@ export async function syncConnector(connector: Connector): Promise<{ ok: boolean
     );
 
     // Update connector last_sync
+    const durable = isDurableGoogleCredential(connector.type, credentials);
     db.prepare(`
-      UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?
-    `).run(connector.id);
+      UPDATE connectors SET status = ?, last_sync = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?
+    `).run(
+      durable ? 'connected' : 'error',
+      durable ? null : 'Google OAuth grant is temporary, under-scoped, or not bound to the configured OAuth client; reconnect required.',
+      connector.id,
+    );
 
     console.log(`[scheduler] Synced connector '${connector.name}' (${connector.type}). New signals: ${newSignals.length}`);
 
     // World Model: connectors feed the World Model, not agents directly.
     // Fire-and-forget — never let confidence/snapshot bookkeeping block sync.
-    try { refreshConnectorConfidence({ ...connector, status: 'connected', last_sync: new Date().toISOString(), last_error: null }); } catch {}
+    try { refreshConnectorConfidence({ ...connector, status: durable ? 'connected' : 'error', last_sync: new Date().toISOString(), last_error: durable ? null : 'OAuth reconnect required' }); } catch {}
     writeWorldModelSnapshot(connector.business_id, 'connector_sync');
 
     // BAP webhook: connector.sync.complete

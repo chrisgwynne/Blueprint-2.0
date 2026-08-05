@@ -89,16 +89,28 @@ const connector = {
     'gbp_no_recent_posts', 'gbp_unanswered_questions',
   ],
 
-  async healthCheck(credentials: Creds): Promise<{ ok: boolean; error?: string; details?: unknown }> {
+  async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
     try {
       if (!credentials?.accessToken) return { ok: false, error: 'Access token missing.' };
       const fresh = await ensureFreshToken(credentials);
+      const accountId = (config.accountId as string | undefined) || credentials.accountId;
+      const locationId = (config.locationId as string | undefined) || credentials.locationId;
+      if (!accountId || !locationId) return { ok: false, error: 'GBP accountId and locationId are not configured.' };
       const data = await gbpFetch(`${ACCOUNT_MGMT}/accounts`, fresh);
       const accounts = (data.accounts as Array<Record<string, unknown>>) || [];
+      const cleanAccount = accountId.startsWith('accounts/') ? accountId : `accounts/${accountId}`;
+      const cleanLocation = locationId.replace(/^locations\//, '');
+      const locations = await this.listLocations(cleanAccount, fresh);
+      const matched = locations.some((location) => {
+        const name = String((location as Record<string, unknown>).name ?? '');
+        return name === `${cleanAccount}/locations/${cleanLocation}` || name.endsWith(`/locations/${cleanLocation}`);
+      });
+      if (!matched) return { ok: false, error: 'Configured GBP location is not accessible to this grant.' };
       return {
         ok: true,
         details: {
           accounts: accounts.length,
+          configured_location: `${cleanAccount}/locations/${cleanLocation}`,
           first_account: (accounts[0]?.accountName as string | undefined) ?? null,
         },
       };

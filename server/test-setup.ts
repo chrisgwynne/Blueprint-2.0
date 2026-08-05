@@ -6,4 +6,6 @@
  * test run. Unit tests should still inject their dependencies; this is the
  * belt-and-braces safety net.
  */
-process.env.DATABASE_PATH ||= ':memory:';
+// Always override inherited/local DATABASE_PATH values. Tests must never open a
+// persistent Blueprint database, even when invoked directly from the repo root.
+process.env.DATABASE_PATH = ':memory:';

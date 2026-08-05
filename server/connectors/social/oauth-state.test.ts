@@ -101,6 +101,27 @@ describe('validateOAuthState', () => {
       .rejects.toThrow(OAuthStateError);
   });
 
+  test('required live-session binding rejects state that omitted a session hash', async () => {
+    const state = await createOAuthState({ ...basePayload, family: 'social' });
+    await expect(validateOAuthState(state, basePayload.userId, basePayload.businessId, {
+      expectedType: 'social',
+      expectedFamily: 'social',
+      expectedSessionHash: 'expected-live-session',
+    })).rejects.toThrow(/live session/i);
+  });
+
+  test('rejects empty, duplicate, and non-exact connector type sets', async () => {
+    await expect(createOAuthState({ ...basePayload, family: 'google', type: 'google', types: [] }))
+      .rejects.toThrow(/type/i);
+    await expect(createOAuthState({ ...basePayload, family: 'google', type: 'google', types: ['gsc', 'gsc'] }))
+      .rejects.toThrow(/duplicate/i);
+
+    const state = await createOAuthState({ ...basePayload, family: 'google', type: 'google', types: ['ga4', 'gsc'] });
+    await expect(validateOAuthState(state, basePayload.userId, basePayload.businessId, {
+      expectedType: 'google', expectedFamily: 'google', expectedTypes: ['gsc'],
+    })).rejects.toThrow(/exact/i);
+  });
+
   test('missing SESSION_SECRET causes error on create', async () => {
     const saved = process.env.SESSION_SECRET;
     delete process.env.SESSION_SECRET;

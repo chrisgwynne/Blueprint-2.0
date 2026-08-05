@@ -156,7 +156,7 @@ export const testPageSpeed = (url: string, apiKey?: string) => post('/connectors
 export function getGoogleAuthUrl(businessId: string, types = 'gsc,ga4'): string {
   return `/api/oauth/google?businessId=${encodeURIComponent(businessId)}&types=${encodeURIComponent(types)}`
 }
-export const revokeGoogleAuth = (businessId: string) => del(`/oauth/google/${businessId}`)
+export const revokeGoogleAuth = (businessId: string, type = 'google') => del(`/oauth/google/${businessId}?type=${encodeURIComponent(type)}`)
 
 // ============================================
 // Knowledge Base (business-scoped, Karpathy wiki pattern)

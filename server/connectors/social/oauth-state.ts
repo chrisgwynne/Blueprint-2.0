@@ -23,6 +23,10 @@ export interface OAuthStatePayload {
   businessId: string;
   userId: string;
   type: string;
+  family?: string;
+  types?: string[];
+  sessionHash?: string;
+  config?: Record<string, unknown>;
 }
 
 interface InternalStatePayload extends OAuthStatePayload {
@@ -56,7 +60,9 @@ function verify(token: string): InternalStatePayload {
 
   const key = getHmacKey();
   const expectedSig = crypto.createHmac('sha256', key).update(encoded).digest('base64url');
-  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+  const actual = Buffer.from(sig);
+  const expected = Buffer.from(expectedSig);
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) {
     throw new OAuthStateError('State signature invalid — possible tampering or wrong key.');
   }
 
@@ -82,13 +88,21 @@ export async function createOAuthState(
 ): Promise<string> {
   // Eagerly validate config so callers get a clear error on startup
   getHmacKey();
+  if (payload.types !== undefined) {
+    if (!Array.isArray(payload.types) || payload.types.length === 0 || payload.types.some(type => typeof type !== 'string' || !type.trim())) {
+      throw new OAuthStateError('OAuth state connector types must be a non-empty array.');
+    }
+    const normalized = payload.types.map(type => type.trim());
+    if (new Set(normalized).size !== normalized.length) throw new OAuthStateError('OAuth state connector types must not contain duplicates.');
+    payload = { ...payload, types: normalized };
+  }
 
   const nonce = generateId();
   const expiresAt = Date.now() + ttlSeconds * 1000;
 
 
   db.prepare(
-    `INSERT OR REPLACE INTO oauth_nonces (nonce, expires_at) VALUES (?, ?)`,
+    `INSERT INTO oauth_nonces (nonce, expires_at) VALUES (?, ?)`,
   ).run(nonce, new Date(expiresAt).toISOString());
 
   const internal: InternalStatePayload = { ...payload, nonce, expiresAt };
@@ -108,6 +122,7 @@ export async function validateOAuthState(
   token: string,
   expectedUserId: string,
   expectedBusinessId: string,
+  options: { expectedType?: string; expectedFamily?: string; expectedTypes?: string[]; expectedSessionHash?: string } = {},
 ): Promise<OAuthStatePayload> {
   let payload: InternalStatePayload;
   try {
@@ -128,6 +143,34 @@ export async function validateOAuthState(
     throw new OAuthStateError('OAuth state business does not match the expected business (cross-business substitution attempt).');
   }
 
+  if (options.expectedType && payload.type !== options.expectedType) {
+    throw new OAuthStateError('OAuth state connector type does not match this callback.');
+  }
+
+  if (options.expectedFamily && payload.family !== options.expectedFamily) {
+    throw new OAuthStateError('OAuth state connector family does not match this callback.');
+  }
+
+  if (options.expectedSessionHash && payload.sessionHash !== options.expectedSessionHash) {
+    throw new OAuthStateError('OAuth state live session does not match this callback.');
+  }
+
+  if (options.expectedTypes !== undefined) {
+    const actualTypes = payload.types;
+    if (!Array.isArray(actualTypes) || actualTypes.length === 0 || actualTypes.some(type => typeof type !== 'string' || !type.trim())) {
+      throw new OAuthStateError('OAuth state connector types must be a non-empty exact set.');
+    }
+    const actual = actualTypes.map(type => type.trim());
+    const expected = options.expectedTypes.map(type => type.trim());
+    if (new Set(actual).size !== actual.length || new Set(expected).size !== expected.length || expected.length === 0) {
+      throw new OAuthStateError('OAuth state connector types must be a non-empty exact set without duplicates.');
+    }
+    const actualSorted = [...actual].sort();
+    const expectedSorted = [...expected].sort();
+    if (actualSorted.length !== expectedSorted.length || actualSorted.some((type, index) => type !== expectedSorted[index])) {
+      throw new OAuthStateError('OAuth state connector types do not exactly match this callback.');
+    }
+  }
 
   // Atomic one-time consumption: only one concurrent process can succeed.
   // UPDATE WHERE used_at IS NULL + changes===1 prevents replay under concurrent requests
@@ -159,6 +202,10 @@ export async function validateOAuthState(
     businessId: payload.businessId,
     userId: payload.userId,
     type: payload.type,
+    family: payload.family,
+    types: payload.types,
+    sessionHash: payload.sessionHash,
+    config: payload.config,
   };
 }
 

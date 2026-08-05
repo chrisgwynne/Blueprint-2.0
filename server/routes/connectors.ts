@@ -7,6 +7,8 @@ import { encrypt, decrypt } from '../crypto.js';
 import type { Connector } from '../types/db.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
+import { readGoogleOAuthConfig } from '../lib/google-oauth-config.js';
+import { isDurableGoogleCredential } from '../connectors/google-auth.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -26,7 +28,7 @@ async function getConnector(type: string): Promise<any> {
  * callable from anywhere (e.g. immediately after creating a connector).
  * Fire-and-forget — never throws on the caller side.
  */
-async function runConnectorSync(rowId: string): Promise<void> {
+export async function runConnectorSync(rowId: string): Promise<void> {
   const row = db.prepare('SELECT * FROM connectors WHERE id = ?').get(rowId) as Connector | undefined;
   if (!row) return;
 
@@ -43,6 +45,16 @@ async function runConnectorSync(rowId: string): Promise<void> {
   }
 
   const parsed = parseRow(row);
+  if (parsed) {
+    try {
+      parsed.credentials = await refreshGoogleCredentialForRow(row, parsed.credentials);
+    } catch (err) {
+      const message = (err as Error).message.substring(0, 500);
+      db.prepare(`UPDATE connectors SET status = 'error', last_error = ? WHERE id = ?`).run(message, row.id);
+      console.error(`[connectors] Sync credential error for ${row.name}:`, message);
+      return;
+    }
+  }
   const config: Record<string, unknown> = row.config ? JSON.parse(row.config as unknown as string) : {};
   // Operator precedence: || binds tighter than ?:, so the original
   //   config.defaultDataType || row.type === 'pagespeed' ? 'performance' : ...
@@ -93,7 +105,12 @@ async function runConnectorSync(rowId: string): Promise<void> {
       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(crypto.randomUUID(), row.business_id, row.id, `${row.type}_sync`, JSON.stringify(data), now, now);
 
-    db.prepare(`UPDATE connectors SET status = 'connected', last_sync = CURRENT_TIMESTAMP, last_error = NULL WHERE id = ?`).run(row.id);
+    const durable = isDurableGoogleCredential(row.type, parsed?.credentials ?? {});
+    db.prepare(`UPDATE connectors SET status = ?, last_sync = CURRENT_TIMESTAMP, last_error = ? WHERE id = ?`).run(
+      durable ? 'connected' : 'error',
+      durable ? null : 'Google OAuth grant is temporary, under-scoped, or not bound to the configured OAuth client; reconnect required.',
+      row.id,
+    );
     console.log(`[connectors] Sync complete for ${row.name}`);
 
     try {
@@ -167,6 +184,23 @@ function safeRow(row: Connector | null): (Omit<Connector, 'credentials' | 'confi
     safeCredentials[key] = (credentials as Record<string, unknown>)[key] ? '***' : null;
   }
   return { ...safe, credentials: safeCredentials };
+}
+
+const GOOGLE_REQUIRED_SCOPE: Record<string, string> = {
+  gsc: 'https://www.googleapis.com/auth/webmasters.readonly',
+  ga4: 'https://www.googleapis.com/auth/analytics.readonly',
+  gbp: 'https://www.googleapis.com/auth/business.manage',
+  'google-ads': 'https://www.googleapis.com/auth/adwords',
+  'google-merchant': 'https://www.googleapis.com/auth/content',
+};
+
+async function refreshGoogleCredentialForRow(row: Connector, credentials: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const requiredScope = GOOGLE_REQUIRED_SCOPE[row.type];
+  if (!requiredScope) return credentials;
+  const { refreshGoogleConnectorCredentials } = await import('../connectors/google-auth.js') as unknown as {
+    refreshGoogleConnectorCredentials: (row: Pick<Connector, 'id' | 'type'>, credentials: Record<string, unknown>, config?: ReturnType<typeof readGoogleOAuthConfig>) => Promise<Record<string, unknown>>;
+  };
+  return refreshGoogleConnectorCredentials(row, credentials, readGoogleOAuthConfig());
 }
 
 /**
@@ -341,9 +375,13 @@ router.get('/gsc/sites', async (req: Request, res: Response) => {
     // OAuth refresh token we can borrow. (Falls back to GA4/GBP via
     // getValidGoogleAccessToken which scans all of them.)
     const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js') as unknown as {
-      getValidGoogleAccessToken: (businessId: string) => Promise<{ accessToken?: string } | null>;
+      getValidGoogleAccessToken: (businessId: string, options?: { requiredScope?: string; connectorTypes?: string[]; googleOAuthConfig?: ReturnType<typeof readGoogleOAuthConfig> }) => Promise<{ accessToken?: string } | null>;
     };
-    const tok = await getValidGoogleAccessToken(businessId);
+    const tok = await getValidGoogleAccessToken(businessId, {
+      requiredScope: GOOGLE_REQUIRED_SCOPE.gsc,
+      connectorTypes: ['gsc'],
+      googleOAuthConfig: readGoogleOAuthConfig(),
+    });
     if (!tok?.accessToken) {
       return res.status(409).json({ error: 'No connected Google account found for this business. Connect Google first.' });
     }
@@ -369,9 +407,13 @@ router.get('/gbp/accounts', async (req: Request, res: Response) => {
     if (!businessId) return res.status(400).json({ error: 'businessId is required.' });
 
     const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js') as unknown as {
-      getValidGoogleAccessToken: (businessId: string) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      getValidGoogleAccessToken: (businessId: string, options?: { requiredScope?: string; connectorTypes?: string[]; googleOAuthConfig?: ReturnType<typeof readGoogleOAuthConfig> }) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
     };
-    const tok = await getValidGoogleAccessToken(businessId);
+    const tok = await getValidGoogleAccessToken(businessId, {
+      requiredScope: GOOGLE_REQUIRED_SCOPE.gbp,
+      connectorTypes: ['gbp'],
+      googleOAuthConfig: readGoogleOAuthConfig(),
+    });
     if (!tok?.accessToken) {
       return res.status(409).json({ error: 'No connected Google account found. Connect Google Business Profile first.' });
     }
@@ -399,9 +441,13 @@ router.get('/gbp/locations', async (req: Request, res: Response) => {
     if (!accountId)  return res.status(400).json({ error: 'accountId is required.' });
 
     const { getValidGoogleAccessToken } = await import('../connectors/google-auth.js') as unknown as {
-      getValidGoogleAccessToken: (businessId: string) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
+      getValidGoogleAccessToken: (businessId: string, options?: { requiredScope?: string; connectorTypes?: string[]; googleOAuthConfig?: ReturnType<typeof readGoogleOAuthConfig> }) => Promise<{ accessToken?: string; refreshToken?: string } | null>;
     };
-    const tok = await getValidGoogleAccessToken(businessId);
+    const tok = await getValidGoogleAccessToken(businessId, {
+      requiredScope: GOOGLE_REQUIRED_SCOPE.gbp,
+      connectorTypes: ['gbp'],
+      googleOAuthConfig: readGoogleOAuthConfig(),
+    });
     if (!tok?.accessToken) {
       return res.status(409).json({ error: 'No connected Google account found. Connect Google Business Profile first.' });
     }
@@ -441,6 +487,25 @@ router.post('/:id/sync', async (req: Request, res: Response) => {
   }
 });
 
+export async function callConnectorHealth(
+  connector: { healthCheck: (credentials: Record<string, unknown>, config?: Record<string, unknown>) => Promise<{ ok: boolean; error?: string }> },
+  credentials: Record<string, unknown>,
+  config: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  return connector.healthCheck(credentials, config);
+}
+
+export function enforceGoogleHealthDurability(
+  type: string,
+  credentials: Record<string, unknown>,
+  result: { ok: boolean; error?: string },
+): { ok: boolean; error?: string } {
+  if (result.ok && !isDurableGoogleCredential(type, credentials, readGoogleOAuthConfig())) {
+    return { ok: false, error: 'Google OAuth grant is temporary, under-scoped, or not bound to the configured OAuth client; reconnect required.' };
+  }
+  return result;
+}
+
 /**
  * GET /api/connectors/:id/health
  */
@@ -456,7 +521,12 @@ router.get('/:id/health', async (req: Request, res: Response) => {
     }
 
     const parsed = parseRow(row)!;
-    const result: { ok: boolean; error?: string } = await connector.healthCheck(parsed.credentials);
+    parsed.credentials = await refreshGoogleCredentialForRow(row, parsed.credentials);
+    const result = enforceGoogleHealthDurability(
+      row.type,
+      parsed.credentials,
+      await callConnectorHealth(connector, parsed.credentials, parsed.config),
+    );
 
     const status = result.ok ? 'connected' : 'error';
     db.prepare('UPDATE connectors SET status = ?, last_error = ? WHERE id = ?').run(

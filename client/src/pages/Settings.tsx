@@ -2433,7 +2433,7 @@ function GoogleOAuthTab() {
     <div className="space-y-6">
       <Section
         title="Google OAuth app credentials"
-        description="Used to connect Google Search Console, Analytics 4, Business Profile, and Google Ads. You only set this up once — all Google connectors share these credentials."
+        description="Used to connect Google Search Console, Analytics 4, Business Profile, Google Ads, and Merchant Center. PageSpeed uses an API key instead of user OAuth."
       >
         {/* Status banner */}
         <div className={clsx(

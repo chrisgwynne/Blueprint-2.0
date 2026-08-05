@@ -12,13 +12,12 @@ The PageSpeed connector runs mobile and desktop Lighthouse audits against your s
 
 ## Authentication
 
-PageSpeed Insights supports three auth modes, resolved in this priority order on each request:
+PageSpeed Insights supports two auth modes, resolved in this priority order on each request:
 
-1. **OAuth token from a connected Google connector** — If GA4, GSC, or GBP is connected for the same business, Blueprint automatically reuses that OAuth bearer token. No additional setup needed.
-2. **API key** — Enter a key in the connector config, or set the `PAGESPEED_API_KEY` environment variable.
-3. **Anonymous** — Works without any auth at a lower rate limit. Sufficient for a single site syncing once per day.
+1. **API key** — Enter a key in the connector config, or set the `PAGESPEED_API_KEY` environment variable.
+2. **Anonymous** — Works without any auth at a lower rate limit. Sufficient for a single site syncing once per day.
 
-For most setups, connecting GA4 or GSC first means PageSpeed gets OAuth automatically. An API key is only needed if you run PageSpeed without any other Google connector.
+PageSpeed does not use user OAuth. Connecting GA4, GSC, GBP, Ads, or Merchant Center does not grant PageSpeed quota.
 
 ### Obtaining a PageSpeed API key (optional)
 
@@ -125,7 +124,7 @@ The most common cause is the PageSpeed Insights API not being enabled on the Clo
 
 **Quota exceeded — anonymous request**
 
-If the error message references project number `583797351490`, the request was treated as anonymous — neither an OAuth token nor an API key was applied. This means either no Google connector is connected for this business yet, or the PageSpeed Insights API is not enabled on the Cloud project that owns your OAuth client. Enable it at the URL above.
+If the error message references project number `583797351490`, the request was treated as anonymous because no PageSpeed API key was applied. Add a PageSpeed API key or wait for anonymous quota to reset.
 
 **Quota exceeded — authenticated request**
 

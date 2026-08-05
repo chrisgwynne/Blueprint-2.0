@@ -10,6 +10,7 @@
  * NOTE: cost_micros is in micros — divide by 1,000,000 to get currency value.
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
+import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
 
 type Creds = Record<string, string | undefined>;
 
@@ -25,14 +26,15 @@ async function ensureFreshToken(credentials: Creds): Promise<Creds> {
   if (!credentials.refreshToken) {
     throw new Error('Google Ads token expired and no refresh token available. Re-authorise the connector.');
   }
+  const { clientId, clientSecret } = readGoogleOAuthConfig();
   const res = await checkedFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: credentials.refreshToken,
-      client_id: process.env.GOOGLE_CLIENT_ID || '',
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+      client_id: clientId || credentials.clientId || '',
+      client_secret: clientSecret || credentials.clientSecret || '',
     }),
   });
   const tokens = await res.json() as { access_token: string; expires_in?: number };
@@ -95,13 +97,13 @@ const connector = {
     'google_ads_impression_share_drop', 'google_ads_low_quality_scores',
   ],
 
-  async healthCheck(credentials: Creds): Promise<{ ok: boolean; error?: string; details?: unknown }> {
+  async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
     try {
       if (!credentials?.accessToken) return { ok: false, error: 'Access token missing.' };
       if (!process.env.GOOGLE_ADS_DEVELOPER_TOKEN) {
         return { ok: false, error: 'GOOGLE_ADS_DEVELOPER_TOKEN env var not set.' };
       }
-      const customerId = credentials.customerId;
+      const customerId = (config.customerId as string | undefined) || credentials.customerId;
       if (!customerId) return { ok: false, error: 'customerId not configured.' };
 
       const fresh = await ensureFreshToken(credentials);
@@ -109,7 +111,7 @@ const connector = {
         `SELECT customer.id, customer.descriptive_name, customer.currency_code FROM customer LIMIT 1`,
         fresh,
         customerId,
-        credentials.managerAccountId
+        (config.managerAccountId as string | undefined) || credentials.managerAccountId
       );
       const results = data.results as Array<Record<string, unknown>> | undefined;
       const row = results?.[0] as Record<string, Record<string, unknown>> | undefined;
@@ -301,9 +303,11 @@ const connector = {
   },
 
   async getAuthUrl(state: string): Promise<string> {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const { clientId } = readGoogleOAuthConfig();
     if (!clientId) throw new Error('GOOGLE_CLIENT_ID env var not set.');
-    const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || 'http://localhost:4000/api/oauth/google-ads/callback';
+    const { redirectUri: googleRedirect } = readGoogleOAuthConfig();
+    const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI ||
+      googleRedirect.replace('/api/oauth/google/callback', '/api/oauth/google-ads/callback');
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
@@ -317,9 +321,9 @@ const connector = {
   },
 
   async exchangeCode(code: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: string; scope?: string }> {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI || 'http://localhost:4000/api/oauth/google-ads/callback';
+    const { clientId, clientSecret, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+    const redirectUri = process.env.GOOGLE_ADS_REDIRECT_URI ||
+      googleRedirect.replace('/api/oauth/google/callback', '/api/oauth/google-ads/callback');
     if (!clientId || !clientSecret) {
       throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set.');
     }

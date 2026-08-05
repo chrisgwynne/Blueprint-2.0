@@ -39,13 +39,26 @@ At least one LLM provider is required for agents to run.
 
 ---
 
-## Google OAuth (Required for GA4, GSC, Google Ads)
+## Google OAuth (Required for GSC, GA4, GBP, Google Ads, Merchant Center)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `GOOGLE_CLIENT_ID` | No | — | OAuth 2.0 client ID from Google Cloud Console |
 | `GOOGLE_CLIENT_SECRET` | No | — | OAuth 2.0 client secret from Google Cloud Console |
 | `GOOGLE_REDIRECT_URI` | No | `http://localhost:4000/api/oauth/google/callback` | Must match the Authorized Redirect URI in Google Cloud Console exactly — including protocol, port, and path. |
+
+Add these exact **absolute** Authorized Redirect URIs to the Google OAuth web application, replacing `https://blueprint.example.com` with Blueprint's public HTTPS origin (no trailing slash):
+
+- `https://blueprint.example.com/api/oauth/google/callback`
+- `https://blueprint.example.com/api/oauth/gbp/callback`
+- `https://blueprint.example.com/api/oauth/google-ads/callback`
+- `https://blueprint.example.com/api/oauth/google-merchant/callback`
+
+The scheme, host, optional port, and path must match byte-for-byte. The shared `GOOGLE_REDIRECT_URI` is the first URI; Blueprint derives the other three paths on the same origin unless a connector-specific redirect environment variable is set.
+
+Scopes are deliberately split by grant family: GSC uses `webmasters.readonly`; GA4 uses `analytics.readonly`; Ads uses `adwords`; and Merchant Center uses `content`. GBP requires Google's broad `business.manage` scope because Google's Business Profile APIs provide no narrower read-only scope. Blueprint uses it only to read the configured account/location's profile details, reviews, performance insights, posts, photos, and Q&A for reporting; Blueprint does not edit or publish Business Profile data. PageSpeed does not use user OAuth; configure `PAGESPEED_API_KEY` or it will run anonymously with low quota.
+
+Publish the Google OAuth consent screen before production use. If the OAuth app remains in Google "Testing" mode, refresh tokens commonly expire after 7 days and connectors will need reconnecting.
 
 ---
 

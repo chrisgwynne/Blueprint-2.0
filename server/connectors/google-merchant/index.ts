@@ -22,6 +22,7 @@
  * exchangeCode mirror.
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
+import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
 
 type Creds = Record<string, string | undefined>;
 
@@ -82,14 +83,15 @@ async function ensureFreshToken(credentials: Creds): Promise<Creds> {
   if (!credentials.refreshToken) {
     throw new Error('Google Merchant Center token expired and no refresh token available. Re-authorise the connector.');
   }
+  const { clientId, clientSecret } = readGoogleOAuthConfig();
   const res = await checkedFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: credentials.refreshToken,
-      client_id: process.env.GOOGLE_CLIENT_ID || '',
-      client_secret: process.env.GOOGLE_CLIENT_SECRET || '',
+      client_id: clientId || credentials.clientId || '',
+      client_secret: clientSecret || credentials.clientSecret || '',
     }),
   });
   const tokens = await res.json() as { access_token: string; expires_in?: number };
@@ -174,10 +176,10 @@ const connector = {
     'merchant_products_disapproved', 'merchant_feed_data_quality_issues', 'merchant_product_count_drop',
   ],
 
-  async healthCheck(credentials: Creds): Promise<{ ok: boolean; error?: string; details?: unknown }> {
+  async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
     try {
       if (!credentials?.accessToken) return { ok: false, error: 'Access token missing.' };
-      const accountId = credentials.accountId;
+      const accountId = (config.accountId as string | undefined) || credentials.accountId;
       if (!accountId) return { ok: false, error: 'accountId not configured.' };
 
       const fresh = await ensureFreshToken(credentials);
@@ -226,9 +228,11 @@ const connector = {
   },
 
   async getAuthUrl(state: string): Promise<string> {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
+    const { clientId } = readGoogleOAuthConfig();
     if (!clientId) throw new Error('GOOGLE_CLIENT_ID env var not set.');
-    const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI || 'http://localhost:4000/api/oauth/google-merchant/callback';
+    const { redirectUri: googleRedirect } = readGoogleOAuthConfig();
+    const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI ||
+      googleRedirect.replace('/api/oauth/google/callback', '/api/oauth/google-merchant/callback');
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: clientId,
@@ -242,9 +246,9 @@ const connector = {
   },
 
   async exchangeCode(code: string): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: string; scope?: string }> {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI || 'http://localhost:4000/api/oauth/google-merchant/callback';
+    const { clientId, clientSecret, redirectUri: googleRedirect } = readGoogleOAuthConfig();
+    const redirectUri = process.env.GOOGLE_MERCHANT_REDIRECT_URI ||
+      googleRedirect.replace('/api/oauth/google/callback', '/api/oauth/google-merchant/callback');
     if (!clientId || !clientSecret) {
       throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set.');
     }

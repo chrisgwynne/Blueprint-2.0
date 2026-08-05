@@ -137,58 +137,18 @@ function PageSpeedSetup({ businessId, existing, onSaved, onClose }: PageSpeedSet
         />
       </div>
       <div>
-        <label className="block text-xs text-blueprint-muted mb-1">API Key <span className="text-blueprint-muted/60">(optional — only needed if you haven't connected Google)</span></label>
+        <label className="block text-xs text-blueprint-muted mb-1">API Key <span className="text-blueprint-muted/60">(optional)</span></label>
         <input
           value={apiKey}
           onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
           className="bp-input"
           type="password"
-          placeholder="Leave blank to use Google OAuth token"
+          placeholder="Leave blank for anonymous best-effort"
         />
         <p className="text-[10px] text-blueprint-muted mt-1">
-          If you've connected Search Console or Analytics, PageSpeed will reuse the same OAuth token automatically — no API key required.
+          PageSpeed uses an API key only. Without one, Blueprint uses Google's limited anonymous quota.
         </p>
       </div>
-
-      {/* Direct OAuth path — for users who didn't connect GSC/GA4 but want
-          to give PageSpeed its own Google login (uses your project's quota
-          instead of the shared anonymous one). Save URL first so the OAuth
-          callback doesn't land on a config-less connector that can't sync. */}
-      {businessId && (
-        <button
-          type="button"
-          disabled={!url || saving}
-          onClick={async () => {
-            if (!url) {
-              addNotification({ type: 'warning', message: 'Enter a URL above first.' })
-              return
-            }
-            setSaving(true)
-            try {
-              if (existing) {
-                await updateConnector(existing.id, {
-                  config: { url, defaultDataType: 'performance' },
-                })
-              } else {
-                await addConnector({
-                  type: 'pagespeed',
-                  business_id: businessId,
-                  name: 'Google PageSpeed',
-                  config: { url, defaultDataType: 'performance' },
-                  credentials: {},
-                })
-              }
-              window.location.href = `/api/oauth/google?businessId=${encodeURIComponent(businessId)}&types=pagespeed`
-            } catch (err) {
-              addNotification({ type: 'error', message: (err as Error).message })
-              setSaving(false)
-            }
-          }}
-          className="bp-btn bp-btn-secondary text-xs w-full justify-center"
-        >
-          <ExternalLink size={12} /> Connect with Google (recommended)
-        </button>
-      )}
 
       <button
         onClick={handleTest}
@@ -380,6 +340,82 @@ function GA4Setup({ businessId, existing, googleConnected, onSaved, onClose }: G
 // GA4Setup this doesn't check a shared googleConnected flag: `existing` only
 // becomes defined once the dedicated /api/oauth/google-merchant round trip
 // has already created the connector row.
+
+interface GoogleAdsSetupProps {
+  businessId: string | undefined
+  existing: Connector | undefined
+  onSaved: (connector: Connector) => void
+  onClose: () => void
+}
+
+function GoogleAdsSetup({ businessId, existing, onSaved, onClose }: GoogleAdsSetupProps) {
+  const addNotification = useStore((s) => s.addNotification)
+  const [customerId, setCustomerId] = useState<string>((existing?.config?.customerId as string) || '')
+  const [managerAccountId, setManagerAccountId] = useState<string>((existing?.config?.managerAccountId as string) || '')
+  const [saving, setSaving] = useState(false)
+
+  const cleanCustomerId = customerId.replace(/-/g, '').trim()
+  const cleanManagerId = managerAccountId.replace(/-/g, '').trim()
+  const authUrl = `/api/oauth/google-ads?businessId=${encodeURIComponent(businessId ?? '')}&customerId=${encodeURIComponent(cleanCustomerId)}${cleanManagerId ? `&managerAccountId=${encodeURIComponent(cleanManagerId)}` : ''}`
+
+  async function handleSave() {
+    if (!existing || !cleanCustomerId) return
+    setSaving(true)
+    try {
+      const config = { customerId: cleanCustomerId, ...(cleanManagerId ? { managerAccountId: cleanManagerId } : {}) }
+      const updated = await updateConnector(existing.id, { config })
+      onSaved(updated as Connector)
+      addNotification({ type: 'success', message: 'Google Ads connector updated' })
+      onClose()
+    } catch (err) {
+      addNotification({ type: 'error', message: (err as Error).message })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-blueprint-muted">
+        Google Ads requires a customer ID before OAuth. Manager account ID is only needed for MCC access.
+      </p>
+      <div>
+        <label className="block text-xs text-blueprint-muted mb-1">Customer ID</label>
+        <input
+          value={customerId}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCustomerId(e.target.value)}
+          className="bp-input"
+          placeholder="1234567890"
+        />
+      </div>
+      <div>
+        <label className="block text-xs text-blueprint-muted mb-1">Manager Account ID <span className="text-blueprint-muted/60">(optional)</span></label>
+        <input
+          value={managerAccountId}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setManagerAccountId(e.target.value)}
+          className="bp-input"
+          placeholder="0987654321"
+        />
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">Cancel</button>
+        {existing && (
+          <button onClick={handleSave} disabled={saving || !cleanCustomerId} className="bp-btn bp-btn-secondary text-xs flex-1 justify-center">
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        )}
+        <a
+          href={cleanCustomerId ? authUrl : undefined}
+          aria-disabled={!cleanCustomerId}
+          className={clsx('bp-btn bp-btn-primary text-xs flex-1 justify-center', !cleanCustomerId && 'opacity-50 pointer-events-none')}
+          style={{ textDecoration: 'none' }}
+        >
+          <ExternalLink size={11} /> {existing ? 'Reconnect' : 'Connect'}
+        </a>
+      </div>
+    </div>
+  )
+}
 
 interface MerchantSetupProps {
   businessId: string | undefined
@@ -1239,6 +1275,9 @@ function AddConnectorModal({ onClose, onSaved, businessId, connectors }: AddConn
     if (selectedType === 'google-merchant') {
       return <MerchantSetup businessId={businessId} existing={existingByType['google-merchant']} onSaved={onSaved} onClose={onClose} />
     }
+    if (selectedType === 'google-ads') {
+      return <GoogleAdsSetup businessId={businessId} existing={existingByType['google-ads']} onSaved={onSaved} onClose={onClose} />
+    }
     if (selectedType === 'gbp') {
       return <GBPSetup businessId={businessId} existing={existingByType['gbp']} onSaved={onSaved} onClose={onClose} />
     }
@@ -1504,8 +1543,8 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
     if (!currentBusiness?.id) return
     setRevoking(true)
     try {
-      await revokeGoogleAuth(currentBusiness.id)
-      addNotification({ type: 'success', message: 'Google access revoked — GSC and GA4 disconnected' })
+      await revokeGoogleAuth(currentBusiness.id, connector.type)
+      addNotification({ type: 'success', message: 'Google access revoked for this connector' })
       onClose()
     } catch (err) {
       addNotification({ type: 'error', message: (err as Error).message })
@@ -1514,7 +1553,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
     }
   }
 
-  const isGoogle = ['gsc', 'ga4'].includes(connector.type)
+  const isGoogle = ['gsc', 'ga4', 'gbp', 'google-ads', 'google-merchant'].includes(connector.type)
 
   return (
     <>
@@ -1610,6 +1649,14 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
                   onClose={() => setShowConfig(false)}
                 />
               )}
+              {connector.type === 'google-ads' && (
+                <GoogleAdsSetup
+                  businessId={connector.business_id}
+                  existing={connector}
+                  onSaved={(updated) => { setConnector(updated); onUpdate?.(updated); setShowConfig(false) }}
+                  onClose={() => setShowConfig(false)}
+                />
+              )}
               {connector.type === 'gbp' && (
                 <GBPSetup
                   businessId={connector.business_id}
@@ -1618,7 +1665,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
                   onClose={() => setShowConfig(false)}
                 />
               )}
-              {!['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'gbp'].includes(connector.type) && (
+              {!['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'google-ads', 'gbp'].includes(connector.type) && (
                 <p className="text-xs text-blueprint-muted">
                   This connector type doesn't have an inline editor yet. Delete and re-add it to change credentials.
                 </p>
@@ -1627,7 +1674,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
           ) : (
             // Show a one-click "Configure" button so users can fix missing
             // siteUrl / propertyId / etc. without re-creating the connector.
-            (['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'gbp'].includes(connector.type)) && (
+            (['gsc', 'ga4', 'pagespeed', 'shopify', 'google-merchant', 'google-ads', 'gbp'].includes(connector.type)) && (
               <button
                 onClick={() => setShowConfig(true)}
                 className="bp-btn bp-btn-secondary text-xs"
