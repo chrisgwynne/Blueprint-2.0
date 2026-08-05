@@ -1389,7 +1389,7 @@ export async function runAgent(
 
           const wrappedSearchBlock = wrapInContentBoundary(searchBlock, `search:${agentId}`);
 
-          const secondPassContent = await runLLM(providerId, model, {
+          const secondPassContent = await runLLM(actualProviderId, actualModel, {
             messages: [{
               role: 'user',
               content: userContext + `\n\n## Web Search Results\n\n${wrappedSearchBlock}\n\nNow produce your final analysis incorporating these search results.`,
@@ -1407,7 +1407,10 @@ export async function runAgent(
           }
         }
       } catch (searchErr) {
-        console.warn(`[agent-runner] Search phase failed for '${agentId}' (non-fatal):`, (searchErr as Error).message);
+        const message = isProviderErrorLike(searchErr)
+          ? safeErrorMessage(searchErr, actualProviderId)
+          : classifyProviderError(searchErr, actualProviderId).message;
+        console.warn(`[agent-runner] Search phase failed for '${agentId}' (non-fatal): ${message}`);
       }
     }
 

@@ -7,6 +7,23 @@ const llmCalls: string[] = [];
 let outcomes: Array<unknown> = [];
 let releaseCurrent: (() => void) | null = null;
 const originalFetch = globalThis.fetch;
+const originalSetTimeout = globalThis.setTimeout;
+
+async function captureRetryDelays<T>(fn: () => Promise<T>): Promise<{ result: T; delays: number[] }> {
+  const delays: number[] = [];
+  globalThis.setTimeout = mock(((handler: unknown, timeout?: number, ...args: unknown[]) => {
+    delays.push(Number(timeout ?? 0));
+    queueMicrotask(() => {
+      if (typeof handler === 'function') handler(...args);
+    });
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as unknown as typeof setTimeout) as unknown as typeof setTimeout;
+  try {
+    return { result: await fn(), delays };
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+}
 
 function installFetchMock() {
   globalThis.fetch = mock(async (_input: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -113,6 +130,7 @@ beforeEach(() => {
 afterEach(() => {
   releaseCurrent?.();
   globalThis.fetch = originalFetch;
+  globalThis.setTimeout = originalSetTimeout;
   db.prepare("DELETE FROM settings WHERE key IN ('llm_default_provider','llm_default_model','provider_credentials_google')").run();
   db.prepare("DELETE FROM businesses WHERE id IN ('biz_a','biz_b','biz_c')").run();
 });
@@ -123,12 +141,24 @@ describe('KB analyser resilience', () => {
     const { analyseKBForSignals, resetKBAnalysisStateForTests } = await import('./kb-analyser.js');
     resetKBAnalysisStateForTests();
 
-    const result = await analyseKBForSignals('biz_a', { force: true });
+    const { result } = await captureRetryDelays(() => analyseKBForSignals('biz_a', { force: true }));
 
     expect(llmCalls).toHaveLength(3);
     expect(result?.errors).toHaveLength(1);
     expect(result?.errors[0]).toContain('provider google http_429 retryable');
     expect(result?.skipped).toBeUndefined();
+  });
+
+  test('honours bounded provider Retry-After delays instead of collapsing seconds to test-speed sleeps', async () => {
+    outcomes = [providerError(429, 7000), successResponse()];
+    const { analyseKBForSignals, resetKBAnalysisStateForTests } = await import('./kb-analyser.js');
+    resetKBAnalysisStateForTests();
+
+    const { result, delays } = await captureRetryDelays(() => analyseKBForSignals('biz_a', { force: true }));
+
+    expect(llmCalls).toHaveLength(2);
+    expect(result?.errors).toEqual([]);
+    expect(delays).toEqual([7000]);
   });
 
   test('non-retryable failures fail once', async () => {

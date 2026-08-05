@@ -53,7 +53,8 @@ const MIN_INTERVAL_MS = 2 * 60 * 1000;
 const lastRunAt = new Map<string, number>();
 const inFlight = new Map<string, Promise<AnalysisResult | null>>();
 const MAX_LLM_ATTEMPTS = 3;
-const BASE_BACKOFF_MS = 25;
+const BASE_BACKOFF_MS = 1_000;
+const MAX_RETRY_DELAY_MS = 60_000;
 
 interface AnalysisResult {
   signals: number;
@@ -251,8 +252,8 @@ async function runLLMWithBoundedRetry(
       const classified = classifyProviderError(err, providerId);
       if (!classified.retryable || attempt >= MAX_LLM_ATTEMPTS) break;
       const delayMs = classified.retryAfterMs != null
-        ? Math.min(classified.retryAfterMs, 250)
-        : Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), 250);
+        ? Math.min(classified.retryAfterMs, MAX_RETRY_DELAY_MS)
+        : Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
