@@ -8,7 +8,7 @@
  *   - mybusinessbusinessinformation (v1) — list/get locations
  *   - mybusiness (v4 legacy)             — reviews, posts, photos
  *   - businessprofileperformance (v1)    — performance metrics
- *   - mybusinessqanda (v1)               — Q&A
+ *   - Business Profile Q&A is unsupported (API discontinued 2025-11-03)
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
 import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
@@ -19,7 +19,6 @@ const ACCOUNT_MGMT  = 'https://mybusinessaccountmanagement.googleapis.com/v1';
 const BUSINESS_INFO = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 const LEGACY        = 'https://mybusiness.googleapis.com/v4';
 const PERFORMANCE   = 'https://businessprofileperformance.googleapis.com/v1';
-const QANDA         = 'https://mybusinessqanda.googleapis.com/v1';
 const TOKEN_URL     = 'https://oauth2.googleapis.com/token';
 const AUTH_BASE     = 'https://accounts.google.com/o/oauth2/v2/auth';
 const SCOPE         = 'https://www.googleapis.com/auth/business.manage';
@@ -31,7 +30,6 @@ type ProviderName =
   | 'legacy-posts'
   | 'legacy-media'
   | 'performance'
-  | 'qanda'
   | 'oauth-token';
 
 type ProviderErrorLike = {
@@ -146,7 +144,7 @@ const connector = {
   signalTypes: [
     'gbp_rating_drop', 'gbp_negative_review', 'gbp_review_unanswered',
     'gbp_views_drop', 'gbp_calls_drop', 'gbp_search_drop',
-    'gbp_no_recent_posts', 'gbp_unanswered_questions',
+    'gbp_no_recent_posts',
   ],
 
   async healthCheck(credentials: Creds, config: Record<string, unknown> = {}): Promise<{ ok: boolean; error?: string; details?: unknown }> {
@@ -220,7 +218,12 @@ const connector = {
     // Failed sections are logged and reported in `partial_failures` so the
     // sync layer and dashboard can tell "no reviews" apart from "reviews
     // fetch failed".
-    const partialFailures: Array<{ section: string; error: string }> = [];
+    // Q&A has no supported provider endpoint. Keep an explicit capability
+    // marker, but never synthesize data or attempt the discontinued API.
+    const partialFailures: Array<{ section: string; error: string }> = [{
+      section: 'qa',
+      error: 'GBP provider unavailable (provider=qanda status=unsupported)',
+    }];
     const fallback = <T>(section: string, provider: ProviderName, value: T) => (err: unknown): T => {
       const message = providerError(provider, err).message;
       partialFailures.push({ section, error: message });
@@ -228,7 +231,7 @@ const connector = {
       return value;
     };
 
-    const [location, reviews, insights, posts, photos, qa] = await Promise.all([
+    const [location, reviews, insights, posts, photos] = await Promise.all([
       // Location details
       gbpFetch(
         `${BUSINESS_INFO}/locations/${cleanLocId}?readMask=${encodeURIComponent('name,title,phoneNumbers,categories,storefrontAddress,websiteUri,regularHours,openInfo,profile,metadata')}`,
@@ -246,7 +249,7 @@ const connector = {
       // Performance API v1 replaces the removed v4 reportInsights endpoint.
       (async () => {
         const endDate = new Date();
-        const startDate = new Date(endDate.getTime() - 28 * 86400000);
+        const startDate = new Date(endDate.getTime() - 27 * 86400000);
         try {
           const query = new URLSearchParams();
           for (const metric of [
@@ -287,20 +290,12 @@ const connector = {
         fresh,
         'legacy-media',
       ).catch(fallback('photos', 'legacy-media', { mediaItems: [] })),
-
-      // Q&A
-      gbpFetch(
-        `${QANDA}/locations/${cleanLocId}/questions?pageSize=10&answersPerQuestion=5`,
-        fresh,
-        'qanda',
-      ).catch(fallback('qa', 'qanda', { questions: [] })),
     ]);
 
     const reviewsData = reviews as Record<string, unknown>;
     const insightsData = insights as Record<string, unknown>;
     const postsData = posts as Record<string, unknown>;
     const photosData = photos as Record<string, unknown>;
-    const qaData = qa as Record<string, unknown>;
 
     return {
       location,
@@ -308,7 +303,6 @@ const connector = {
       insights: insightsData ?? { locationMetrics: [] },
       posts: postsData?.localPosts ?? [],
       photos: photosData?.mediaItems ?? [],
-      qa: qaData?.questions ?? [],
       partial_failures: partialFailures,
       fetchedAt: new Date().toISOString(),
     };
@@ -317,11 +311,13 @@ const connector = {
   extractMetrics(data: unknown, _runAt?: string): Array<{ name: string; value: number; data: unknown }> {
     const metrics: Array<{ name: string; value: number; data: unknown }> = [];
     const d = data as Record<string, unknown> | null;
+    const partialFailures = (d?.partial_failures ?? []) as Array<{ section?: unknown }>;
+    const performanceUnavailable = d?.insights == null || partialFailures.some(failure => failure.section === 'insights');
     const reviews = (d?.reviews ?? { reviews: [], averageRating: 0, totalReviewCount: 0 }) as Record<string, unknown>;
     const reviewList = (reviews.reviews ?? []) as Array<Record<string, unknown>>;
 
-    // Preserve the existing metric schema while accepting both historical
-    // reportInsights payloads and current Performance API time series.
+    // Accept historical reportInsights payloads and current Performance API
+    // time series for metrics that still have documented equivalents.
     const getPerformanceTotal = (metricIds: string[]): number => {
       const insights = d?.insights as Record<string, unknown> | undefined;
       const groups = insights?.multiDailyMetricTimeSeries as Array<Record<string, unknown>> | undefined;
@@ -379,12 +375,6 @@ const connector = {
       ? Math.floor((Date.now() - new Date(sortedLive[0]!.createTime as string).getTime()) / 86400000)
       : 999;
 
-    // Unanswered Q&A
-    const qa = (d?.qa ?? []) as Array<Record<string, unknown>>;
-    const unansweredQA = qa.filter(q => !q.topAnswers || (q.topAnswers as unknown[]).length === 0).length;
-
-    const queriesDirect   = getInsightTotal('QUERIES_DIRECT');
-    const queriesIndirect = getInsightTotal('QUERIES_INDIRECT');
     const viewsMaps       = getInsightTotal('VIEWS_MAPS');
     const viewsSearch     = getInsightTotal('VIEWS_SEARCH');
 
@@ -397,20 +387,14 @@ const connector = {
       { name: 'gbp.reviews_3star',      value: stars.THREE,                                data: null },
       { name: 'gbp.reviews_4star',      value: stars.FOUR,                                 data: null },
       { name: 'gbp.reviews_5star',      value: stars.FIVE,                                 data: null },
-      { name: 'gbp.queries_direct',     value: queriesDirect,                              data: null },
-      { name: 'gbp.queries_indirect',   value: queriesIndirect,                            data: null },
-      { name: 'gbp.queries_total',      value: queriesDirect + queriesIndirect,            data: null },
       { name: 'gbp.views_maps',         value: viewsMaps,                                  data: null },
       { name: 'gbp.views_search',       value: viewsSearch,                                data: null },
       { name: 'gbp.views_total',        value: viewsMaps + viewsSearch,                    data: null },
       { name: 'gbp.actions_website',    value: getInsightTotal('ACTIONS_WEBSITE'),         data: null },
       { name: 'gbp.actions_phone',      value: getInsightTotal('ACTIONS_PHONE'),           data: null },
       { name: 'gbp.actions_directions', value: getInsightTotal('ACTIONS_DRIVING_DIRECTIONS'), data: null },
-      { name: 'gbp.photo_views',        value: getInsightTotal('PHOTOS_VIEWS_MERCHANT'),   data: null },
-      { name: 'gbp.photo_count',        value: getInsightTotal('PHOTOS_COUNT_MERCHANT'),   data: null },
       { name: 'gbp.posts_live',         value: livePosts.length,                           data: null },
       { name: 'gbp.days_since_post',    value: daysSincePost,                              data: null },
-      { name: 'gbp.unanswered_qa',      value: unansweredQA,                               data: null },
     );
 
     // Rich data
@@ -420,10 +404,18 @@ const connector = {
       { name: 'gbp.reviews_data',  value: reviewList.length,          data: reviewList },
       { name: 'gbp.posts_data',    value: posts.length,               data: posts },
       { name: 'gbp.photos_data',   value: photosArr?.length ?? 0,     data: photosArr ?? [] },
-      { name: 'gbp.qa_data',       value: qa.length,                  data: qa },
     );
 
-    return metrics;
+    if (!performanceUnavailable) return metrics;
+    const performanceMetricNames = new Set([
+      'gbp.views_maps',
+      'gbp.views_search',
+      'gbp.views_total',
+      'gbp.actions_website',
+      'gbp.actions_phone',
+      'gbp.actions_directions',
+    ]);
+    return metrics.filter(metric => !performanceMetricNames.has(metric.name));
   },
 
   async getAuthUrl(state: string): Promise<string> {
