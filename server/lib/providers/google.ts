@@ -1,4 +1,5 @@
 import type { CompleteOptions, CompleteResult, ProviderCredentials } from './types.js';
+import { ProviderHttpError } from '../provider-errors.js';
 
 const DEFAULT_API_URL = 'https://generativelanguage.googleapis.com/v1beta';
 
@@ -52,8 +53,12 @@ export async function complete({ apiKey, baseUrl, model, messages, system, tempe
   });
 
   if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`Google API error ${response.status}: ${err.substring(0, 300)}`);
+    await response.text().catch(() => '');
+    const retryAfterSec = Number(response.headers.get('retry-after'));
+    const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+      ? Math.min(retryAfterSec, 60) * 1000
+      : undefined;
+    throw new ProviderHttpError('google', response.status, response.status === 429 || response.status === 503 || response.status >= 500, retryAfterMs);
   }
 
   const data = await response.json() as {

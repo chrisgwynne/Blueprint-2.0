@@ -29,6 +29,7 @@ import { logIntelligenceEvent } from '../lib/intelligence-events.js';
 import { createTask } from '../tasks/task-queue.js';
 import crypto from 'node:crypto';
 import type { KBEngine } from './kb-engine.js';
+import { classifyProviderError, safeErrorMessage } from '../lib/provider-errors.js';
 
 // Files that are boilerplate or noise — never worth sending to the LLM.
 const SKIP_PATHS = new Set(['WIKI.md', 'index.md', 'log.md', 'hot.md']);
@@ -50,6 +51,9 @@ const MIN_CONFIDENCE = 0.65;
 // than once every N minutes regardless of writes.
 const MIN_INTERVAL_MS = 2 * 60 * 1000;
 const lastRunAt = new Map<string, number>();
+const inFlight = new Map<string, Promise<AnalysisResult | null>>();
+const MAX_LLM_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = 25;
 
 interface AnalysisResult {
   signals: number;
@@ -122,6 +126,22 @@ export async function analyseKBForSignals(
   opts: { hours?: number; force?: boolean } = {}
 ): Promise<AnalysisResult | null> {
   if (!businessId) return null;
+  const current = inFlight.get(businessId);
+  if (current) return current;
+
+  const run = analyseKBForSignalsInner(businessId, opts);
+  inFlight.set(businessId, run);
+  try {
+    return await run;
+  } finally {
+    if (inFlight.get(businessId) === run) inFlight.delete(businessId);
+  }
+}
+
+async function analyseKBForSignalsInner(
+  businessId: string,
+  opts: { hours?: number; force?: boolean } = {}
+): Promise<AnalysisResult | null> {
   const { hours = 48, force = false } = opts;
 
   // Rate limit: don't analyse the same business too frequently even if
@@ -182,7 +202,7 @@ export async function analyseKBForSignals(
   let analysis: LLMAnalysis | null = null;
   try {
     const { providerId, model } = resolveProfileLLM({});
-    const response = await runLLM(providerId, model, {
+    const response = await runLLMWithBoundedRetry(providerId, model, {
       system: 'Return only valid JSON. Only surface genuinely actionable items — no routine filler.',
       messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
@@ -190,8 +210,9 @@ export async function analyseKBForSignals(
     });
     analysis = extractJSON(response?.content);
   } catch (err) {
-    console.warn(`[kb-analyser] LLM call failed for ${business.slug}:`, (err as Error).message);
-    return { signals: 0, tasks: 0, gaps: 0, insights: 0, contradictions: 0, errors: [(err as Error).message] };
+    const message = safeErrorMessage(err, 'provider');
+    console.warn(`[kb-analyser] LLM call failed for ${business.slug}:`, message);
+    return { signals: 0, tasks: 0, gaps: 0, insights: 0, contradictions: 0, errors: [message] };
   }
   if (!analysis) {
     return { signals: 0, tasks: 0, gaps: 0, insights: 0, contradictions: 0, errors: ['could_not_parse_llm_output'] };
@@ -214,6 +235,46 @@ export async function analyseKBForSignals(
   } catch {}
 
   return result;
+}
+
+async function runLLMWithBoundedRetry(
+  providerId: string,
+  model: string,
+  options: Parameters<typeof runLLM>[2],
+): Promise<Awaited<ReturnType<typeof runLLM>>> {
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= MAX_LLM_ATTEMPTS; attempt++) {
+    try {
+      return await runLLM(providerId, model, options);
+    } catch (err) {
+      lastErr = err;
+      const classified = classifyProviderError(err, providerId);
+      if (!classified.retryable || attempt >= MAX_LLM_ATTEMPTS) break;
+      const delayMs = classified.retryAfterMs != null
+        ? Math.min(classified.retryAfterMs, 250)
+        : Math.min(BASE_BACKOFF_MS * 2 ** (attempt - 1), 250);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+export async function analyseKBForAllBusinesses(
+  businessIds: string[],
+  opts: { hours?: number; force?: boolean } = {},
+): Promise<Array<{ businessId: string; result: AnalysisResult | null }>> {
+  const results: Array<{ businessId: string; result: AnalysisResult | null }> = [];
+  for (const businessId of businessIds) {
+    try {
+      results.push({ businessId, result: await analyseKBForSignals(businessId, opts) });
+    } catch (err) {
+      results.push({
+        businessId,
+        result: { signals: 0, tasks: 0, gaps: 0, insights: 0, contradictions: 0, errors: [safeErrorMessage(err, 'provider')] },
+      });
+    }
+  }
+  return results;
 }
 
 // ─── Prompt + LLM output handling ─────────────────────────────────────────────
@@ -621,7 +682,7 @@ export function scheduleKBAnalysis(businessId: string): void {
   const timer = setTimeout(() => {
     pendingTimers.delete(businessId);
     analyseKBForSignals(businessId).catch(err => {
-      console.warn(`[kb-analyser] Scheduled analysis failed for ${businessId}:`, (err as Error).message);
+      console.warn(`[kb-analyser] Scheduled analysis failed for ${businessId}:`, safeErrorMessage(err, 'provider'));
     });
   }, DEBOUNCE_MS);
 
@@ -644,4 +705,10 @@ export function cancelScheduledAnalysis(businessId: string | null = null): void 
   }
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
+}
+
+export function resetKBAnalysisStateForTests(): void {
+  cancelScheduledAnalysis();
+  lastRunAt.clear();
+  inFlight.clear();
 }

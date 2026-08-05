@@ -15,6 +15,7 @@ import * as customProvider from './providers/custom.js';
 import * as claudeCliProvider from './providers/claude-cli.js';
 import * as minimaxProvider from './providers/minimax.js';
 import type { ProviderAdapter, ProviderCredentials } from './providers/types.js';
+import { safeErrorMessage } from './provider-errors.js';
 
 // ─── Provider Catalog ─────────────────────────────────────────────────────────
 
@@ -177,10 +178,7 @@ const PROVIDER_CAPABILITIES: Record<string, {
 };
 
 function safeDiagnostic(err: unknown): string {
-  return String((err as Error)?.message ?? err ?? 'Unknown provider preflight failure.')
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
-    .replace(/sk-[A-Za-z0-9._-]+/gi, 'sk-[redacted]')
-    .slice(0, 500);
+  return safeErrorMessage(err, 'provider').slice(0, 500);
 }
 
 export async function runLLM(providerId: string, model: string, { messages, system, temperature, max_tokens }: RunLLMOptions): Promise<RunLLMResult> {

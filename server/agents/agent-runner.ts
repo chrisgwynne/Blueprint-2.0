@@ -17,6 +17,7 @@ import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 import { detectAnomalousOutput } from '../lib/security-monitor.js';
 import { SecurityError } from '../lib/outbound-allowlist.js';
 import { checkRunCancellation, markRunCancelled, recordProviderPreflight, recordRunEvent, updateRunHeartbeat } from '../trust/trust-engine.js';
+import { classifyProviderError, isProviderErrorLike, safeErrorMessage } from '../lib/provider-errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -1319,7 +1320,7 @@ export async function runAgent(
         max_tokens,
       }) as LLMResult;
     } catch (primaryErr) {
-      console.warn(`[agent-runner] Primary provider '${providerId}' failed: ${(primaryErr as Error).message}`);
+      console.warn(`[agent-runner] Primary provider '${providerId}' failed: ${safeErrorMessage(primaryErr, providerId)}`);
       const fallback = getFallbackLLM();
       if (fallback) {
         const { providerId: fbPid, model: fbModel } = resolveProfileLLM({
@@ -1816,10 +1817,14 @@ ${signalsDetected} signal(s) reviewed.
     return { runId, tasksProposed: createdTasks.length, signalsDetected, skipped: false, costUsd };
 
   } catch (err) {
+    const providerLike = isProviderErrorLike(err);
+    const classified = providerLike ? classifyProviderError(err, 'provider') : null;
+    const storedError = providerLike ? classified!.message : safeErrorMessage(err, 'runtime');
+    const terminalReason = providerLike ? classified!.terminalReason : 'runtime_error';
     db.prepare(`
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?
       WHERE id = ?
-    `).run((err as Error).message, runId);
+    `).run(storedError, terminalReason, runId);
 
     // Self-healing: diagnose, search for solution, create GitHub issue + draft PR
     import('./self-healer.js')
@@ -1829,7 +1834,7 @@ ${signalsDetected} signal(s) reviewed.
 
     try {
       const { pushDashboardEvent } = await import('../lib/sse-bus.js');
-      pushDashboardEvent(businessId, 'agent_run_failed', { agentId, runId, error: (err as Error).message });
+      pushDashboardEvent(businessId, 'agent_run_failed', { agentId, runId, error: storedError });
     } catch {}
 
     // Update agent stats even on failure
@@ -1849,9 +1854,9 @@ ${signalsDetected} signal(s) reviewed.
       timestamp: startedAt,
       trigger,
       status: 'failed',
-      error: (err as Error).message,
+      error: storedError,
     });
-    console.error(`[agent-runner] Agent '${agentId}' run failed:`, err);
-    throw err;
+    console.error(`[agent-runner] Agent '${agentId}' run failed: ${storedError}`);
+    throw new Error(storedError);
   }
 }

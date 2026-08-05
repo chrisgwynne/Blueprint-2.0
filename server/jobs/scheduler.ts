@@ -660,20 +660,22 @@ export function startScheduler(): void {
   scheduleWithLock('0 4 * * 0', async () => {
     console.log('[scheduler] Running weekly KB analysis pass...');
     try {
-      const { analyseKBForSignals } = await import('../kb/kb-analyser.js') as any;
+      const { analyseKBForAllBusinesses } = await import('../kb/kb-analyser.js') as any;
       const businesses = db.prepare('SELECT id, slug FROM businesses').all() as any[];
-      for (const business of businesses) {
+      const slugById = new Map(businesses.map((b) => [b.id, b.slug]));
+      const results = await analyseKBForAllBusinesses(businesses.map((b) => b.id), { hours: 168, force: true });
+      for (const { businessId, result: r } of results) {
+        const slug = slugById.get(businessId) ?? businessId;
         try {
-          const r = await analyseKBForSignals(business.id, { hours: 168, force: true });
           if (r && !r.skipped) {
             console.log(
-              `[scheduler] KB analysis ${business.slug}: ` +
+              `[scheduler] KB analysis ${slug}: ` +
               `${r.signals} signals, ${r.tasks} tasks, ${r.gaps} gaps, ` +
               `${r.insights} insights, ${r.contradictions} contradictions`
             );
           }
         } catch (bizErr: any) {
-          console.warn(`[scheduler] KB analysis failed for ${business.slug}:`, bizErr.message);
+          console.warn(`[scheduler] KB analysis failed for ${slug}:`, bizErr.message);
         }
       }
     } catch (err) {
