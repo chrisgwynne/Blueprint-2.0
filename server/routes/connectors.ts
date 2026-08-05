@@ -322,15 +322,22 @@ router.delete('/:id', (req: Request, res: Response) => {
     const existing = db.prepare('SELECT * FROM connectors WHERE id = ?').get(id) as Connector | undefined;
     if (!existing) return res.status(404).json({ error: 'Connector not found.' });
 
+    const before = safeRow(existing);
+
     db.transaction(() => {
       db.prepare('DELETE FROM connector_syncs WHERE connector_id = ?').run(id);
-      db.prepare('DELETE FROM metrics WHERE connector_id = ?').run(id);
-      db.prepare('DELETE FROM signals WHERE connector_id = ?').run(id);
-      db.prepare('DELETE FROM connectors WHERE id = ?').run(id);
+      db.prepare('DELETE FROM metrics WHERE connector_id = ? AND business_id = ?').run(id, existing.business_id);
+      // Signals can have durable tasks attached. Preserve that history while
+      // severing the connector FK instead of cascading deletion into tasks.
+      db.prepare('UPDATE signals SET connector_id = NULL WHERE connector_id = ? AND business_id = ?').run(id, existing.business_id);
+      db.prepare('DELETE FROM connector_confidence WHERE connector_id = ? AND business_id = ?').run(id, existing.business_id);
+      db.prepare('DELETE FROM connectors WHERE id = ? AND business_id = ?').run(id, existing.business_id);
+      audit(existing.business_id, 'connector', id, 'delete', (req.session as any).userId, before, null);
     })();
-    audit(existing.business_id, 'connector', id, 'delete', (req.session as any).userId, safeRow(existing), null);
 
-    return res.json({ ok: true });
+    // Explicitly distinguish authorised local forgetting from provider-side
+    // OAuth revocation, which is handled by the separate /api/oauth route.
+    return res.json({ ok: true, localDeleted: true });
   } catch (err) {
     console.error('[connectors] Delete error:', err);
     return res.status(500).json({ error: 'Failed to delete connector.' });
