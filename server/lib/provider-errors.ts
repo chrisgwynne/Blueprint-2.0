@@ -32,6 +32,7 @@ export class ProviderHttpError extends Error {
 function inferStatus(message: string): number | undefined {
   const explicit = message.match(/\bhttp[_\s-]?(\d{3})\b/i)?.[1]
     ?? message.match(/\bapi error\s+(\d{3})\b/i)?.[1]
+    ?? message.match(/\bprovider error\s+(\d{3})\b/i)?.[1]
     ?? message.match(/\bstatus\s+(\d{3})\b/i)?.[1];
   const status = explicit ? Number(explicit) : NaN;
   return Number.isFinite(status) ? status : undefined;
@@ -45,6 +46,7 @@ function inferProvider(err: unknown, fallback = 'provider'): string {
   if (/anthropic|claude/i.test(msg)) return 'anthropic';
   if (/openai|gpt/i.test(msg)) return 'openai';
   if (/minimax/i.test(msg)) return 'minimax';
+  if (/\bcustom provider\b/i.test(msg)) return 'custom';
   return fallback;
 }
 
@@ -55,6 +57,7 @@ export function isProviderErrorLike(err: unknown): boolean {
     typeof (err as { provider?: unknown })?.provider === 'string' ||
     typeof (err as { status?: unknown })?.status === 'number' ||
     /\b(Google|Gemini|OpenAI|Anthropic|MiniMax)\b/i.test(msg) ||
+    /\bcustom provider error\s+\d{3}\b/i.test(msg) ||
     /\bapi error\s+\d{3}\b/i.test(msg) ||
     /\bhttp[_\s-]?\d{3}\b/i.test(msg)
   );

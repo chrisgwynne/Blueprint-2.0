@@ -1407,9 +1407,7 @@ export async function runAgent(
           }
         }
       } catch (searchErr) {
-        const message = isProviderErrorLike(searchErr)
-          ? safeErrorMessage(searchErr, actualProviderId)
-          : classifyProviderError(searchErr, actualProviderId).message;
+        const message = safeErrorMessage(searchErr, actualProviderId);
         console.warn(`[agent-runner] Search phase failed for '${agentId}' (non-fatal): ${message}`);
       }
     }
@@ -1830,9 +1828,11 @@ ${signalsDetected} signal(s) reviewed.
     `).run(storedError, terminalReason, runId);
 
     // Self-healing: diagnose, search for solution, create GitHub issue + draft PR
+    const selfHealError = new Error(storedError);
+    selfHealError.name = err instanceof Error ? err.name : 'Error';
     import('./self-healer.js')
       .then(m => (m as unknown as { healAgentError: (err: Error, ctx: Record<string, unknown>) => Promise<void> })
-        .healAgentError(err as Error, { agentId, runId, businessId, trigger }))
+        .healAgentError(selfHealError, { agentId, runId, businessId, trigger }))
       .catch(healErr => console.warn('[self-heal] Agent healing failed (non-fatal):', (healErr as Error).message));
 
     try {

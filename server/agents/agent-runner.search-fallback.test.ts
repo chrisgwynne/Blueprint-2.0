@@ -9,6 +9,7 @@ const AGENT_DIR = resolve(process.cwd(), 'server/agents', AGENT_ID);
 const PROFILE_PATH = resolve(AGENT_DIR, 'profile.yaml');
 const PROVIDER_BODY_MARKER = 'RAW_SEARCH_PHASE_PROVIDER_BODY_SHOULD_NOT_ESCAPE';
 const SECRET_MARKER = 'AIzaSySEARCH_PHASE_SECRET_SHOULD_NOT_ESCAPE';
+const SEARCH_ERROR_SECRET = 'sk-search-phase-secret-should-not-escape';
 
 const llmCalls: Array<{ providerId: string; model: string; content: string }> = [];
 const warnMessages: string[] = [];
@@ -16,11 +17,22 @@ const originalWarn = console.warn;
 const originalFetch = globalThis.fetch;
 
 mock.module('./tools/search.js', () => ({
-  agentSearch: mock(async () => ({
-    available: true,
-    answer: 'Search answer',
-    results: [{ title: 'Retry handling', url: 'https://example.test/retry', content: 'Retry safely.' }],
-  })),
+  agentSearch: mock(async (query: string) => {
+    if (query === 'non-provider warning') {
+      throw new Error(`Search connector failed with token ${SEARCH_ERROR_SECRET}`);
+    }
+    return {
+      available: true,
+      answer: 'Search answer',
+      results: [{ title: 'Retry handling', url: 'https://example.test/retry', content: 'Retry safely.' }],
+    };
+  }),
+}));
+
+mock.module('./agent-inbox.js', () => ({
+  deliverAgentBrief: mock(async () => undefined),
+  readInbox: mock(() => []),
+  markAllInboxAsRead: mock(() => undefined),
 }));
 
 mock.module('./self-healer.js', () => ({
@@ -114,9 +126,14 @@ beforeEach(() => {
     return new Response(JSON.stringify({
       choices: [{ message: { content: JSON.stringify({
         tasks: [],
-        reasoning: 'fallback needs current context',
+        reasoning: content.includes('non-provider search warning')
+          ? 'fallback needs search warning coverage'
+          : 'fallback needs current context',
         signals_detected: 0,
-        search_queries: [{ query: 'rate limit handling', depth: 'basic' }],
+        search_queries: [{
+          query: content.includes('non-provider search warning') ? 'non-provider warning' : 'rate limit handling',
+          depth: 'basic',
+        }],
       }) } }],
       usage: { prompt_tokens: 1, completion_tokens: 1 },
     }), { status: 200 });
@@ -141,5 +158,19 @@ describe('runAgent search pass after provider fallback', () => {
     ]);
     expect(warnMessages.join('\n')).not.toContain(PROVIDER_BODY_MARKER);
     expect(warnMessages.join('\n')).not.toContain(SECRET_MARKER);
+  });
+
+  test('preserves useful sanitized non-provider search failure warning text', async () => {
+    const { runAgent } = await import('./agent-runner.js');
+
+    await runAgent(AGENT_ID, BIZ, 'workflow', null, {
+      bypass_work_check: true,
+      extra_user_message: 'non-provider search warning',
+    });
+
+    const warnings = warnMessages.join('\n');
+    expect(warnings).toContain('Search connector failed');
+    expect(warnings).not.toContain(SEARCH_ERROR_SECRET);
+    expect(warnings).toContain('sk-[redacted]');
   });
 });
