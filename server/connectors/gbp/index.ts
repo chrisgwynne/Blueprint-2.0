@@ -6,7 +6,9 @@
  * APIs:
  *   - mybusinessaccountmanagement (v1)   — list accounts
  *   - mybusinessbusinessinformation (v1) — list/get locations
- *   - mybusiness (v4 legacy)             — reviews, insights, posts, photos, Q&A
+ *   - mybusiness (v4 legacy)             — reviews, posts, photos
+ *   - businessprofileperformance (v1)    — performance metrics
+ *   - mybusinessqanda (v1)               — Q&A
  */
 import { withRetry, checkedFetch } from '../../lib/rate-limiter.js';
 import { readGoogleOAuthConfig } from '../../lib/google-oauth-config.js';
@@ -16,9 +18,46 @@ type Creds = Record<string, string | undefined>;
 const ACCOUNT_MGMT  = 'https://mybusinessaccountmanagement.googleapis.com/v1';
 const BUSINESS_INFO = 'https://mybusinessbusinessinformation.googleapis.com/v1';
 const LEGACY        = 'https://mybusiness.googleapis.com/v4';
+const PERFORMANCE   = 'https://businessprofileperformance.googleapis.com/v1';
+const QANDA         = 'https://mybusinessqanda.googleapis.com/v1';
 const TOKEN_URL     = 'https://oauth2.googleapis.com/token';
 const AUTH_BASE     = 'https://accounts.google.com/o/oauth2/v2/auth';
 const SCOPE         = 'https://www.googleapis.com/auth/business.manage';
+
+type ProviderName =
+  | 'account-management'
+  | 'business-information'
+  | 'legacy-reviews'
+  | 'legacy-posts'
+  | 'legacy-media'
+  | 'performance'
+  | 'qanda'
+  | 'oauth-token';
+
+type ProviderErrorLike = {
+  status?: unknown;
+  statusCode?: unknown;
+  retryAfterMs?: unknown;
+};
+
+class GbpProviderError extends Error {
+  readonly status?: number;
+  readonly retryAfterMs?: number;
+
+  constructor(provider: ProviderName, cause: unknown) {
+    const source = (cause && typeof cause === 'object' ? cause : {}) as ProviderErrorLike;
+    const candidate = source.status ?? source.statusCode;
+    const status = typeof candidate === 'number' && Number.isInteger(candidate) ? candidate : undefined;
+    super(`GBP provider request failed (provider=${provider} status=${status ?? 'unknown'})`);
+    this.name = 'GbpProviderError';
+    this.status = status;
+    this.retryAfterMs = typeof source.retryAfterMs === 'number' ? source.retryAfterMs : undefined;
+  }
+}
+
+function providerError(provider: ProviderName, cause: unknown): GbpProviderError {
+  return cause instanceof GbpProviderError ? cause : new GbpProviderError(provider, cause);
+}
 
 async function ensureFreshToken(credentials: Creds): Promise<Creds> {
   if (!credentials.expiresAt || Date.now() + 60_000 < Number(credentials.expiresAt)) {
@@ -29,17 +68,22 @@ async function ensureFreshToken(credentials: Creds): Promise<Creds> {
   }
 
   const { clientId, clientSecret } = readGoogleOAuthConfig();
-  const res = await checkedFetch(TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: credentials.refreshToken,
-      client_id: clientId || credentials.clientId || '',
-      client_secret: clientSecret || credentials.clientSecret || '',
-    }),
-  });
-  const tokens = await res.json() as { access_token: string; expires_in?: number };
+  let tokens: { access_token: string; expires_in?: number };
+  try {
+    const res = await checkedFetch(TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: credentials.refreshToken,
+        client_id: clientId || credentials.clientId || '',
+        client_secret: clientSecret || credentials.clientSecret || '',
+      }),
+    });
+    tokens = await res.json() as { access_token: string; expires_in?: number };
+  } catch (err) {
+    throw providerError('oauth-token', err);
+  }
   return {
     ...credentials,
     accessToken: tokens.access_token,
@@ -54,12 +98,28 @@ function authHeaders(credentials: Creds): Record<string, string> {
   };
 }
 
-async function gbpFetch(url: string, credentials: Creds): Promise<Record<string, unknown>> {
-  const res = await withRetry(
-    () => checkedFetch(url, { headers: authHeaders(credentials) }),
-    { label: 'GBP fetch' }
-  );
-  return res.json() as Promise<Record<string, unknown>>;
+async function gbpRequest(
+  url: string,
+  credentials: Creds,
+  provider: ProviderName,
+  init: RequestInit = {},
+): Promise<Record<string, unknown>> {
+  try {
+    const res = await withRetry(
+      () => checkedFetch(url, {
+        ...init,
+        headers: { ...authHeaders(credentials), ...(init.headers ?? {}) },
+      }),
+      { label: `GBP ${provider}` },
+    );
+    return await res.json() as Record<string, unknown>;
+  } catch (err) {
+    throw providerError(provider, err);
+  }
+}
+
+function gbpFetch(url: string, credentials: Creds, provider: ProviderName): Promise<Record<string, unknown>> {
+  return gbpRequest(url, credentials, provider);
 }
 
 const connector = {
@@ -96,7 +156,7 @@ const connector = {
       const accountId = (config.accountId as string | undefined) || credentials.accountId;
       const locationId = (config.locationId as string | undefined) || credentials.locationId;
       if (!accountId || !locationId) return { ok: false, error: 'GBP accountId and locationId are not configured.' };
-      const data = await gbpFetch(`${ACCOUNT_MGMT}/accounts`, fresh);
+      const data = await gbpFetch(`${ACCOUNT_MGMT}/accounts`, fresh, 'account-management');
       const accounts = (data.accounts as Array<Record<string, unknown>>) || [];
       const cleanAccount = accountId.startsWith('accounts/') ? accountId : `accounts/${accountId}`;
       const cleanLocation = locationId.replace(/^locations\//, '');
@@ -124,7 +184,7 @@ const connector = {
    */
   async listAccounts(credentials: Creds): Promise<unknown[]> {
     const fresh = await ensureFreshToken(credentials);
-    const data = await gbpFetch(`${ACCOUNT_MGMT}/accounts`, fresh);
+    const data = await gbpFetch(`${ACCOUNT_MGMT}/accounts`, fresh, 'account-management');
     return (data.accounts as unknown[]) || [];
   },
 
@@ -136,7 +196,8 @@ const connector = {
     const readMask = 'name,title,storefrontAddress,websiteUri,openInfo';
     const data = await gbpFetch(
       `${BUSINESS_INFO}/${accountId}/locations?readMask=${encodeURIComponent(readMask)}`,
-      fresh
+      fresh,
+      'business-information',
     );
     return (data.locations as unknown[]) || [];
   },
@@ -153,7 +214,6 @@ const connector = {
     // Strip prefix if user passed full path
     const cleanLocId = String(locationId).replace(/^locations\//, '');
     const cleanAccId = String(accountId).startsWith('accounts/') ? accountId : `accounts/${accountId}`;
-    const fullLocationName = `${cleanAccId}/locations/${cleanLocId}`;
 
     // Run all reads in parallel — each catches its own errors so one failure
     // doesn't sink the whole sync (legacy API endpoints can be flaky).
@@ -161,10 +221,10 @@ const connector = {
     // sync layer and dashboard can tell "no reviews" apart from "reviews
     // fetch failed".
     const partialFailures: Array<{ section: string; error: string }> = [];
-    const fallback = <T>(section: string, value: T) => (err: unknown): T => {
-      const message = err instanceof Error ? err.message : String(err);
-      partialFailures.push({ section, error: message.substring(0, 300) });
-      console.warn(`[gbp] ${section} fetch failed for ${fullLocationName}: ${message.substring(0, 300)}`);
+    const fallback = <T>(section: string, provider: ProviderName, value: T) => (err: unknown): T => {
+      const message = providerError(provider, err).message;
+      partialFailures.push({ section, error: message });
+      console.warn(`[gbp] ${section} fetch failed: ${message}`);
       return value;
     };
 
@@ -172,69 +232,68 @@ const connector = {
       // Location details
       gbpFetch(
         `${BUSINESS_INFO}/locations/${cleanLocId}?readMask=${encodeURIComponent('name,title,phoneNumbers,categories,storefrontAddress,websiteUri,regularHours,openInfo,profile,metadata')}`,
-        fresh
-      ).catch(fallback('location', null)),
+        fresh,
+        'business-information',
+      ).catch(fallback('location', 'business-information', null)),
 
       // Reviews (legacy v4)
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/reviews?pageSize=50`,
-        fresh
-      ).catch(fallback('reviews', { reviews: [], averageRating: 0, totalReviewCount: 0 })),
+        fresh,
+        'legacy-reviews',
+      ).catch(fallback('reviews', 'legacy-reviews', { reviews: [], averageRating: 0, totalReviewCount: 0 })),
 
-      // Insights (legacy v4 reportInsights — POST)
+      // Performance API v1 replaces the removed v4 reportInsights endpoint.
       (async () => {
         const endDate = new Date();
         const startDate = new Date(endDate.getTime() - 28 * 86400000);
         try {
-          const res = await withRetry(
-            () => checkedFetch(`${LEGACY}/${cleanAccId}/locations:reportInsights`, {
-              method: 'POST',
-              headers: {
-                ...authHeaders(fresh),
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                locationNames: [fullLocationName],
-                basicRequest: {
-                  metricRequests: [
-                    'QUERIES_DIRECT', 'QUERIES_INDIRECT',
-                    'VIEWS_MAPS', 'VIEWS_SEARCH',
-                    'ACTIONS_WEBSITE', 'ACTIONS_PHONE', 'ACTIONS_DRIVING_DIRECTIONS',
-                    'PHOTOS_VIEWS_MERCHANT', 'PHOTOS_COUNT_MERCHANT',
-                    'LOCAL_POST_VIEWS_SEARCH',
-                  ].map(m => ({ metric: m })),
-                  timeRange: {
-                    startTime: startDate.toISOString(),
-                    endTime: endDate.toISOString(),
-                  },
-                },
-              }),
-            }),
-            { label: 'GBP insights' }
+          const query = new URLSearchParams();
+          for (const metric of [
+            'BUSINESS_IMPRESSIONS_DESKTOP_MAPS',
+            'BUSINESS_IMPRESSIONS_MOBILE_MAPS',
+            'BUSINESS_IMPRESSIONS_DESKTOP_SEARCH',
+            'BUSINESS_IMPRESSIONS_MOBILE_SEARCH',
+            'WEBSITE_CLICKS',
+            'CALL_CLICKS',
+            'BUSINESS_DIRECTION_REQUESTS',
+          ]) query.append('dailyMetrics', metric);
+          query.set('dailyRange.start_date.year', String(startDate.getUTCFullYear()));
+          query.set('dailyRange.start_date.month', String(startDate.getUTCMonth() + 1));
+          query.set('dailyRange.start_date.day', String(startDate.getUTCDate()));
+          query.set('dailyRange.end_date.year', String(endDate.getUTCFullYear()));
+          query.set('dailyRange.end_date.month', String(endDate.getUTCMonth() + 1));
+          query.set('dailyRange.end_date.day', String(endDate.getUTCDate()));
+          return await gbpFetch(
+            `${PERFORMANCE}/locations/${cleanLocId}:fetchMultiDailyMetricsTimeSeries?${query.toString()}`,
+            fresh,
+            'performance',
           );
-          return res.json() as Promise<Record<string, unknown>>;
         } catch (err) {
-          return fallback('insights', { locationMetrics: [] })(err);
+          return fallback('insights', 'performance', { multiDailyMetricTimeSeries: [] })(err);
         }
       })(),
 
       // Posts
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/localPosts?pageSize=20`,
-        fresh
-      ).catch(fallback('posts', { localPosts: [] })),
+        fresh,
+        'legacy-posts',
+      ).catch(fallback('posts', 'legacy-posts', { localPosts: [] })),
 
       // Photos / media
       gbpFetch(
         `${LEGACY}/${cleanAccId}/locations/${cleanLocId}/media?pageSize=50`,
-        fresh
-      ).catch(fallback('photos', { mediaItems: [] })),
+        fresh,
+        'legacy-media',
+      ).catch(fallback('photos', 'legacy-media', { mediaItems: [] })),
 
       // Q&A
       gbpFetch(
-        `${LEGACY}/locations/${cleanLocId}/questions?pageSize=20&answersPerQuestion=5`,
-        fresh
-      ).catch(fallback('qa', { questions: [] })),
+        `${QANDA}/locations/${cleanLocId}/questions?pageSize=10&answersPerQuestion=5`,
+        fresh,
+        'qanda',
+      ).catch(fallback('qa', 'qanda', { questions: [] })),
     ]);
 
     const reviewsData = reviews as Record<string, unknown>;
@@ -261,7 +320,27 @@ const connector = {
     const reviews = (d?.reviews ?? { reviews: [], averageRating: 0, totalReviewCount: 0 }) as Record<string, unknown>;
     const reviewList = (reviews.reviews ?? []) as Array<Record<string, unknown>>;
 
-    // Insight totals — drill into the response shape
+    // Preserve the existing metric schema while accepting both historical
+    // reportInsights payloads and current Performance API time series.
+    const getPerformanceTotal = (metricIds: string[]): number => {
+      const insights = d?.insights as Record<string, unknown> | undefined;
+      const groups = insights?.multiDailyMetricTimeSeries as Array<Record<string, unknown>> | undefined;
+      let total = 0;
+      for (const group of groups ?? []) {
+        const series = group.dailyMetricTimeSeries as Array<Record<string, unknown>> | undefined;
+        for (const metricSeries of series ?? []) {
+          if (!metricIds.includes(String(metricSeries.dailyMetric ?? ''))) continue;
+          const timeSeries = metricSeries.timeSeries as Record<string, unknown> | undefined;
+          const values = timeSeries?.datedValues as Array<Record<string, unknown>> | undefined;
+          for (const point of values ?? []) {
+            const value = Number(point.value ?? 0);
+            if (Number.isFinite(value)) total += value;
+          }
+        }
+      }
+      return total;
+    };
+
     const getInsightTotal = (metricId: string): number => {
       const insights = d?.insights as Record<string, unknown> | undefined;
       const locationMetrics = insights?.locationMetrics as Array<Record<string, unknown>> | undefined;
@@ -269,7 +348,16 @@ const connector = {
       const metricValues = loc?.metricValues as Array<Record<string, unknown>> | undefined;
       const m = metricValues?.find(v => v.metric === metricId);
       const totalValue = m?.totalValue as Record<string, unknown> | undefined;
-      return parseInt(String(totalValue?.value ?? 0), 10);
+      if (totalValue?.value !== undefined) return parseInt(String(totalValue.value), 10) || 0;
+
+      const modernMetrics: Record<string, string[]> = {
+        VIEWS_MAPS: ['BUSINESS_IMPRESSIONS_DESKTOP_MAPS', 'BUSINESS_IMPRESSIONS_MOBILE_MAPS'],
+        VIEWS_SEARCH: ['BUSINESS_IMPRESSIONS_DESKTOP_SEARCH', 'BUSINESS_IMPRESSIONS_MOBILE_SEARCH'],
+        ACTIONS_WEBSITE: ['WEBSITE_CLICKS'],
+        ACTIONS_PHONE: ['CALL_CLICKS'],
+        ACTIONS_DRIVING_DIRECTIONS: ['BUSINESS_DIRECTION_REQUESTS'],
+      };
+      return getPerformanceTotal(modernMetrics[metricId] ?? []);
     };
 
     // Star rating breakdown
@@ -365,18 +453,23 @@ const connector = {
     if (!clientId || !clientSecret) {
       throw new Error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set.');
     }
-    const res = await checkedFetch(TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-      }),
-    });
-    const tokens = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
+    let tokens: { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
+    try {
+      const res = await checkedFetch(TOKEN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+        }),
+      });
+      tokens = await res.json() as { access_token: string; refresh_token?: string; expires_in?: number; scope?: string };
+    } catch (err) {
+      throw providerError('oauth-token', err);
+    }
     return {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token || undefined,
