@@ -335,10 +335,14 @@ const connector = {
         for (const metricSeries of series ?? []) {
           const metricId = String(metricSeries.dailyMetric ?? '');
           if (!metricIds.includes(metricId)) continue;
-          matched.add(metricId);
           const timeSeries = metricSeries.timeSeries as Record<string, unknown> | undefined;
           const values = timeSeries?.datedValues as Array<Record<string, unknown>> | undefined;
-          for (const point of values ?? []) {
+          const points = Array.isArray(values)
+            ? values.filter((point): point is Record<string, unknown> => point != null && typeof point === 'object' && !Array.isArray(point))
+            : [];
+          if (points.length === 0) continue;
+          matched.add(metricId);
+          for (const point of points) {
             const value = Number(point.value ?? 0);
             if (Number.isFinite(value)) total += value;
           }

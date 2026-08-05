@@ -21,12 +21,13 @@ const { syncConnector } = await import('./scheduler.js');
 
 const BUSINESS_ID = 'biz_gbp_metric_persistence';
 const CONNECTOR_ID = 'connector_gbp_metric_persistence';
+let performanceDailyMetricTimeSeries: Array<Record<string, unknown>>;
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
-function seedConnector(): any {
+function seedConnector(connectorId = CONNECTOR_ID): any {
   const oauthClientIdFingerprint = crypto.createHash('sha256')
     .update(process.env.GOOGLE_CLIENT_ID!)
     .digest('base64url')
@@ -38,21 +39,21 @@ function seedConnector(): any {
     scope: 'https://www.googleapis.com/auth/business.manage',
     oauthClientIdFingerprint,
   };
-  db.prepare('INSERT INTO businesses (id, name, slug) VALUES (?, ?, ?)').run(BUSINESS_ID, 'GBP Persistence', 'gbp-persistence');
+  db.prepare('INSERT OR IGNORE INTO businesses (id, name, slug) VALUES (?, ?, ?)').run(BUSINESS_ID, 'GBP Persistence', 'gbp-persistence');
   db.prepare(`INSERT INTO connectors (id, business_id, type, name, status, credentials, config, created_at)
     VALUES (?, ?, 'gbp', 'GBP persistence', 'connected', ?, ?, CURRENT_TIMESTAMP)`)
-    .run(CONNECTOR_ID, BUSINESS_ID, encrypt(JSON.stringify(credentials)), JSON.stringify({ accountId: '123', locationId: 'locations/456' }));
-  return db.prepare('SELECT * FROM connectors WHERE id = ?').get(CONNECTOR_ID);
+    .run(connectorId, BUSINESS_ID, encrypt(JSON.stringify(credentials)), JSON.stringify({ accountId: '123', locationId: 'locations/456' }));
+  return db.prepare('SELECT * FROM connectors WHERE id = ?').get(connectorId);
 }
 
-function persistedMetrics(): Map<string, number | null> {
+function persistedMetrics(connectorId = CONNECTOR_ID): Map<string, number | null> {
   const rows = db.prepare(`SELECT metric_name, metric_value FROM metrics
-    WHERE connector_id = ? AND metric_name != 'gbp_sync'`).all(CONNECTOR_ID) as Array<{ metric_name: string; metric_value: number | null }>;
+    WHERE connector_id = ? AND metric_name != 'gbp_sync'`).all(connectorId) as Array<{ metric_name: string; metric_value: number | null }>;
   return new Map(rows.map(row => [row.metric_name, row.metric_value]));
 }
 
-function expectUnavailableAbsentAndObservedZerosPresent(): void {
-  const metrics = persistedMetrics();
+function expectUnavailableAbsentAndObservedZerosPresent(connectorId = CONNECTOR_ID): void {
+  const metrics = persistedMetrics(connectorId);
   expect(metrics.has('gbp.avg_rating')).toBe(false);
   expect(metrics.has('gbp.total_reviews')).toBe(false);
   expect(metrics.has('gbp.reviews_data')).toBe(false);
@@ -62,8 +63,16 @@ function expectUnavailableAbsentAndObservedZerosPresent(): void {
   expect(metrics.get('gbp.photos_data')).toBe(0);
 }
 
+function expectIncompletePerformanceRowsAbsent(connectorId: string): void {
+  const metrics = persistedMetrics(connectorId);
+  expect(metrics.has('gbp.actions_phone')).toBe(false);
+  expect(metrics.get('gbp.posts_live')).toBe(0);
+  expect(metrics.get('gbp.photos_data')).toBe(0);
+}
+
 beforeEach(() => {
   db.exec('BEGIN');
+  performanceDailyMetricTimeSeries = [{ dailyMetric: 'CALL_CLICKS', timeSeries: { datedValues: [{}] } }];
   console.warn = mock(() => undefined) as typeof console.warn;
   console.log = mock(() => undefined) as typeof console.log;
   globalThis.fetch = mock(async (input: string | URL | Request) => {
@@ -75,7 +84,7 @@ beforeEach(() => {
     if (url.includes('businessprofileperformance.googleapis.com')) {
       return jsonResponse({
         multiDailyMetricTimeSeries: [{
-          dailyMetricTimeSeries: [{ dailyMetric: 'CALL_CLICKS', timeSeries: { datedValues: [{}] } }],
+          dailyMetricTimeSeries: performanceDailyMetricTimeSeries,
         }],
       });
     }
@@ -109,5 +118,38 @@ describe('GBP metric persistence availability', () => {
     const result = await syncConnector(connector);
     expect(result.ok).toBe(true);
     expectUnavailableAbsentAndObservedZerosPresent();
+  });
+
+  test('manual sync inserts no rows for incomplete Performance metric series', async () => {
+    const incompleteSeries = [
+      { dailyMetric: 'CALL_CLICKS' },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: {} },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: { datedValues: [] } },
+    ];
+
+    for (const [index, metricSeries] of incompleteSeries.entries()) {
+      const connectorId = `${CONNECTOR_ID}_manual_incomplete_${index}`;
+      performanceDailyMetricTimeSeries = [metricSeries];
+      seedConnector(connectorId);
+      await runConnectorSync(connectorId);
+      expectIncompletePerformanceRowsAbsent(connectorId);
+    }
+  });
+
+  test('scheduled sync inserts no rows for incomplete Performance metric series', async () => {
+    const incompleteSeries = [
+      { dailyMetric: 'CALL_CLICKS' },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: {} },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: { datedValues: [] } },
+    ];
+
+    for (const [index, metricSeries] of incompleteSeries.entries()) {
+      const connectorId = `${CONNECTOR_ID}_scheduled_incomplete_${index}`;
+      performanceDailyMetricTimeSeries = [metricSeries];
+      const connector = seedConnector(connectorId);
+      const result = await syncConnector(connector);
+      expect(result.ok).toBe(true);
+      expectIncompletePerformanceRowsAbsent(connectorId);
+    }
   });
 });

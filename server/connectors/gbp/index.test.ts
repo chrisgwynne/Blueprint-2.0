@@ -106,6 +106,26 @@ describe('GBP optional API compatibility', () => {
     expect(metrics['gbp.actions_phone']).toBe(0);
   });
 
+  test('omits a Performance scalar when a matching series has no datapoints', () => {
+    const incompleteSeries = [
+      { dailyMetric: 'CALL_CLICKS' },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: {} },
+      { dailyMetric: 'CALL_CLICKS', timeSeries: { datedValues: [] } },
+    ];
+
+    for (const metricSeries of incompleteSeries) {
+      const metricNames = connector.extractMetrics({
+        insights: {
+          multiDailyMetricTimeSeries: [{
+            dailyMetricTimeSeries: [metricSeries],
+          }],
+        },
+      }).map(metric => metric.name);
+
+      expect(metricNames).not.toContain('gbp.actions_phone');
+    }
+  });
+
   test('omits a Performance scalar when its requested metric series is absent', () => {
     const metricNames = connector.extractMetrics({
       insights: {
