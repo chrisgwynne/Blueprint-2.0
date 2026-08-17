@@ -57,6 +57,12 @@ export interface ReasoningInput {
   sleep?: (ms: number) => Promise<void>;
   /** Injectable for tests — defaults to the real provider call. */
   runLLMFn?: typeof runLLM;
+  /**
+   * Pin the provider/model instead of resolving it from settings. Used by the
+   * hiring test suite so no provider credential is ever required or read.
+   */
+  provider?: string;
+  model?: string;
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -171,18 +177,22 @@ export async function reasonAboutHires(input: ReasoningInput): Promise<Reasoning
   const sleep = input.sleep ?? defaultSleep;
   const call = input.runLLMFn ?? runLLM;
 
-  let providerId = 'unknown';
-  let model = 'unknown';
-  try {
-    const resolved = resolveProfileLLM({}, { tier: 'triage' });
-    providerId = resolved.providerId;
-    model = resolved.model;
-  } catch (err) {
-    return {
-      status: 'failed', recommendations: [], provider: null, model: null, attempts: 0,
-      provider_status: 'unconfigured', provider_http_status: null, provider_retryable: false,
-      error: safeErrorMessage(err), cost_usd: 0, usage: null, raw_unparseable: false,
-    };
+  let providerId = input.provider ?? 'unknown';
+  let model = input.model ?? 'unknown';
+  if (!input.provider || !input.model) {
+    try {
+      const resolved = resolveProfileLLM({}, { tier: 'triage' });
+      providerId = input.provider ?? resolved.providerId;
+      model = input.model ?? resolved.model;
+    } catch (err) {
+      // No usable provider configuration is a terminal, non-retryable
+      // failure — and, per #47, produces no proposals.
+      return {
+        status: 'failed', recommendations: [], provider: null, model: null, attempts: 0,
+        provider_status: 'unconfigured', provider_http_status: null, provider_retryable: false,
+        error: safeErrorMessage(err), cost_usd: 0, usage: null, raw_unparseable: false,
+      };
+    }
   }
 
   const { system, user } = buildPrompt(input);
