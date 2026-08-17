@@ -117,6 +117,7 @@ export const runAgent = (id: string, body: unknown = {}) => post(`/agents/${id}/
 export const getAgentRuns = (id: string, params?: Params) => get(`/agents/${id}/runs`, params)
 export const getAgentRun = (id: string, runId: string) => get(`/agents/${id}/runs/${runId}`)
 export const updateAgent = (id: string, data: unknown) => patch(`/agents/${id}`, data)
+export const retireAgent = (id: string, body: { business_id?: string; reason?: string } = {}) => post(`/agents/${id}/retire`, body)
 export const getAgentProfile = (id: string) => get(`/agents/${id}/profile`)
 export const updateAgentFile = (id: string, filename: string, content: string) => request('PUT', `/agents/${id}/files/${encodeURIComponent(filename)}`, { content })
 export const patchAgentProfile = (id: string, data: unknown) => patch(`/agents/${id}/profile`, data)
