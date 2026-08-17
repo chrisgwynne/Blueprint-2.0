@@ -246,6 +246,14 @@ CREATE TABLE IF NOT EXISTS bap_agents (
   webhook_url TEXT,
   webhook_secret TEXT,
   webhook_events JSON DEFAULT '[]',
+  -- Set when webhook-reconciliation.ts (or a live delivery attempt) finds
+  -- webhook_url no longer passes assertSafeWebhookUrl() (#40) — the
+  -- webhook_url itself is left in place for the audit trail, but the
+  -- dispatcher stops queuing deliveries for this agent until an operator
+  -- (or the agent, via PUT /me/webhook with a corrected URL) clears it.
+  -- Does NOT affect `status` / bapAuth / GET /me — only webhook delivery.
+  webhook_disabled_at DATETIME,
+  webhook_disabled_reason TEXT,
   last_seen DATETIME,
   total_calls INTEGER DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,

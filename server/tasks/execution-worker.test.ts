@@ -162,3 +162,64 @@ describe('runExecutionWorkerTick approval integrity', () => {
     expect(job.last_error).toContain('version changed after approval');
   });
 });
+
+/**
+ * Issue #39 belt-and-braces: approveTask() (task-queue.ts) no longer
+ * enqueues a job for a non-executable action_type at all, but a job can
+ * still reach the worker for one queued before that fix (or a future
+ * action_registry/executor.ts drift). Either way, runExecutionWorkerTick()
+ * must recognise a permanently non-executable action_type on first claim
+ * and route it straight to manual_review — never lease/execute it, and
+ * never spend a retry attempt on something that can never succeed.
+ */
+describe('runExecutionWorkerTick — non-executable action_type (issue #39)', () => {
+  // Bypasses approveTask() on purpose: simulates a job that reached
+  // 'queued' despite not being executable (e.g. one enqueued before this
+  // fix shipped), so the worker's own defensive check is what's exercised
+  // here, independent of the approval-time gate.
+  function queuedJobForNonExecutableType(actionType: string): { taskId: string; jobId: string } {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Non-executable fixture task',
+      proposed_by: 'test',
+      action_type: actionType,
+      action_payload: {},
+      approval_mode: 'requires_approval',
+    })!;
+    const version = (task.version ?? 1) + 1;
+    db.prepare(`UPDATE tasks SET status = 'approved', version = ?, approved_payload_snapshot = ? WHERE id = ?`)
+      .run(version, JSON.stringify(task.action_payload ?? {}), task.id);
+    const job = enqueueExecutionJob({ ...task, status: 'approved', version } as TaskRow);
+    return { taskId: task.id, jobId: job.id };
+  }
+
+  test('a registered-but-non-executable action_type (product_suggestion) is routed to manual_review on first claim, not retried', async () => {
+    const { taskId, jobId } = queuedJobForNonExecutableType('product_suggestion');
+
+    const result = await runExecutionWorkerTick();
+
+    expect(result.claimed).toBe(1);
+    expect(getTask(taskId)?.status).toBe('manual_review');
+    const job = getExecutionJob(jobId)!;
+    expect(job.status).toBe('manual_review');
+    expect(job.attempt_count).toBe(0); // no retry budget spent — this is terminal, not a failed attempt
+    expect(job.last_error).toContain('no executor.ts dispatch case');
+  });
+
+  test('a registered-but-non-executable action_type (page_optimisation) never cycles back to queued', async () => {
+    const { taskId, jobId } = queuedJobForNonExecutableType('page_optimisation');
+
+    await runExecutionWorkerTick();
+
+    const job = getExecutionJob(jobId)!;
+    expect(job.status).not.toBe('queued');
+    expect(job.status).toBe('manual_review');
+    expect(job.attempt_count).toBe(0);
+    expect(getTask(taskId)?.status).toBe('manual_review');
+
+    // A second tick must not find (or re-touch) this job — it's terminal.
+    const second = await runExecutionWorkerTick();
+    expect(second.claimed).toBe(0);
+    expect(getExecutionJob(jobId)!.attempt_count).toBe(0);
+  });
+});

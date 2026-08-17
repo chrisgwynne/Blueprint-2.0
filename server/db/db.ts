@@ -3,9 +3,17 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { mkdirSync, readFileSync } from 'fs';
+import { resolveDbPath, isMemoryDbPath } from './resolve-db-path.js';
 
 const __dbdir = dirname(fileURLToPath(import.meta.url));
-const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
+// Stable base for resolving a relative DATABASE_PATH — the repo root, NOT
+// process.cwd(). Using process.cwd() meant the same inherited env value
+// (e.g. DATABASE_PATH=./data/blueprint.db) silently opened a different
+// "shadow" database depending on where a standalone Bun command was
+// launched from (repo root vs. server/). See resolve-db-path.ts and
+// https://github.com/chrisgwynne/Blueprint-2.0/issues/41. Matches the
+// PROJECT_ROOT convention already used by server/db/init.ts.
+const __repoRoot = resolve(__dbdir, '../..');
 
 // ':memory:' (and bun:sqlite's other in-memory sentinels, e.g.
 // 'file::memory:?cache=shared') must be passed through to Database()
@@ -15,13 +23,13 @@ const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
 // leaving a real, ever-growing file that persists across every process
 // invocation instead of the intended fresh-per-process database.
 const _envPath = process.env['DATABASE_PATH'];
-const _isMemory = _envPath === ':memory:' || _envPath?.startsWith('file::memory:') || _envPath?.startsWith(':memory:?');
+const _isMemory = isMemoryDbPath(_envPath);
 
-const DB_PATH = !_envPath
-  ? _defaultPath
-  : _isMemory
-    ? _envPath
-    : resolve(_envPath);
+// Exported so any other module that needs to report/inspect the database's
+// on-disk location (e.g. health endpoints) reads the SAME resolved path the
+// DB module actually opened, rather than independently re-resolving
+// DATABASE_PATH (and risking drift, including the process.cwd() bug above).
+export const DB_PATH = resolveDbPath(_envPath, __repoRoot);
 
 if (!_isMemory) {
   try {
@@ -1250,6 +1258,29 @@ const STARTUP_MIGRATIONS: string[] = [
   // schema still being the seed default so an operator's own edit is never
   // silently overwritten.
   `UPDATE action_registry SET payload_schema = '{"type":"object","required":["description"],"properties":{"description":{"type":"string","minLength":3}}}' WHERE action_type = 'research_connector' AND payload_schema = '{}'`,
+
+  // ─── Issue #37 fix: register scheduled_workflow ─────────────────────────
+  // External agents (e.g. Hermes) run recurring, non-destructive operational
+  // automation — nightly jobs, cron-backed workflows, folder watchers,
+  // monitoring, scheduled connector checks — on their own infrastructure and
+  // propose a Blueprint task purely to record/track it. There was no
+  // registered action_type for this, so every such proposal was rejected
+  // with 'unknown_action_type', forcing agents to misuse unrelated action
+  // types (e.g. content_draft) just to get the task recorded. This adds
+  // 'scheduled_workflow': external_verifiable (the proposing system, not
+  // Blueprint, performs and verifies the work — same category as
+  // github_review_deploy/research_connector), requires_approval so a human
+  // reviews the schedule/side-effects/constraints before it's trusted, and
+  // deliberately NOT added to executor.ts's EXECUTABLE_ACTION_TYPES or given
+  // dispatched_by_executor — Blueprint tracks/logs these, it never dispatches
+  // or auto-executes them itself. payload_schema requires 'schedule' (a
+  // cron-like string) and 'target_system' (who actually runs it); the rest
+  // (cron_job_id, target_resource, side_effects, constraints, verification,
+  // disable_path, publication) are optional structured detail matching the
+  // issue's example payload.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, payload_schema, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval) VALUES
+    ('scheduled_workflow', 'Track a recurring, non-destructive operational automation (cron/scheduled job) that an external system owns and executes — nightly jobs, folder watchers, monitoring, scheduled connector checks.', '{"type":"object","required":["schedule","target_system"],"properties":{"schedule":{"type":"string","minLength":1},"cron_job_id":{"type":"string"},"target_system":{"type":"string","minLength":1},"target_resource":{"type":"string"},"side_effects":{"type":"array","items":{"type":"string"}},"publication":{"type":"string"},"verification":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"disable_path":{"type":"string"}}}', '[]', '[]', 'external_verifiable', 'low', 0, 1)
+  `,
   // Social publishing tables (Issue #35)
   `CREATE TABLE IF NOT EXISTS social_posts (
     id TEXT PRIMARY KEY,
@@ -1299,6 +1330,159 @@ const STARTUP_MIGRATIONS: string[] = [
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS idx_social_media_staging_expires ON social_media_staging(expires_at)`,
+  // #40 — quarantine flag for a bap_agents webhook that has failed
+  // assertSafeWebhookUrl() (either at reconciliation or delivery time), so
+  // the dispatcher can stop generating doomed deliveries for it without
+  // touching the agent's `status` (see webhook-reconciliation.ts).
+  `ALTER TABLE bap_agents ADD COLUMN webhook_disabled_at DATETIME`,
+  `ALTER TABLE bap_agents ADD COLUMN webhook_disabled_reason TEXT`,
+
+  // ─── Autonomous hiring engine (issues #44-#58) ──────────────────────────────
+  // The `agents` table is an instance-wide roster keyed by template id — it has
+  // no business dimension at all, which is exactly why conductor-hiring's
+  // "already installed?" check leaked across businesses (#49). This table is
+  // the authoritative per-business installation record: one row per
+  // (business_id, agent_id) the business has actually hired.
+  `CREATE TABLE IF NOT EXISTS agent_installations (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'installed',
+    installed_by TEXT NOT NULL DEFAULT 'human',
+    lifecycle_state TEXT,
+    installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    uninstalled_at DATETIME,
+    metadata JSON DEFAULT '{}'
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_installations_unique ON agent_installations(business_id, agent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_agent_installations_business ON agent_installations(business_id, status)`,
+
+  // Durable negative-decision / suppression memory (#44, consumed by #50).
+  // Written atomically with a hire_agent task rejection so a rejected role
+  // stops being re-proposed on every subsequent analysis.
+  `CREATE TABLE IF NOT EXISTS hiring_decisions (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    disposition TEXT NOT NULL DEFAULT 'hard_suppression',
+    actor TEXT NOT NULL,
+    reason TEXT,
+    task_id TEXT,
+    analysis_id TEXT,
+    evidence_fingerprint TEXT,
+    reconsider_policy TEXT NOT NULL DEFAULT 'new_evidence',
+    expires_at DATETIME,
+    metadata JSON DEFAULT '{}',
+    decided_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_hiring_decisions_business_template ON hiring_decisions(business_id, template_id, decided_at)`,
+
+  // Lifecycle / provenance / observability record for every hiring analysis
+  // (#53 contract, #54 observability, #52 terminal failure state).
+  `CREATE TABLE IF NOT EXISTS hiring_analysis_runs (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    contract_version TEXT NOT NULL DEFAULT 'hiring.analysis.v1',
+    trigger_source TEXT NOT NULL,
+    trigger_ref TEXT,
+    trigger_reason TEXT,
+    idempotency_key TEXT,
+    mode TEXT NOT NULL DEFAULT 'live',
+    status TEXT NOT NULL DEFAULT 'running',
+    terminal_reason TEXT,
+    degraded INTEGER NOT NULL DEFAULT 0,
+    fallback_mode TEXT,
+    provider TEXT,
+    model TEXT,
+    provider_status TEXT,
+    provider_http_status INTEGER,
+    provider_retryable INTEGER,
+    provider_attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    input_snapshot JSON DEFAULT '{}',
+    candidates_considered INTEGER NOT NULL DEFAULT 0,
+    candidates_gated INTEGER NOT NULL DEFAULT 0,
+    suppressed_count INTEGER NOT NULL DEFAULT 0,
+    recommendations_count INTEGER NOT NULL DEFAULT 0,
+    proposals_created INTEGER NOT NULL DEFAULT 0,
+    proposal_ids JSON DEFAULT '[]',
+    coalesced_into TEXT,
+    coalesced_callers INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    diagnostics JSON DEFAULT '{}',
+    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    completed_at DATETIME
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_hiring_analysis_runs_business ON hiring_analysis_runs(business_id, started_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_hiring_analysis_runs_status ON hiring_analysis_runs(status, started_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_hiring_analysis_runs_idem ON hiring_analysis_runs(business_id, idempotency_key) WHERE idempotency_key IS NOT NULL`,
+
+  // Per-business coordination state: lease (mutual exclusion), debounce /
+  // cooldown pacing, and material-change fingerprint (#45, #46).
+  `CREATE TABLE IF NOT EXISTS hiring_coordination (
+    business_id TEXT PRIMARY KEY,
+    lease_holder TEXT,
+    lease_expires_at DATETIME,
+    last_analysis_id TEXT,
+    last_analysis_at DATETIME,
+    last_trigger_source TEXT,
+    last_trigger_reason TEXT,
+    last_input_fingerprint TEXT,
+    next_eligible_at DATETIME,
+    skipped_count INTEGER NOT NULL DEFAULT 0,
+    coalesced_count INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+
+  // Idempotency keys for proposal creation: DB-level uniqueness makes
+  // "one proposal per (business, template, analysis window)" a constraint
+  // rather than a race-prone read-then-write (#45).
+  `CREATE TABLE IF NOT EXISTS hiring_proposal_keys (
+    business_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    window_key TEXT NOT NULL,
+    task_id TEXT,
+    analysis_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (business_id, template_id, window_key)
+  )`,
+
+  // Bounded trial / activation plan attached to every hire proposal, plus the
+  // measured outcome that feeds back into future decisions (#51, #56).
+  `CREATE TABLE IF NOT EXISTS hiring_trials (
+    id TEXT PRIMARY KEY,
+    business_id TEXT NOT NULL,
+    template_id TEXT NOT NULL,
+    task_id TEXT,
+    analysis_id TEXT,
+    goal_id TEXT,
+    signal_id TEXT,
+    target_metric TEXT,
+    baseline_value REAL,
+    target_value REAL,
+    measurement_window_days INTEGER NOT NULL DEFAULT 14,
+    evidence_deliverable TEXT,
+    status TEXT NOT NULL DEFAULT 'planned',
+    actual_value REAL,
+    verdict TEXT,
+    verdict_reason TEXT,
+    confidence_at_hire REAL,
+    calibration_error REAL,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    effort_notes TEXT,
+    started_at DATETIME,
+    measure_after DATETIME,
+    measured_at DATETIME,
+    retired_at DATETIME,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_hiring_trials_business_template ON hiring_trials(business_id, template_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_hiring_trials_status ON hiring_trials(business_id, status)`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {
@@ -1579,6 +1763,81 @@ try {
     console.log(`[db] Business Profile backfill: created ${missing.length} profile(s) with inferred business_type.`);
   } catch (err) {
     console.warn('[db] business profile backfill skipped:', (err as Error).message);
+  }
+})();
+
+// ─── One-off data migration: backfill per-business agent installations ───────
+// Issue #49/#55: hiring treated the instance-wide `agents` table as the
+// installed-agent set, so an agent hired by business A was considered
+// installed for every business. agent_installations is the new authoritative
+// per-business record; the only historical evidence of *which* business hired
+// an agent is the installer's audit_log row (entity_type='agent',
+// action='install', business_id set), so seed from that. Where an agent row
+// exists with no attributable install audit (pre-audit installs, seeded
+// agents), the installation is attributed to every existing business —
+// deliberately conservative: it can only suppress a duplicate re-hire
+// proposal, never fabricate one.
+(function backfillAgentInstallations() {
+  try {
+    const marker = db.prepare(
+      "SELECT value FROM settings WHERE key = 'migration_agent_installations_v1'"
+    ).get();
+    if (marker) return;
+
+    const insert = db.prepare(`
+      INSERT INTO agent_installations (id, business_id, agent_id, status, installed_by, lifecycle_state, installed_at, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(business_id, agent_id) DO NOTHING
+    `);
+
+    const agentRows = db.prepare('SELECT id, status, lifecycle_state FROM agents').all() as
+      Array<{ id: string; status: string | null; lifecycle_state: string | null }>;
+    const agentById = new Map(agentRows.map((a) => [a.id, a]));
+
+    const installAudits = db.prepare(`
+      SELECT business_id, entity_id AS agent_id, actor, MIN(created_at) AS installed_at
+        FROM audit_log
+       WHERE entity_type = 'agent' AND action = 'install' AND business_id IS NOT NULL
+       GROUP BY business_id, entity_id
+    `).all() as Array<{ business_id: string; agent_id: string; actor: string | null; installed_at: string }>;
+
+    const attributed = new Set<string>();
+    let seeded = 0;
+    for (const row of installAudits) {
+      const agent = agentById.get(row.agent_id);
+      if (!agent) continue;
+      attributed.add(row.agent_id);
+      insert.run(
+        crypto.randomUUID(), row.business_id, row.agent_id,
+        agent.status === 'retired' ? 'uninstalled' : 'installed',
+        row.actor ?? 'unknown', agent.lifecycle_state ?? null, row.installed_at,
+        JSON.stringify({ backfilled_from: 'audit_log' }),
+      );
+      seeded++;
+    }
+
+    const unattributed = agentRows.filter((a) => !attributed.has(a.id));
+    if (unattributed.length > 0) {
+      const businesses = db.prepare('SELECT id FROM businesses').all() as Array<{ id: string }>;
+      for (const b of businesses) {
+        for (const a of unattributed) {
+          insert.run(
+            crypto.randomUUID(), b.id, a.id,
+            a.status === 'retired' ? 'uninstalled' : 'installed',
+            'unknown', a.lifecycle_state ?? null, new Date().toISOString(),
+            JSON.stringify({ backfilled_from: 'agents_table_no_audit' }),
+          );
+          seeded++;
+        }
+      }
+    }
+
+    db.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES ('migration_agent_installations_v1', ?, CURRENT_TIMESTAMP)`
+    ).run(JSON.stringify({ ran_at: new Date().toISOString(), seeded }));
+    if (seeded > 0) console.log(`[db] agent_installations backfill: seeded ${seeded} per-business installation record(s).`);
+  } catch (err) {
+    console.warn('[db] agent installation backfill skipped:', (err as Error).message);
   }
 })();
 

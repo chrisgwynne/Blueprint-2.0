@@ -28,10 +28,18 @@
  *   GET    /businesses/:bid/metrics/snapshot  — latest snapshot
  *   GET    /businesses/:bid/agents            — list internal agents
  *   POST   /businesses/:bid/agents/:aid/run   — trigger agent run
+ *   GET    /businesses/:bid/hiring/status     — hiring policy + pacing + recent
+ *   GET    /businesses/:bid/hiring/analyses   — hiring analysis contracts
+ *   GET    /businesses/:bid/hiring/analyses/:id — one analysis contract
+ *   POST   /businesses/:bid/hiring/analyses   — trigger analysis (idempotent)
  *   GET    /runs/:runId                       — run status
  *   PUT    /me/webhook                        — update webhook config
  *   GET    /me/webhook/deliveries             — list deliveries
  *   POST   /me/webhook/deliveries/:id/retry   — retry failed delivery
+ *
+ * Admin-only (session auth, see "Admin routes" below):
+ *   POST   /agents-admin/:id/webhook/disable  — quarantine an agent's webhook (#40)
+ *   POST   /agents-admin/:id/webhook/enable   — lift quarantine (re-validates first)
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -45,6 +53,7 @@ import {
 import { bapRateLimit } from '../bap/rate-limiter.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { assertSafeWebhookUrl, UnsafeWebhookUrlError } from '../lib/ssrf-guard.js';
+import { quarantineAgentWebhook } from '../bap/webhook-reconciliation.js';
 import { KBPathError } from '../kb/kb-engine.js';
 import { bapRequestContext, parsePagination, paginationMeta, toIso, normalizeTimestamps, withRequiredIdempotency } from '../bap/route-helpers.js';
 import { computeOutcomeStatus } from '../tasks/outcome-status.js';
@@ -64,6 +73,10 @@ import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
 import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
+import {
+  CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
+  getAnalysisContract, getHiringStatus, listAnalysisContracts,
+} from '../agents/hiring/contract.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -1410,6 +1423,96 @@ router.post('/businesses/:businessId/agents/:agentId/run',
   }
 );
 
+// ─── HIRING ANALYSIS LIFECYCLE (issues #53, #54, #57) ───────────────────────
+//
+// The durable, versioned contract for autonomous hiring. Every response is
+// scoped to :businessId — the store layer carries `business_id = ?` on every
+// query, so an agent authorized for one business cannot observe another's
+// hiring state, proposals, suppressions or provider errors.
+
+router.get('/businesses/:businessId/hiring/status',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
+      return res.json(getHiringStatus(businessId, limit));
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+router.get('/businesses/:businessId/hiring/analyses',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25) || 25));
+      return res.json({
+        contract_version: HIRING_CONTRACT_VERSION,
+        business_id: businessId,
+        terminal_reasons: HIRING_TERMINAL_REASONS,
+        analyses: listAnalysisContracts(businessId, limit),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+router.get('/businesses/:businessId/hiring/analyses/:analysisId',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const contract = getAnalysisContract(businessId, String(req.params.analysisId));
+      // A run belonging to another business reads as "not found" here — never
+      // as a 403 that would confirm its existence.
+      if (!contract) return res.status(404).json({ error: 'Analysis not found for this business.' });
+      return res.json(contract);
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+// Idempotent trigger: repeating a request with the same Idempotency-Key
+// returns the SAME analysis rather than starting a second one (#53).
+router.post('/businesses/:businessId/hiring/analyses',
+  requirePermission('agents:trigger'), bapRateLimit('agents:trigger'),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const body = (req.body ?? {}) as { idempotency_key?: string; reason?: string; dry_run?: boolean };
+      const idempotencyKey = String(req.get('Idempotency-Key') ?? body.idempotency_key ?? '').trim() || null;
+
+      const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+      const { analyseAndProposeHires } = await import('../agents/conductor-hiring.js');
+
+      const result = await analyseAndProposeHires(businessId, {
+        trigger: 'bap',
+        triggerRef: (bapAgent?.id as string | undefined) ?? null,
+        triggerReason: body.reason ? String(body.reason).slice(0, 200) : 'BAP-triggered hiring analysis',
+        idempotencyKey,
+        dryRun: body.dry_run === true,
+        actor: `bap:${(bapAgent?.id as string | undefined) ?? 'unknown'}`,
+      });
+
+      const contract = result.analysis_id ? getAnalysisContract(businessId, result.analysis_id) : null;
+      return res.status(result.terminal_reason === 'duplicate_trigger' ? 200 : 202).json({
+        analysis_id: result.analysis_id,
+        status: result.status,
+        terminal_reason: result.terminal_reason,
+        mode: result.mode,
+        proposals_created: result.proposed_hires,
+        proposal_ids: result.proposal_ids,
+        degraded: result.degraded,
+        contract,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
 router.get('/runs/:runId', (req: Request, res: Response) => {
   try {
     const run = db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(String(req.params.runId)) as Record<string, unknown> | undefined;
@@ -1468,7 +1571,16 @@ router.put('/me/webhook', async (req: Request, res: Response) => {
 
     const updates: string[] = [];
     const values: any[] = [];
-    if (url !== undefined) { updates.push('webhook_url = ?'); values.push(url); }
+    if (url !== undefined) {
+      updates.push('webhook_url = ?'); values.push(url);
+      // A newly-set URL was just validated (or is being cleared) above —
+      // either way, any prior quarantine from #40's reconciliation/
+      // delivery-time checks no longer applies to it. Clearing here
+      // (rather than requiring a separate admin re-enable call) is what
+      // lets an agent self-heal by simply fixing its own webhook_url.
+      updates.push('webhook_disabled_at = NULL');
+      updates.push('webhook_disabled_reason = NULL');
+    }
     if (secret !== undefined) { updates.push('webhook_secret = ?'); values.push(secret); }
     if (events !== undefined) { updates.push('webhook_events = ?'); values.push(JSON.stringify(events)); }
 
@@ -1535,7 +1647,7 @@ router.post('/me/webhook/deliveries/:deliveryId/retry', async (req: Request, res
 router.get('/agents-admin', isAuthenticated, (req: Request, res: Response) => {
   try {
     const agents = (db.prepare(
-      'SELECT id, name, description, owner, api_key_prefix, status, permissions, business_access, default_trust_tier, webhook_url, webhook_events, last_seen, total_calls, created_at FROM bap_agents ORDER BY created_at DESC'
+      'SELECT id, name, description, owner, api_key_prefix, status, permissions, business_access, default_trust_tier, webhook_url, webhook_events, webhook_disabled_at, webhook_disabled_reason, last_seen, total_calls, created_at FROM bap_agents ORDER BY created_at DESC'
     ).all() as Array<Record<string, unknown>>).map((a) => ({
       ...a,
       permissions: safeJSON(a.permissions),
@@ -1618,6 +1730,61 @@ router.post('/agents-admin/:agentId/revoke', isAuthenticated, (req: Request, res
     const agentId = String(req.params.agentId);
     db.prepare("UPDATE bap_agents SET status = 'revoked', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(agentId);
     return res.json({ ok: true, agent_id: agentId, status: 'revoked' });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// #40 — explicit webhook-only disable/re-enable, distinct from /revoke
+// above: revoke kills the agent's API key entirely (GET /me, tasks,
+// signals, everything), which is far more than an unsafe webhook
+// destination warrants. These only touch webhook_disabled_at/reason —
+// the agent keeps full API access either way. Reuses the same
+// quarantineAgentWebhook() the automated reconciliation pass and the
+// live delivery-time check use, so there's exactly one code path that
+// disables a webhook, however it gets triggered.
+router.post('/agents-admin/:agentId/webhook/disable', isAuthenticated, (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.agentId);
+    const agent = db.prepare('SELECT id, webhook_url FROM bap_agents WHERE id = ?').get(agentId) as { id: string; webhook_url: string | null } | undefined;
+    if (!agent) return res.status(404).json({ error: 'Agent not found.' });
+    if (!agent.webhook_url) return res.status(400).json({ error: 'Agent has no webhook configured.' });
+
+    const { reason } = req.body as { reason?: string };
+    quarantineAgentWebhook(agentId, (typeof reason === 'string' && reason.trim()) || 'Disabled manually via Settings → External Agents.');
+
+    const updated = db.prepare('SELECT webhook_disabled_at, webhook_disabled_reason FROM bap_agents WHERE id = ?').get(agentId) as Record<string, unknown>;
+    return res.json({ ok: true, agent_id: agentId, ...updated });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/agents-admin/:agentId/webhook/enable', isAuthenticated, async (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.agentId);
+    const agent = db.prepare('SELECT id, webhook_url FROM bap_agents WHERE id = ?').get(agentId) as { id: string; webhook_url: string | null } | undefined;
+    if (!agent) return res.status(404).json({ error: 'Agent not found.' });
+    if (!agent.webhook_url) return res.status(400).json({ error: 'Agent has no webhook configured.' });
+
+    // Re-validate before lifting the quarantine — an operator clicking
+    // "re-enable" without first fixing the URL should not resurrect the
+    // exact same guaranteed-to-fail destination.
+    try {
+      await assertSafeWebhookUrl(agent.webhook_url);
+    } catch (err) {
+      if (err instanceof UnsafeWebhookUrlError) {
+        return res.status(400).json({ error: `Cannot re-enable — webhook is still unsafe: ${err.message}` });
+      }
+      throw err;
+    }
+
+    db.prepare(`
+      UPDATE bap_agents SET webhook_disabled_at = NULL, webhook_disabled_reason = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(agentId);
+
+    return res.json({ ok: true, agent_id: agentId, webhook_disabled_at: null, webhook_disabled_reason: null });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }

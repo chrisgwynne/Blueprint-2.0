@@ -12,6 +12,7 @@ import { createTask, approveTask } from './task-queue.js';
 import { updateBusinessProfile } from '../business/business-profile.js';
 import { listSystemIssues } from '../system/system-issues.js';
 import { upsertActionRegistryEntry } from './action-registry.js';
+import { isExecutable } from './executor.js';
 
 const BIZ = 'biz_registry_gate_test';
 
@@ -81,16 +82,23 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(() => approveTask(task.id, 'tester')).toThrow(/business_type_incompatible|supports business types/);
   });
 
-  test('the same action_type succeeds once the business profile is ecommerce', () => {
+  // Issue #39: product_suggestion is registered and valid for an ecommerce
+  // business, but has no executor.ts dispatch case (dispatched_by_executor
+  // is false) — approveTask() must route it straight to manual_review
+  // instead of enqueuing an execution_jobs row that could never succeed.
+  test('a valid but non-executable action_type is routed to manual_review, not enqueued', () => {
     updateBusinessProfile(BIZ, { business_type: 'ecommerce' });
     const task = propose('product_suggestion');
     const after = approveTask(task.id, 'tester');
-    expect(after!.status).toBe('approved');
+    expect(after!.status).toBe('manual_review');
+
+    const jobs = db.prepare(`SELECT * FROM execution_jobs WHERE task_id = ?`).all(task.id) as Array<{ status: string }>;
+    expect(jobs.length).toBe(0);
   });
 
   // gbp_post requires a 'gbp' connector but — unlike gbp_update — is not in
   // executor.ts's EXECUTABLE_ACTION_TYPES, for the same determinism reason.
-  test('a registered action_type with no configured connector now BLOCKS approval', () => {
+  test('a registered action_type with no configured connector still BLOCKS approval before the executable check runs', () => {
     updateBusinessProfile(BIZ, { business_type: 'other' });
     const task = propose('gbp_post'); // requires a 'gbp' connector — none configured for BIZ
     expect(() => approveTask(task.id, 'tester')).toThrow(/requires connector type/);
@@ -107,12 +115,19 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(() => approveTask(task.id, 'tester')).toThrow(/confidence/);
   });
 
-  test('a connected, confidence-scored-healthy connector clears both checks', () => {
+  // Issue #39: once every other validation gate clears (connector present
+  // and healthy), gbp_post is still not in EXECUTABLE_ACTION_TYPES, so this
+  // must land in manual_review with no execution_jobs row — not 'approved'
+  // with a job the worker can never complete.
+  test('a connected, confidence-scored-healthy connector clears validation but still routes to manual_review (no executor)', () => {
     updateBusinessProfile(BIZ, { business_type: 'other' });
     addHealthyConnector('gbp');
     const task = propose('gbp_post');
     const after = approveTask(task.id, 'tester');
-    expect(after!.status).toBe('approved');
+    expect(after!.status).toBe('manual_review');
+
+    const jobs = db.prepare(`SELECT * FROM execution_jobs WHERE task_id = ?`).all(task.id) as Array<{ status: string }>;
+    expect(jobs.length).toBe(0);
   });
 
   test('a BAP agent missing a required permission is blocked', () => {
@@ -127,7 +142,10 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
   });
 
   test('a BAP agent holding the required permission is not blocked by the permission check', () => {
-    upsertActionRegistryEntry('test_perm_action_2', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent' });
+    // dispatched_by_executor: true — this test is about the permission
+    // gate, not issue #39's executable-routing gate, so give it a real
+    // dispatch case to keep those two concerns isolated.
+    upsertActionRegistryEntry('test_perm_action_2', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent', dispatched_by_executor: true });
     const agentId = generateId();
     db.prepare(`
       INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, permissions, business_access)
@@ -139,7 +157,7 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
   });
 
   test('a dashboard/telegram approver is never subject to the permission check', () => {
-    upsertActionRegistryEntry('test_perm_action_3', { required_permissions: ['some:permission-nobody-has'], side_effect_classification: 'internal_idempotent' });
+    upsertActionRegistryEntry('test_perm_action_3', { required_permissions: ['some:permission-nobody-has'], side_effect_classification: 'internal_idempotent', dispatched_by_executor: true });
     const task = propose('test_perm_action_3');
     const after = approveTask(task.id, 'dashboard:admin');
     expect(after!.status).toBe('approved');
@@ -191,6 +209,80 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
 
     const second = propose(null);
     const after = approveTask(second.id, 'dashboard:human');
+    expect(after!.status).toBe('approved');
+  });
+});
+
+// Issue #37: recurring/non-destructive operational automation (nightly
+// jobs, cron-backed workflows, folder watchers, monitoring, scheduled
+// connector checks) proposed by an external agent (e.g. Hermes) that owns
+// and runs its own cron — Blueprint only tracks/logs the task.
+describe('scheduled_workflow — Issue #37 (external recurring automation)', () => {
+  test('scheduled_workflow is registered in the Typed Action Registry', () => {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Nightly social folder automation',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: {
+        schedule: '30 2 * * *',
+        cron_job_id: '4bba7540a4ce',
+        target_system: 'Hermes cron',
+        target_resource: '/mnt/nas/Businesses/The Quirky Gift Co/Social',
+        side_effects: ['create files'],
+        publication: 'none',
+        verification: ['file count', 'manifest', 'readability/decode check'],
+        constraints: ['no prices', 'no fake reviews', 'no fake buyer photos'],
+      },
+      approval_mode: 'requires_approval',
+    })!;
+    expect(task.status).toBe('proposed');
+    expect(task.action_type).toBe('scheduled_workflow');
+  });
+
+  test('a scheduled_workflow payload missing the required schedule is rejected at proposal', () => {
+    expect(() => createTask({
+      business_id: BIZ,
+      title: 'Automation with no schedule',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { target_system: 'Hermes cron' },
+      approval_mode: 'requires_approval',
+    })).toThrow(/cannot be proposed/);
+
+    const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
+    expect(issues.some((i) => (i.metadata as any)?.issues?.[0]?.code === 'payload_schema_mismatch')).toBe(true);
+  });
+
+  test('a scheduled_workflow payload missing the required target_system is rejected at proposal', () => {
+    expect(() => createTask({
+      business_id: BIZ,
+      title: 'Automation with no target system',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { schedule: '30 2 * * *' },
+      approval_mode: 'requires_approval',
+    })).toThrow(/cannot be proposed/);
+  });
+
+  test('scheduled_workflow is deliberately NOT in executor.ts\'s auto-executable set', () => {
+    // Blueprint only tracks/logs this action type — the external system
+    // (e.g. Hermes cron) owns execution, so it must never be auto-dispatched.
+    // (executor.ts's own isExecutable() gate re-confirms this even if
+    // something enqueues a job for it — see executeTask()'s guard.)
+    expect(isExecutable('scheduled_workflow')).toBe(false);
+  });
+
+  test('a valid scheduled_workflow task clears the approval gate (registered, no connectors required)', () => {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Approve scheduled_workflow',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { schedule: '0 3 * * *', target_system: 'Hermes cron' },
+      approval_mode: 'requires_approval',
+    })!;
+    const after = approveTask(task.id, 'dashboard:human');
     expect(after!.status).toBe('approved');
   });
 });

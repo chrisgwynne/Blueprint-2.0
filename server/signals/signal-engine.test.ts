@@ -13,6 +13,7 @@ import { runSignalEngine } from './signal-engine.js';
 
 const BIZ = 'biz_signal_engine_test';
 const CONNECTOR_ID = 'conn_signal_engine_test';
+const MERCHANT_CONNECTOR_ID = 'conn_signal_engine_merchant_test';
 
 beforeAll(() => {
   db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Signal Engine Test', 'signal-engine-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
@@ -21,6 +22,11 @@ beforeAll(() => {
     VALUES (?, ?, 'pagespeed', 'PageSpeed', '{}', 'connected', '{}', CURRENT_TIMESTAMP)
     ON CONFLICT(id) DO NOTHING
   `).run(CONNECTOR_ID, BIZ);
+  db.prepare(`
+    INSERT INTO connectors (id, business_id, type, name, credentials, status, config, created_at)
+    VALUES (?, ?, 'google-merchant', 'Google Merchant Center', '{}', 'connected', '{}', CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO NOTHING
+  `).run(MERCHANT_CONNECTOR_ID, BIZ);
 });
 
 afterEach(() => {
@@ -74,5 +80,46 @@ describe('runSignalEngine — auto-resolve on healthy re-evaluation (issue #28)'
     const after = db.prepare('SELECT resolved_at FROM signals WHERE id = ?').get(created.id) as any;
 
     expect(after.resolved_at).toBe('2020-01-01'); // untouched, not re-stamped with CURRENT_TIMESTAMP
+  });
+});
+
+// Issue #42 — a truncated/incomplete Merchant connector snapshot must not
+// spawn a fresh open signal on every subsequent sync just because the same
+// underlying scan-coverage gap is still present. The generic
+// rule/connector/business dedup in shouldFireSignal() already covers this
+// as long as the same disapproval set keeps evaluating to the same rule
+// firing (rather than, say, a new rule id per sync) — this test proves that
+// holds for the destination-scoped merchant_products_disapproved rule.
+describe('runSignalEngine — merchant snapshot dedup (issue #42)', () => {
+  test('repeated syncs of the same truncated snapshot keep a single open signal, not duplicates', async () => {
+    const truncatedSnapshot = {
+      products: [
+        { id: 'p1', title: 'Blocked Widget', disapprovedDestinations: ['shoppingAds'], issues: [{ code: 'missing_gtin' }] },
+      ],
+      totalProductCount: 5000,
+      offersScanned: 5000,
+      coverageComplete: false,
+    };
+
+    const previousBaseline = { products: [] };
+
+    await runSignalEngine(BIZ, MERCHANT_CONNECTOR_ID, truncatedSnapshot, previousBaseline, 'google-merchant');
+    const openSignals = () => db.prepare(`
+      SELECT id FROM signals
+      WHERE business_id = ? AND connector_id = ? AND rule_id = 'merchant_products_disapproved' AND status = 'open'
+    `).all(BIZ, MERCHANT_CONNECTOR_ID) as Array<{ id: string }>;
+
+    expect(openSignals()).toHaveLength(1);
+    const firstId = openSignals()[0]!.id;
+
+    // The exact same (current, previous) pair processed twice more — e.g. a
+    // retried sync, or a duplicate scheduler trigger — must not create
+    // additional open signals for the same underlying truncated snapshot.
+    await runSignalEngine(BIZ, MERCHANT_CONNECTOR_ID, truncatedSnapshot, previousBaseline, 'google-merchant');
+    await runSignalEngine(BIZ, MERCHANT_CONNECTOR_ID, truncatedSnapshot, previousBaseline, 'google-merchant');
+
+    const after = openSignals();
+    expect(after).toHaveLength(1);
+    expect(after[0]!.id).toBe(firstId);
   });
 });

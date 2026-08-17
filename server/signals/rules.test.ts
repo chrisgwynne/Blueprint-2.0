@@ -77,18 +77,75 @@ describe('signal rules — defensive behaviour', () => {
 
   test('merchant_products_disapproved triggers only for products newly disapproved this sync', () => {
     const rule = getRule('merchant_products_disapproved');
-    const previous = { products: [{ id: 'p1', title: 'Widget', disapproved: false }] };
-    const current = { products: [{ id: 'p1', title: 'Widget', disapproved: true }, { id: 'p2', title: 'Gadget', disapproved: false }] };
+    const previous = { products: [{ id: 'p1', title: 'Widget', disapprovedDestinations: [] }] };
+    const current = {
+      products: [
+        { id: 'p1', title: 'Widget', disapprovedDestinations: ['shoppingAds'], issues: [{ code: 'missing_gtin' }] },
+        { id: 'p2', title: 'Gadget', disapprovedDestinations: [] },
+      ],
+    };
     const result = rule.evaluate(current, previous);
     expect(result.triggered).toBe(true);
-    expect(result.data.count).toBe(1);
+    expect(result.data.totalCount).toBe(1);
   });
 
   test('merchant_products_disapproved does not re-trigger for a product still disapproved from before', () => {
     const rule = getRule('merchant_products_disapproved');
-    const previous = { products: [{ id: 'p1', title: 'Widget', disapproved: true }] };
-    const current = { products: [{ id: 'p1', title: 'Widget', disapproved: true }] };
+    const previous = { products: [{ id: 'p1', title: 'Widget', disapprovedDestinations: ['shoppingAds'] }] };
+    const current = { products: [{ id: 'p1', title: 'Widget', disapprovedDestinations: ['shoppingAds'] }] };
     expect(rule.evaluate(current, previous).triggered).toBe(false);
+  });
+
+  // Issue #42 — a product disapproved ONLY on Demand Gen/Discover must not
+  // read as a Shopping-blocking disapproval, and vice versa: the two must be
+  // reported under separate destination keys, not one generic bucket.
+  test('merchant_products_disapproved keeps Demand Gen/Discover disapprovals out of the Shopping Ads bucket', () => {
+    const rule = getRule('merchant_products_disapproved');
+    const previous = { products: [] };
+    const current = {
+      products: [
+        { id: 'p1', title: 'Approved for Shopping, restricted on Demand Gen', disapprovedDestinations: ['demandGen', 'discover'], issues: [] },
+      ],
+    };
+    const result = rule.evaluate(current, previous);
+    expect(result.triggered).toBe(true);
+    const byDestination = result.data.byDestination as Record<string, { count: number }>;
+    expect(byDestination.shoppingAds).toBeUndefined();
+    expect(byDestination.freeListings).toBeUndefined();
+    expect(byDestination.demandGen?.count).toBe(1);
+    expect(byDestination.discover?.count).toBe(1);
+    expect(result.title).not.toMatch(/shopping/i);
+    expect(result.title).toMatch(/demand gen/i);
+  });
+
+  test('merchant_products_disapproved names the destination and issue-type evidence in its description', () => {
+    const rule = getRule('merchant_products_disapproved');
+    const previous = { products: [] };
+    const current = {
+      products: [
+        { id: 'p1', title: 'Widget', disapprovedDestinations: ['shoppingAds'], issues: [{ code: 'missing_gtin' }] },
+      ],
+    };
+    const result = rule.evaluate(current, previous);
+    expect(result.description).toMatch(/Shopping Ads/);
+    expect(result.description).toMatch(/missing_gtin/);
+    // Never a bare, unattributed "resolve disapproved products" claim.
+    expect(result.title.toLowerCase()).not.toBe('disapproved products');
+  });
+
+  test('merchant_products_disapproved flags incomplete scan coverage instead of implying a clean full account', () => {
+    const rule = getRule('merchant_products_disapproved');
+    const previous = { products: [] };
+    const current = {
+      products: [{ id: 'p1', title: 'Widget', disapprovedDestinations: ['shoppingAds'], issues: [] }],
+      offersScanned: 5000,
+      coverageComplete: false,
+    };
+    const result = rule.evaluate(current, previous);
+    expect(result.triggered).toBe(true);
+    expect(result.data.coverageComplete).toBe(false);
+    expect(result.data.offersScanned).toBe(5000);
+    expect(result.description).toMatch(/incomplete/i);
   });
 
   test('merchant_feed_data_quality_issues triggers when error-level issues increase', () => {
@@ -112,6 +169,27 @@ describe('signal rules — defensive behaviour', () => {
     const result = rule.evaluate({ totalProductCount: 400 }, { totalProductCount: 1000 });
     expect(result.triggered).toBe(true);
     expect(result.data.dropPct).toBe(60);
+  });
+
+  // Issue #42 — a pagination safety-ceiling cutoff shrinks the scanned count
+  // without the real catalogue changing at all; that must never be reported
+  // as a "product count drop", in either direction of the comparison.
+  test('merchant_product_count_drop does not fire when the current scan is incomplete', () => {
+    const rule = getRule('merchant_product_count_drop');
+    const result = rule.evaluate(
+      { totalProductCount: 5000, coverageComplete: false },
+      { totalProductCount: 90042, coverageComplete: true }
+    );
+    expect(result.triggered).toBe(false);
+  });
+
+  test('merchant_product_count_drop does not fire when the previous scan was incomplete', () => {
+    const rule = getRule('merchant_product_count_drop');
+    const result = rule.evaluate(
+      { totalProductCount: 90042, coverageComplete: true },
+      { totalProductCount: 5000, coverageComplete: false }
+    );
+    expect(result.triggered).toBe(false);
   });
 
   test('every rule result has the required shape', () => {

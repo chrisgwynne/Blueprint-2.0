@@ -249,6 +249,25 @@ export function startScheduler(): void {
 
   console.log('[scheduler] Starting Blueprint scheduler...');
 
+  // #40 — reconcile any bap_agents webhook that no longer passes the SSRF
+  // safety check (most commonly a legacy row from before the check
+  // existed) once at startup, rather than waiting for the first doomed
+  // delivery attempt to discover it event-by-event. Also re-run on the
+  // existing 5-minute BAP webhook maintenance tick below so an agent that
+  // becomes unsafe later (e.g. its hostname is repointed) is caught
+  // without a restart.
+  import('../bap/webhook-reconciliation.js')
+    .then((m) => m.reconcileUnsafeWebhooks())
+    .then((result) => {
+      if (result.quarantined.length > 0) {
+        console.warn(
+          `[scheduler] Quarantined ${result.quarantined.length} unsafe BAP webhook(s) at startup: ` +
+          result.quarantined.map((q) => `${q.name} (${q.id})`).join(', ')
+        );
+      }
+    })
+    .catch((err) => console.error('[scheduler] Startup BAP webhook reconciliation failed:', err));
+
   // Every 15 minutes: check connector polling intervals, sync due connectors
   scheduleWithLock('*/15 * * * *', async () => {
     console.log('[scheduler] Running connector poll check...');
@@ -461,6 +480,41 @@ export function startScheduler(): void {
     }
   });
 
+  // ─── Autonomous hiring (issues #44-#58) ───────────────────────────────────
+  // The scheduled trigger. It carries no special authority: like the
+  // connector-sync and signal triggers it calls the one hiring-analysis
+  // service, which applies the kill switch, dry-run mode, per-business
+  // cooldown/material-change pacing and the coordination lease. Each business
+  // is isolated — one business's provider failure cannot stop the sweep.
+  scheduleWithLock('0 7 * * *', async () => {
+    try {
+      const { runScheduledHiringSweep } = await import('../agents/conductor-hiring.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
+      const results = await runScheduledHiringSweep(businesses.map((b) => b.id));
+      const proposed = results.reduce((a, r) => a + r.proposed, 0);
+      const failures = results.filter((r) => r.status === 'failed');
+      console.log(
+        `[scheduler] Hiring sweep: ${results.length} business(es), ${proposed} proposal(s)`
+        + (failures.length ? `, ${failures.length} failed` : '')
+      );
+    } catch (err: any) {
+      console.error('[scheduler] Hiring sweep failed:', err.message);
+    }
+  });
+
+  // Reconcile hiring analyses abandoned in `running` (crashed process, hung
+  // provider call) so they cannot masquerade as in-flight work forever (#52).
+  scheduleWithLock('*/15 * * * *', async () => {
+    try {
+      const { reconcileStaleAnalysisRuns } = await import('../agents/hiring/store.js');
+      const { getHiringPolicy } = await import('../agents/hiring/policy.js');
+      const closed = reconcileStaleAnalysisRuns(getHiringPolicy().stale_run_timeout_minutes);
+      if (closed.length > 0) console.log(`[scheduler] Reconciled ${closed.length} stale hiring analysis run(s).`);
+    } catch (err: any) {
+      console.warn('[scheduler] Stale hiring run reconciliation failed:', err.message);
+    }
+  });
+
   // Weekly outcome attribution checks — Monday 9am
   scheduleWithLock('0 9 * * 1', async () => {
     try {
@@ -643,8 +697,23 @@ export function startScheduler(): void {
     }
   });
 
-  // Every 5 minutes: retry failed BAP webhook deliveries
+  // Every 5 minutes: reconcile unsafe BAP webhooks (#40), then retry
+  // still-eligible failed deliveries. Reconciliation runs first so an
+  // agent it just quarantined is immediately excluded from the retry
+  // pass's query rather than getting one more doomed retry this tick.
   scheduleWithLock('*/5 * * * *', async () => {
+    try {
+      const { reconcileUnsafeWebhooks } = await import('../bap/webhook-reconciliation.js') as any;
+      const { quarantined } = await reconcileUnsafeWebhooks();
+      if (quarantined.length > 0) {
+        console.warn(
+          `[scheduler] Quarantined ${quarantined.length} unsafe BAP webhook(s): ` +
+          quarantined.map((q: { name: string; id: string }) => `${q.name} (${q.id})`).join(', ')
+        );
+      }
+    } catch (err: any) {
+      console.error('[scheduler] BAP webhook reconciliation failed:', err.message);
+    }
     try {
       const { retryPendingDeliveries } = await import('../bap/webhook-dispatcher.js') as any;
       const retried = await retryPendingDeliveries();

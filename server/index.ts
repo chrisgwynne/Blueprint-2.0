@@ -5,7 +5,7 @@ import cors from 'cors';
 import { existsSync, mkdirSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import db from './db/db.js';
+import db, { DB_PATH } from './db/db.js';
 import { isProductionAdminPasswordUnsafe } from './lib/startup-checks.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -299,7 +299,10 @@ const mountRoutes = async () => {
 
       // DB health
       const tableCount = (db.prepare("SELECT COUNT(*) as n FROM sqlite_master WHERE type='table'").get() as any)?.n ?? 0;
-      const dbPath = process.env.DATABASE_PATH || './data/blueprint.db';
+      // Reuse the DB module's own resolved path rather than independently
+      // re-resolving DATABASE_PATH here — see server/db/db.ts /
+      // server/db/resolve-db-path.ts (issue #41).
+      const dbPath = DB_PATH;
       let dbSizeMB = 0;
       try {
         const { statSync } = await import('fs');
