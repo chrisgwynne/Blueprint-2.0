@@ -7,6 +7,10 @@ import {
   Clock, Zap, TrendingUp, Package, UserPlus, Sparkles, Archive, ShieldCheck,
 } from 'lucide-react'
 import useStore from '../lib/store.js'
+// "Why did Blueprint do this?" (#60) — the same panel the Tasks drawer uses.
+// On the hiring roster it answers the harder question: why a candidate is
+// NOT being recommended (suppressed by a prior decision, or gated).
+import ExplanationPanel, { WhyButton } from '../components/ExplanationPanel.js'
 import {
   getAgents, runAgent, updateAgent, getAgentTemplates, installAgent,
   hireAgent, getHireRecommendations, getAgentRoster, retireAgent,
@@ -294,9 +298,11 @@ interface TemplateCardProps {
   template: any
   onInstall: (id: string) => Promise<void>
   installing: string | null
+  /** #60 — open the explanation for this hiring candidate. */
+  onWhy: (templateId: string) => void
 }
 
-function TemplateCard({ template, onInstall, installing }: TemplateCardProps) {
+function TemplateCard({ template, onInstall, installing, onWhy }: TemplateCardProps) {
   return (
     <div className="bp-card" style={{ display: 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden', opacity: template.installed ? 0.5 : 1 }}>
       <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--bp-border)' }}>
@@ -362,6 +368,11 @@ function TemplateCard({ template, onInstall, installing }: TemplateCardProps) {
             {installing === template.id ? 'Installing…' : 'Install Agent'}
           </button>
         )}
+        {/* The question this answers is "why is this NOT being recommended?"
+            — a suppression or a failed gate, rather than silence. */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+          <WhyButton onClick={() => onWhy(template.id)} title="Why is this candidate not being recommended?" />
+        </div>
       </div>
     </div>
   )
@@ -373,9 +384,11 @@ interface RecommendationCardProps {
   rec: any
   onHire: (agentId: string) => Promise<void>
   hiring: string | null
+  /** #60 — open the explanation behind this recommendation. */
+  onWhy: (templateId: string) => void
 }
 
-function RecommendationCard({ rec, onHire, hiring }: RecommendationCardProps) {
+function RecommendationCard({ rec, onHire, hiring, onWhy }: RecommendationCardProps) {
   const isHiring = hiring === rec.agent_id
   const confidencePct = Math.round((rec.confidence ?? 0) * 100)
   const confidenceColor = confidencePct >= 80 ? 'var(--bp-green)' : confidencePct >= 60 ? 'var(--bp-amber)' : 'var(--bp-text-3)'
@@ -445,6 +458,9 @@ function RecommendationCard({ rec, onHire, hiring }: RecommendationCardProps) {
             : <UserPlus size={11} />}
           {isHiring ? 'Hiring…' : 'Hire Agent'}
         </button>
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 8 }}>
+          <WhyButton onClick={() => onWhy(rec.agent_id)} title="What evidence and policy produced this recommendation?" />
+        </div>
       </div>
     </div>
   )
@@ -469,6 +485,8 @@ export default function Agents() {
   // truth for install state, run stats and soul files.
   const [roster, setRoster] = useState<any[]>([])
   const [retiring, setRetiring] = useState<string | null>(null)
+  // #60 — which hiring candidate's explanation is open, if any.
+  const [whyTemplateId, setWhyTemplateId] = useState<string | null>(null)
 
   const loadData = useCallback(() => {
     Promise.all([
@@ -823,6 +841,7 @@ export default function Agents() {
                   rec={rec}
                   onHire={handleHire}
                   hiring={hiring}
+                  onWhy={setWhyTemplateId}
                 />
               ))}
             </div>
@@ -846,6 +865,7 @@ export default function Agents() {
                 template={template}
                 onInstall={handleInstall}
                 installing={installing}
+                onWhy={setWhyTemplateId}
               />
             ))}
           </div>
@@ -863,6 +883,15 @@ export default function Agents() {
             Run the database initialisation script to install core agents
           </div>
         </div>
+      )}
+
+      {whyTemplateId && (
+        <ExplanationPanel
+          businessId={currentBusiness?.id}
+          kind="hiring_candidate"
+          subjectId={whyTemplateId}
+          onClose={() => setWhyTemplateId(null)}
+        />
       )}
     </div>
   )

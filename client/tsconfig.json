@@ -25,7 +25,14 @@
 
     "paths": {
       "@/*": ["./src/*"]
-    }
+    },
+
+    // The client has no DOM test runner; its tests are pure-logic suites run
+    // under `bun test` (see package.json). bun-types is what makes
+    // `import { test } from 'bun:test'` typecheck here, exactly as it
+    // already does in server/tsconfig.json. It adds Bun's globals to the
+    // type environment only — it changes nothing about the Vite build.
+    "types": ["bun-types"]
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "src/**/*.jsx"],
   "exclude": ["node_modules"]

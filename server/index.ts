@@ -199,6 +199,10 @@ const mountRoutes = async () => {
   const { default: outcomesRoutes } = await import('./routes/outcomes.js');
   const { default: receiptsRoutes } = await import('./routes/receipts.js');
   const { default: digestRoutes } = await import('./routes/digest.js');
+  // Explanations (#60) — "why did Blueprint do this?" for tasks, decision
+  // memory rows and hiring decisions. A pure read over the records #53,
+  // #61, #63, #66, #68 and #70 already author; it computes nothing new.
+  const { default: explanationsRoutes } = await import('./routes/explanations.js');
   const { default: chatRoutes } = await import('./routes/chat.js');
   const { default: workflowsRoutes } = await import('./routes/workflows.js');
   const { default: goalsRoutes } = await import('./routes/goals.js');
@@ -261,6 +265,7 @@ const mountRoutes = async () => {
   app.use('/api/outcomes', outcomesRoutes);
   app.use('/api/receipts', receiptsRoutes);
   app.use('/api/digest', digestRoutes);
+  app.use('/api/explanations', explanationsRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/workflows', workflowsRoutes);
   app.use('/api/goals', goalsRoutes);
