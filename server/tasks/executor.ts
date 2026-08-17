@@ -13,7 +13,7 @@
 import crypto from 'node:crypto';
 import db from '../db/db.js';
 import { decrypt } from '../crypto.js';
-import { updateTaskStatus } from './task-queue.js';
+import { updateTaskStatus, type TaskStatus } from './task-queue.js';
 import { createBlueprintIssue } from '../lib/blueprint-github.js';
 import { createTaskEvent } from './task-events.js';
 import { parseJson } from '../types/shared.js';
@@ -26,6 +26,7 @@ import type * as KbConfig from '../kb/kb-config.js';
 import type * as ContextAssembler from './investigation/context-assembler.js';
 import type * as PromptBuilder from './investigation/prompt-builder.js';
 import type * as TaskSpawner from './investigation/task-spawner.js';
+import type * as EvidenceGate from './investigation/evidence-gate.js';
 import type * as LlmProviders from '../lib/llm-providers.js';
 import type * as AgentActivity from '../agents/activity.js';
 import type * as AgentInstaller from '../agents/installer.js';
@@ -40,6 +41,13 @@ import type * as ToolLoop from '../agents/tool-loop.js';
 interface ExecuteResult {
   outcome: string;
   outcome_data: Record<string, unknown>;
+  /**
+   * Final task status once execution succeeds. Defaults to 'complete' when
+   * omitted. A handler sets this to 'blocked' or 'manual_review' when it
+   * succeeded (no thrown error) but cannot vouch for the result being safe
+   * to treat as done — see executeInvestigation's evidence gate (issue #43).
+   */
+  status?: TaskStatus;
 }
 
 interface Task {
@@ -589,6 +597,10 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
   const { assembleInvestigationContext } = await import('./investigation/context-assembler.js') as typeof ContextAssembler;
   const { buildInvestigationPrompt } = await import('./investigation/prompt-builder.js') as typeof PromptBuilder;
   const { spawnFollowOnTasks } = await import('./investigation/task-spawner.js') as typeof TaskSpawner;
+  const {
+    parseRequiredEvidence, assessEvidenceCoverage, capConfidenceToEvidence,
+    decideCompletionGate, spawnEvidenceGapTask, sanitiseEvidenceValue,
+  } = await import('./investigation/evidence-gate.js') as typeof EvidenceGate;
   const { runLLM, resolveProfileLLM } = await import('../lib/llm-providers.js') as typeof LlmProviders;
   const { recordAgentActivity } = await import('../agents/activity.js') as typeof AgentActivity;
 
@@ -624,12 +636,29 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
     usage: llmResult?.usage, cost_usd: llmResult?.cost_usd, startedAt,
   });
 
-  // 4. Parse findings
-  const findings = extractInvestigationJSON(llmResult?.content ?? '');
-  if (!findings) {
+  // 4. Parse findings — sanitised immediately so nothing downstream (KB
+  // write, outcome_data persistence) ever sees a raw query string the model
+  // echoed back from signal/metric data (issue #43, evidence sanitisation).
+  const rawFindings = extractInvestigationJSON(llmResult?.content ?? '');
+  if (!rawFindings) {
     const preview = (llmResult?.content ?? '').slice(0, 200);
     throw new Error(`Investigation LLM returned invalid JSON.${preview ? ' Preview: ' + preview : ''}`);
   }
+  const findings = sanitiseEvidenceValue(rawFindings);
+
+  // 4b. Evidence-vs-confidence gate (issue #43).
+  //
+  // Convert whatever the task's description/acceptance criteria explicitly
+  // demand (an exact landing-page URL, HTTP status/redirect chain, canonical
+  // consistency, product availability, a Merchant/Shopify mapping, ...) into
+  // concrete evidence checks, and verify each one against data Blueprint
+  // actually gathered — never against the LLM's own prose. Confidence is
+  // then capped to what that coverage supports, and completion is refused
+  // outright when evidence is missing and the model's own recommendation
+  // concedes more investigation is needed.
+  const requiredEvidence = parseRequiredEvidence(task);
+  const coverage = assessEvidenceCoverage(requiredEvidence, context as EvidenceGate.EvidenceGateContext);
+  const confidenceResult = capConfidenceToEvidence(findings.confidence as number | null | undefined, coverage);
 
   // 5. File investigation to KB
   await fileInvestigationToKB(task, findings);
@@ -678,24 +707,65 @@ async function executeInvestigation(task: Task): Promise<ExecuteResult> {
     ? ` ${followOns.length} follow-on task${followOns.length > 1 ? 's' : ''} queued.`
     : '';
 
+  const baseOutcomeData: Record<string, unknown> = {
+    type: 'investigation',
+    primary_cause: (findings.primary_cause as string | undefined) ?? null,
+    primary_confidence: confidenceResult.confidence,
+    confidence_capped: confidenceResult.capped,
+    confidence_cap: confidenceResult.cap,
+    raw_model_confidence: (findings.confidence as number | undefined) ?? null,
+    supporting_evidence: (findings.evidence as unknown[]) ?? [],
+    alternative_causes: (findings.alternatives as unknown[]) ?? [],
+    recommendation: (findings.recommendation as string | undefined) ?? null,
+    recommended_action: (findings.recommendation_reason as string | undefined) ?? null,
+    plain_english: (findings.explanation as string | undefined) ?? null,
+    confidence_note: confidenceResult.capped
+      ? `Confidence capped from ${(findings.confidence as number | undefined) ?? 'n/a'} to ${confidenceResult.cap} — required evidence was not fully collected.`
+      : null,
+    summary: (findings.summary as string | undefined) ?? null,
+    do_not_do: (findings.do_not_do as unknown[]) ?? [],
+    measurement_plan: (findings.measurement_plan as unknown) ?? null,
+    spawned_tasks: followOns.length,
+    spawned_task_ids: followOns.map(t => t.id),
+    // Rule 6 (issue #43): every mandatory evidence check the task specifies
+    // is recorded explicitly — met (with provenance) or explained as unmet.
+    evidence_checks: coverage.checks,
+    evidence_coverage_ratio: coverage.coverageRatio,
+  };
+
+  // 8. Evidence-vs-confidence completion gate (issue #43). A task must not
+  // become 'complete' when required evidence is missing and the model's own
+  // recommendation says more investigation is needed — that is
+  // self-contradictory. Missing evidence otherwise blocks completion too,
+  // with an explicit reason recorded rather than a silent 'complete'.
+  const gate = decideCompletionGate({ recommendation: (findings.recommendation as string | undefined) ?? null, coverage });
+  if (!gate.canComplete) {
+    let gapTaskId: string | null = null;
+    try {
+      const spawned = spawnEvidenceGapTask(
+        { id: task.id, business_id: task.business_id, title: task.title, signal_id: task.signal_id ?? null, project_id: task.project_id ?? null },
+        coverage.missing
+      );
+      gapTaskId = spawned.id;
+    } catch (err) {
+      console.warn('[executor] Failed to spawn evidence-gap follow-up:', (err as Error).message);
+    }
+
+    return {
+      outcome: `${gate.reason ?? 'Required evidence missing.'}${gapTaskId ? ` Follow-up task ${gapTaskId} created to gather it.` : ''}`,
+      outcome_data: {
+        ...baseOutcomeData,
+        evidence_gate_blocked: true,
+        evidence_gate_reason: gate.reason,
+        evidence_gap_task_id: gapTaskId,
+      },
+      status: gate.finalStatus,
+    };
+  }
+
   return {
     outcome: summary.slice(0, 200) + outcomeNote,
-    outcome_data: {
-      type: 'investigation',
-      primary_cause: (findings.primary_cause as string | undefined) ?? null,
-      primary_confidence: (findings.confidence as number | undefined) ?? null,
-      supporting_evidence: (findings.evidence as unknown[]) ?? [],
-      alternative_causes: (findings.alternatives as unknown[]) ?? [],
-      recommendation: (findings.recommendation as string | undefined) ?? null,
-      recommended_action: (findings.recommendation_reason as string | undefined) ?? null,
-      plain_english: (findings.explanation as string | undefined) ?? null,
-      confidence_note: null,
-      summary: (findings.summary as string | undefined) ?? null,
-      do_not_do: (findings.do_not_do as unknown[]) ?? [],
-      measurement_plan: (findings.measurement_plan as unknown) ?? null,
-      spawned_tasks: followOns.length,
-      spawned_task_ids: followOns.map(t => t.id),
-    },
+    outcome_data: baseOutcomeData,
   };
 }
 
@@ -1441,7 +1511,7 @@ async function executeHireAgent(task: Task): Promise<ExecuteResult> {
  * @param taskId
  * @returns {{ ok: boolean, outcome?: string, error?: string }}
  */
-export async function executeTask(taskId: string, job: ExecutionJobRow | null = null): Promise<{ ok: boolean; outcome?: string; outcome_data?: Record<string, unknown>; error?: string }> {
+export async function executeTask(taskId: string, job: ExecutionJobRow | null = null): Promise<{ ok: boolean; outcome?: string; outcome_data?: Record<string, unknown>; error?: string; status?: TaskStatus }> {
   const taskRow = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | null;
   if (!taskRow) {
     return { ok: false, error: `Task '${taskId}' not found` };
@@ -1559,15 +1629,18 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     return { ok: false, error: (err as Error).message };
   }
 
-  // Mark complete + record outcome
+  // Mark complete (or, per result.status, a non-terminal status a handler
+  // explicitly requested — e.g. executeInvestigation's evidence gate,
+  // issue #43) + record outcome.
+  const finalStatus: TaskStatus = result.status ?? 'complete';
   try {
-    updateTaskStatus(task.id, 'complete', 'system:executor', {
+    updateTaskStatus(task.id, finalStatus, 'system:executor', {
       outcome: result.outcome,
       outcome_data: result.outcome_data,
     });
     createTaskEvent(
       task.id,
-      'complete',
+      finalStatus,
       'system:executor',
       result.outcome,
       result.outcome_data ?? {}
@@ -1577,8 +1650,8 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     return { ok: false, error: `Execution succeeded but status update failed: ${(err as Error).message}` };
   }
 
-  console.log(`[executor] Task ${taskId} (${task.action_type}) executed: ${result.outcome}`);
-  return { ok: true, outcome: result.outcome, outcome_data: result.outcome_data };
+  console.log(`[executor] Task ${taskId} (${task.action_type}) executed [${finalStatus}]: ${result.outcome}`);
+  return { ok: true, outcome: result.outcome, outcome_data: result.outcome_data, status: finalStatus };
 }
 
 // ─── Wix SEO write-back ─────────────────────────────────────────────────────
