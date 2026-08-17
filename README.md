@@ -382,7 +382,15 @@ curl -X POST http://localhost:4000/api/bap/v1/register \
   -d '{"name":"MyAgent","requested_permissions":["signals:read","tasks:propose","kb:read"],"business_access":["biz_xxxxxxxx"]}'
 ```
 
-See [SKILL.md](SKILL.md) for the complete tool reference.
+See [SKILL.md](SKILL.md) for the complete tool reference, or
+[server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md) for the full technical
+API reference including permissions, rate limits, and client examples.
+
+**Running an agent against Blueprint already?** See the
+[2026-08-17 changelog entry](CHANGELOG.md#2026-08-17--38-issue-backlog-clearance-bug-fixes-autonomous-hiring-redesign-and-16-new-dashboard-features)
+for a summary of recent BAP-facing changes — a new action type, two
+behavior changes affecting task resolution, and two new read-only
+endpoints (Operating Policy, Action Receipts).
 
 ## Architecture
 

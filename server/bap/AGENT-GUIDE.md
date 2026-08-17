@@ -2,6 +2,15 @@
 
 For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That file tells agents what Blueprint is, what tools are available, when to use each one, and how to operate. This document is the technical API reference for developers building custom integrations.
 
+> **2026-08 update:** this pass documents Goals, Outcomes, and Connectors
+> (existing endpoints that were missing from this reference) and adds the
+> new Operating Policy and Receipts endpoints, plus two behavior changes
+> that affect how proposed tasks resolve. Full details in
+> [CHANGELOG.md](/CHANGELOG.md). Ten more dashboard features (Decision
+> Centre, Comparisons, Command Centre, Portfolios, Digest, Explanations,
+> Audit Search, Retrospectives, Playbooks, Simulation) exist but have no
+> BAP surface yet — see issues #77–#86.
+
 ---
 
 ## Authentication
@@ -70,11 +79,54 @@ GET  /api/bap/v1/businesses/:id/metrics/snapshot  — all latest metrics
 GET  /api/bap/v1/businesses/:id/metrics           — raw metric history
 ```
 
+### Connectors
+```
+GET   /api/bap/v1/businesses/:id/connectors        — list connectors
+GET   /api/bap/v1/connectors/:id                   — connector detail
+GET   /api/bap/v1/connectors/:id/syncs             — sync history
+POST  /api/bap/v1/connectors/:id/sync              — trigger a sync
+```
+Each connector (2026-08) now carries `health_state`, `health_summary`,
+`health_impact`, `health_next_step`, and `health_coverage_complete` alongside
+the older `status` field. `health_state` is one of `healthy`, `stale`,
+`partial`, `failing`, `permission_required`, or `not_applicable` —
+`permission_required` is distinct from a generic `failing`/auth error, and
+`health_coverage_complete: false` means treat any totals from that connector
+as a lower bound, not a finished count.
+
 ### Signals
 ```
 GET   /api/bap/v1/businesses/:id/signals    — list signals
 POST  /api/bap/v1/businesses/:id/signals    — create signal
 PATCH /api/bap/v1/signals/:id               — update status
+```
+
+### Goals
+```
+GET   /api/bap/v1/businesses/:id/goals      — list goals
+POST  /api/bap/v1/businesses/:id/goals      — propose a goal
+GET   /api/bap/v1/goals/:id                 — goal detail
+PATCH /api/bap/v1/goals/:id                 — update a goal
+POST  /api/bap/v1/goals/:id/archive         — archive a goal
+POST  /api/bap/v1/goals/:id/check           — run a progress check
+GET   /api/bap/v1/goals/:id/conflicts       — conflicts with other goals
+GET   /api/bap/v1/goals/:id/assessment      — latest strategic assessment
+GET   /api/bap/v1/goals/:id/assessments     — assessment history
+GET   /api/bap/v1/goals/:id/strategies      — proposed strategies
+POST  /api/bap/v1/goals/:id/plan            — trigger strategy planning
+GET   /api/bap/v1/goals/:id/timeline        — chronological linked events
+```
+`timeline` (2026-08): now includes explicit `gap` entries for expected-but-
+missing steps (no signal ever linked, stale activity, no downstream action,
+no measured outcome past its window) instead of silently omitting them, and
+every event carries `correlation` vs. `verified_attribution` — the latter
+means a measured outcome or cited evidence backs the link, not just that it
+happened during the goal's active window.
+
+### Outcomes
+```
+GET   /api/bap/v1/businesses/:id/outcomes   — list measured task outcomes
+GET   /api/bap/v1/tasks/:id/outcome         — outcome for one task
 ```
 
 ### Tasks
@@ -85,6 +137,21 @@ GET   /api/bap/v1/tasks/:id/kanban-card      - canonical Hermes card projection
 POST  /api/bap/v1/businesses/:id/tasks      - propose task; returns 400 with structured `issues` when action schema/applicability blocks the proposal
 PATCH /api/bap/v1/tasks/:id                 — approve/reject
 ```
+
+**`scheduled_workflow` action type (2026-08):** for recurring, non-destructive
+automation you own and execute yourself (cron jobs, folder watchers,
+monitoring, scheduled checks) — propose it instead of misusing
+`content_draft`. Required payload fields: `schedule`, `target_system`.
+Optional: `cron_job_id`, `target_resource`, `side_effects`, `verification`,
+`constraints`, `disable_path`. Blueprint tracks and displays these; it never
+executes them — you do, and you're responsible for verification.
+
+**Approval routing (2026-08):** if you propose a task whose `action_type` is
+registered but has no Blueprint executor, approval now routes it straight to
+`manual_review` instead of creating a job that would just retry and
+dead-letter. If you're polling for a task to move to `executing`/`complete`
+and it goes to `manual_review` instead, that's the terminal state — it
+won't self-resolve without a human, and it won't keep cycling either.
 
 ### Trust
 ```
@@ -98,6 +165,33 @@ GET  /api/bap/v1/businesses/:id/revenue-paths                - revenue paths
 GET  /api/bap/v1/businesses/:id/scorecards                   - agent scorecard snapshot
 GET  /api/bap/v1/provider-preflight                          - provider/model preflight cache
 ```
+
+### Operating Policy (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/operating-policy                    — effective policy + version history
+GET  /api/bap/v1/businesses/:id/operating-policy/versions/:version  — one historical version
+GET  /api/bap/v1/businesses/:id/operating-policy/history             — audit trail of policy changes
+```
+Read-only by design — there is no BAP write path to a policy version.
+This is the actual rule set your proposals are judged against: auto-approve
+confidence ceiling, thresholds, `always_require_human_action_types`,
+autonomy caps and dry-run state. Worth checking before proposing something
+you expect to auto-execute, and worth citing if you need to explain why
+something needed a human.
+
+### Receipts (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/receipts    — list receipts (filterable, paginated)
+GET  /api/bap/v1/tasks/:id/receipts         — every receipt for one task
+GET  /api/bap/v1/receipts/:id               — single receipt detail
+```
+Read-only. A receipt is durable proof of what happened to an approved task,
+with five distinct states: `requested` → `authorized` → `executed` →
+`externally_acknowledged` → `verified`, plus external IDs/permalinks and
+verification evidence where available. Use this instead of polling task
+status if you need to know something genuinely landed on the other end, not
+just that Blueprint attempted it.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -119,6 +213,13 @@ PUT   /api/bap/v1/me/webhook                        — configure
 GET   /api/bap/v1/me/webhook/deliveries              — delivery history
 POST  /api/bap/v1/me/webhook/deliveries/:id/retry    — retry failed
 ```
+
+**Quarantine (2026-08):** if your webhook URL ever fails the SSRF safety
+check (resolves to localhost/a private address, or an update makes it
+unsafe), it's now automatically quarantined instead of generating endless
+failed deliveries. Quarantine clears the moment you `PUT /me/webhook` with
+a URL that validates. If `GET /me` shows a `webhook_url` you expect but
+events have silently stopped arriving, this is the first thing to check.
 
 ---
 
@@ -164,6 +265,14 @@ const valid = crypto.timingSafeEqual(
 | `metrics:read` | Read connector metrics |
 | `agents:read` | List internal agents |
 | `agents:trigger` | Trigger agent runs |
+| `goals:read` | Read goals, conflicts, assessments, strategies, timeline |
+| `goals:propose` | Propose a goal |
+| `goals:update` | Update, archive, check, or plan a goal |
+| `outcomes:read` | Read measured task outcomes |
+| `connectors:read` | Read connector list, detail, sync history, health |
+| `connectors:sync` | Trigger a connector sync |
+| `operating_policies:read` | Read effective policy, version history, audit trail |
+| `receipts:read` | Read action receipts |
 
 ---
 
@@ -207,6 +316,10 @@ class BlueprintClient {
   writeKB(bizId, path, content, fm){ return this.call(`/businesses/${bizId}/kb/write`, { method: 'POST', body: { path, content, frontmatter: fm } }) }
   metrics(bizId)                   { return this.call(`/businesses/${bizId}/metrics/snapshot`) }
   triggerAgent(bizId, aid, reason) { return this.call(`/businesses/${bizId}/agents/${aid}/run`, { method: 'POST', body: { reason } }) }
+  connectors(bizId)                 { return this.call(`/businesses/${bizId}/connectors`) }
+  goalTimeline(goalId)              { return this.call(`/goals/${goalId}/timeline`) }
+  operatingPolicy(bizId)            { return this.call(`/businesses/${bizId}/operating-policy`) }
+  receipts(bizId, p = {})           { return this.call(`/businesses/${bizId}/receipts?${new URLSearchParams(p)}`) }
 }
 ```
 
@@ -229,4 +342,7 @@ class BlueprintClient:
     def query_kb(self, biz, q):   return httpx.post(f"{self.base}/businesses/{biz}/kb/query", json={"question": q}, headers=self.h).json()
     def write_kb(self, biz, p, c, fm={}): return httpx.post(f"{self.base}/businesses/{biz}/kb/write", json={"path": p, "content": c, "frontmatter": fm}, headers=self.h).json()
     def metrics(self, biz):       return httpx.get(f"{self.base}/businesses/{biz}/metrics/snapshot", headers=self.h).json()
+    def connectors(self, biz):    return httpx.get(f"{self.base}/businesses/{biz}/connectors", headers=self.h).json()
+    def operating_policy(self, biz): return httpx.get(f"{self.base}/businesses/{biz}/operating-policy", headers=self.h).json()
+    def receipts(self, biz, **p): return httpx.get(f"{self.base}/businesses/{biz}/receipts", params=p, headers=self.h).json()
 ```
