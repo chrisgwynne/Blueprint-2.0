@@ -5,7 +5,7 @@ import { parseTimestamp } from '../lib/time.js'
 import {
   ArrowLeft, Play, Pause, RefreshCw, Save, Trash2,
   Cpu, Clock, Zap, TrendingUp, ChevronDown, ChevronRight,
-  CheckCircle, XCircle, AlertCircle, Eye, Code,
+  CheckCircle, XCircle, AlertCircle, Eye, Code, Archive, ShieldCheck,
 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import ProducedByEvent from '../components/ProducedByEvent.jsx'
@@ -15,7 +15,17 @@ import {
   getLLMProviders, getLLMModels, saveLLMCredentials, testLLMCredentials,
   patchAgentProfile,
   getAgentCalibration, recalculateAgentCalibration,
+  getAgentRoster, retireAgent,
 } from '../lib/api.js'
+
+// ─── Retention verdict badge (mirrors pages/Agents.tsx) ────────────────────────
+
+const RETENTION_COLORS: Record<string, string> = {
+  retain: 'var(--bp-green)',
+  monitor: 'var(--bp-text-3)',
+  downgrade: 'var(--bp-amber)',
+  retire: 'var(--bp-red)',
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -868,6 +878,10 @@ export default function AgentDetail() {
   const [activeTab, setActiveTab] = useState('soul')
   const [running, setRunning] = useState(false)
   const [toggling, setToggling] = useState(false)
+  // Business-scoped lifecycle cockpit data (#69): lifecycle_state, health,
+  // current work, and retention verdict — same roster the sidebar uses.
+  const [rosterEntry, setRosterEntry] = useState<any>(null)
+  const [retiring, setRetiring] = useState(false)
 
   const load = useCallback(() => {
     Promise.all([
@@ -880,7 +894,39 @@ export default function AgentDetail() {
     }).finally(() => setLoading(false))
   }, [agentId])
 
+  const loadRoster = useCallback(() => {
+    if (!currentBusiness?.id) { setRosterEntry(null); return }
+    getAgentRoster(currentBusiness.id)
+      .then((res: any) => {
+        const entry = (Array.isArray(res?.agents) ? res.agents : []).find((x: any) => x.id === agentId)
+        setRosterEntry(entry ?? null)
+      })
+      .catch(() => setRosterEntry(null))
+  }, [agentId, currentBusiness?.id])
+
   useEffect(() => { load() }, [load])
+  useEffect(() => { loadRoster() }, [loadRoster])
+
+  const retention = rosterEntry?.retention ?? null
+  const isRetired = agent?.status === 'retired'
+
+  async function handleRetire() {
+    if (!window.confirm(
+      `Retire ${agent?.name ?? agentId}? It will no longer be selected for new work. ` +
+      `Any in-flight task will be allowed to finish; queued-but-not-started tasks will be unassigned for reassignment.`,
+    )) return
+    setRetiring(true)
+    try {
+      const result: any = await retireAgent(agentId!, { business_id: currentBusiness?.id, reason: 'Retired from the agent detail page.' })
+      setAgent((prev: any) => ({ ...prev, status: 'retired' }))
+      addNotification({ type: 'success', message: result?.message ?? 'Agent retired' })
+      loadRoster()
+    } catch (err: any) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setRetiring(false)
+    }
+  }
 
   async function handleRun() {
     setRunning(true)
@@ -959,18 +1005,31 @@ export default function AgentDetail() {
             </div>
 
             {/* Status */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 4 }}>
               <span className={`pulse-dot ${isActive ? 'pulse-dot-green' : 'pulse-dot-gray'}`} />
               <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)', letterSpacing: '0.05em' }}>
                 {agent?.status?.toUpperCase() ?? 'UNKNOWN'}
               </span>
+              {rosterEntry?.health && rosterEntry.health !== agent?.status && (
+                <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
+                  ({rosterEntry.health})
+                </span>
+              )}
             </div>
 
+            {/* Current work (#69) */}
+            {rosterEntry?.current_task?.title && (
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', marginBottom: 12 }}>
+                Working on: {rosterEntry.current_task.title}
+              </div>
+            )}
+            {!rosterEntry?.current_task?.title && <div style={{ marginBottom: 12 }} />}
+
             {/* Actions */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 0 }}>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
               <button
                 onClick={handleRun}
-                disabled={running || agent?.status === 'running' || !data}
+                disabled={running || agent?.status === 'running' || !data || isRetired}
                 className="bp-btn bp-btn-primary"
                 style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
               >
@@ -981,7 +1040,7 @@ export default function AgentDetail() {
               </button>
               <button
                 onClick={handleToggle}
-                disabled={toggling}
+                disabled={toggling || isRetired}
                 className="bp-btn bp-btn-secondary"
                 style={{ fontSize: 12 }}
                 title={isActive ? 'Pause' : 'Enable'}
@@ -991,7 +1050,55 @@ export default function AgentDetail() {
                   : isActive ? <Pause size={12} /> : <Play size={12} />}
               </button>
             </div>
+            {agent?.id !== 'conductor' && (
+              <button
+                onClick={handleRetire}
+                disabled={retiring || isRetired}
+                className="bp-btn bp-btn-secondary"
+                style={{ width: '100%', justifyContent: 'center', fontSize: 12, color: isRetired ? 'var(--bp-text-3)' : 'var(--bp-red)' }}
+                title="Retire — stops new work; in-flight work finishes, queued work is unassigned for reassignment"
+              >
+                {retiring
+                  ? <RefreshCw size={12} style={{ animation: 'bp-spin-slow 1s linear infinite' }} />
+                  : <Archive size={12} />}
+                {isRetired ? 'Retired' : retiring ? 'Retiring…' : 'Retire'}
+              </button>
+            )}
           </div>
+
+          {/* Retention verdict (#69) */}
+          {retention && (
+            <div className="bp-card" style={{ padding: '16px 18px' }}>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 12 }}>
+                Retention
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                {retention.evidence.successful > 0 && <ShieldCheck size={12} style={{ color: 'var(--bp-green)' }} />}
+                <span style={{
+                  fontFamily: 'var(--bp-font-mono)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+                  color: RETENTION_COLORS[retention.verdict] ?? 'var(--bp-text-2)',
+                }}>
+                  {retention.evidence.trials_total === 0 ? 'No verified outcome yet' : retention.verdict}
+                </span>
+              </div>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', lineHeight: 1.5, marginBottom: 10 }}>
+                {retention.reason}
+              </div>
+              {[
+                { label: 'Trials', value: retention.evidence.trials_total },
+                { label: 'Successful', value: retention.evidence.successful },
+                { label: 'Unsuccessful', value: retention.evidence.unsuccessful },
+                { label: 'Trial cost', value: `$${Number(retention.evidence.total_cost_usd ?? 0).toFixed(4)}` },
+                ...(retention.evidence.mean_calibration_error != null ? [{ label: 'Mean calibration error', value: retention.evidence.mean_calibration_error.toFixed(3) }] : []),
+                ...(retention.evidence.last_verdict ? [{ label: 'Last verified outcome', value: retention.evidence.last_verdict }] : []),
+              ].map(({ label, value }) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>{label}</span>
+                  <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, fontWeight: 600, color: 'var(--bp-text)' }}>{value}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* 7-day stats */}
           <div className="bp-card" style={{ padding: '16px 18px' }}>

@@ -591,6 +591,110 @@ router.post('/:id/run', async (req: Request, res: Response) => {
   }
 });
 
+// ─── Retire agent (#69 — agent lifecycle cockpit) ────────────────────────────
+//
+// Retirement is a distinct, genuine lifecycle state — not the same thing as
+// `disabled` (a manual, easily-reversed pause) or a full uninstall (which
+// drops the business's `agent_installations` row entirely; see
+// installer.uninstallAgent, the "removed" end of the lifecycle). Retiring:
+//
+//   1. VALIDATES the transition through the same state machine every other
+//      lifecycle change goes through (agentLifecycle.transitionAgent):
+//      unknown agent → 404, already-retired → 409, otherwise any live state
+//      may transition to the terminal `archived` state (status → 'retired').
+//   2. Is AUTHORIZED like every other route on this router — isAuthenticated
+//      (session-based; this codebase has no per-route RBAC beyond that).
+//   3. Is AUDITABLE — transitionAgent writes an agent_lifecycle_events row
+//      *and* a mirrored audit_log row; this handler adds a second audit_log
+//      entry with the before/after agent snapshot, matching the convention
+//      the plain PATCH /:id handler below already uses.
+//
+// PREVENTING NEW WORK: every place in this codebase that selects an agent for
+// new work — agent-runner's run gate, event-triggers, conductor's active-roster
+// query, agentMatcher's fallback match — filters on `status = 'active'`.
+// 'retired' is never 'active', so a retired agent is excluded from all of them
+// immediately; no separate "stop assigning work" flag is needed.
+//
+// IN-FLIGHT WORK (the semantics this handler must document — issue #69):
+// we pick the SAFER option rather than force-interrupting anything.
+//   - Tasks already `executing` (or a `running` agent_run) are left alone and
+//     allowed to finish. Killing a task mid-execution risks a half-applied
+//     external write (e.g. a partially-edited theme file, a partially-sent
+//     email) with no clean rollback — finishing is safer than aborting.
+//   - Tasks that are merely `approved` (queued for this agent, not yet
+//     started) are unassigned and reverted to `proposed`, since nothing has
+//     been done yet — it is safe to hand them back to the queue for a human
+//     or the conductor to redirect to another agent instead of letting them
+//     silently stall forever behind a retired owner.
+router.post('/:id/retire', async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id);
+    const existing = db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!existing) return res.status(404).json({ error: 'Agent not found.' });
+    if (existing.status === 'retired') {
+      return res.status(409).json({ error: `Agent '${id}' is already retired.` });
+    }
+
+    const { business_id, reason } = req.body as { business_id?: string; reason?: string };
+    const session = req.session as unknown as Record<string, unknown>;
+    const user = session?.user as Record<string, unknown> | undefined;
+    const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
+    const before = parseRow(existing);
+
+    const { transitionAgent } = await import('../agents/agentLifecycle.js');
+    let transition: { ok: boolean; from: string | null; to: string };
+    try {
+      transition = transitionAgent(id, 'archived', actor, {
+        reason: reason ?? 'Retired by operator.',
+        businessId: business_id ?? null,
+        metadata: { legacy_requested_status: 'retired' },
+      });
+    } catch (err) {
+      // Illegal transition per VALID_AGENT_TRANSITIONS.
+      return res.status(409).json({ error: (err as Error).message });
+    }
+
+    // In-flight handling — see comment block above for the documented
+    // semantics. Queued-but-not-started work is handed back to the queue;
+    // work already executing is left untouched to finish naturally.
+    const reassigned = db.prepare(`
+      SELECT id FROM tasks WHERE assigned_to = ? AND status = 'approved'
+    `).all(id) as Array<{ id: string }>;
+    if (reassigned.length > 0) {
+      db.prepare(`
+        UPDATE tasks SET assigned_to = NULL, status = 'proposed', updated_at = CURRENT_TIMESTAMP
+         WHERE assigned_to = ? AND status = 'approved'
+      `).run(id);
+    }
+    const inFlight = db.prepare(`
+      SELECT id FROM tasks WHERE assigned_to = ? AND status = 'executing'
+    `).all(id) as Array<{ id: string }>;
+
+    const after = parseRow(db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as Record<string, unknown> | null);
+    audit(business_id ?? null, 'agent', id, 'retire', actor, before, after);
+
+    const reassignedIds = reassigned.map((r) => r.id);
+    const inFlightIds = inFlight.map((r) => r.id);
+
+    return res.json({
+      ok: true,
+      agent_id: id,
+      status: after?.status,
+      lifecycle_state: transition.to,
+      reassigned_task_ids: reassignedIds,
+      in_flight_task_ids: inFlightIds,
+      message: [
+        'Agent retired. It will not be selected for new work.',
+        inFlightIds.length > 0 ? `${inFlightIds.length} in-flight task(s) will be allowed to finish.` : null,
+        reassignedIds.length > 0 ? `${reassignedIds.length} queued task(s) were unassigned for reassignment.` : null,
+      ].filter(Boolean).join(' '),
+    });
+  } catch (err) {
+    console.error('[agents] Retire error:', err);
+    return res.status(500).json({ error: (err as Error).message || 'Failed to retire agent.' });
+  }
+});
+
 // ─── Get run history ──────────────────────────────────────────────────────────
 
 router.get('/:id/runs', (req: Request, res: Response) => {

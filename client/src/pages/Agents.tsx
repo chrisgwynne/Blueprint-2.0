@@ -4,13 +4,46 @@ import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import {
   Play, Pause, RefreshCw, Download, ChevronRight, Cpu, AlertCircle,
-  Clock, Zap, TrendingUp, Package, UserPlus, Sparkles,
+  Clock, Zap, TrendingUp, Package, UserPlus, Sparkles, Archive, ShieldCheck,
 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import {
   getAgents, runAgent, updateAgent, getAgentTemplates, installAgent,
-  hireAgent, getHireRecommendations,
+  hireAgent, getHireRecommendations, getAgentRoster, retireAgent,
 } from '../lib/api.js'
+
+// ─── Retention verdict badge ───────────────────────────────────────────────────
+
+const RETENTION_COLORS: Record<string, string> = {
+  retain: 'var(--bp-green)',
+  monitor: 'var(--bp-text-3)',
+  downgrade: 'var(--bp-amber)',
+  retire: 'var(--bp-red)',
+}
+
+function RetentionBadge({ retention, hasVerifiedOutcome }: { retention: any; hasVerifiedOutcome?: boolean | null }) {
+  if (!retention) return null
+  // No measured trials yet — this is an installed/standby agent, not (yet)
+  // an agent with productive activity behind it. Say so plainly rather than
+  // implying a verdict the evidence doesn't support.
+  if (retention.evidence?.trials_total === 0) {
+    return (
+      <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', border: '1px solid var(--bp-border)', borderRadius: 3, padding: '1px 5px' }}>
+        No verified outcome yet
+      </span>
+    )
+  }
+  const color = RETENTION_COLORS[retention.verdict] ?? 'var(--bp-text-3)'
+  return (
+    <span
+      title={retention.reason}
+      style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color, border: `1px solid ${color}55`, borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'inline-flex', alignItems: 'center', gap: 3 }}
+    >
+      {hasVerifiedOutcome && <ShieldCheck size={9} />}
+      {retention.verdict}
+    </span>
+  )
+}
 
 // ─── Provider badge ───────────────────────────────────────────────────────────
 
@@ -51,19 +84,26 @@ function StatusDot({ status }: { status: string }) {
 
 interface AgentCardProps {
   agent: any
+  rosterEntry?: any
   onNavigate: (id: string) => void
   onRun: (agent: any) => Promise<void>
   onToggle: (agent: any) => Promise<void>
+  onRetire: (agent: any) => Promise<void>
+  retiring?: boolean
 }
 
-function AgentCard({ agent, onNavigate, onRun, onToggle }: AgentCardProps) {
+function AgentCard({ agent, rosterEntry, onNavigate, onRun, onToggle, onRetire, retiring }: AgentCardProps) {
   const [running, setRunning] = useState(false)
   const [toggling, setToggling] = useState(false)
 
   const isConductor = agent.id === 'conductor'
   const isActive = agent.status === 'active' || agent.status === 'running'
+  const isRetired = agent.status === 'retired'
   const ps = agent.profile_summary ?? {}
   const stats = agent.stats_7d ?? {}
+  const retention = rosterEntry?.retention ?? null
+  const currentTaskTitle = rosterEntry?.current_task?.title ?? null
+  const lastVerdict = retention?.evidence?.last_verdict ?? null
 
   async function handleRun(e: React.MouseEvent) {
     e.stopPropagation()
@@ -77,6 +117,11 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }: AgentCardProps) {
     setToggling(true)
     try { await onToggle(agent) }
     finally { setToggling(false) }
+  }
+
+  async function handleRetire(e: React.MouseEvent) {
+    e.stopPropagation()
+    await onRetire(agent)
   }
 
   return (
@@ -115,9 +160,10 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }: AgentCardProps) {
                 </span>
               </div>
             </div>
-            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginBottom: retention ? 6 : 0 }}>
               {ps.title ?? agent.title ?? ''}
             </div>
+            {retention && <RetentionBadge retention={retention} hasVerifiedOutcome={rosterEntry?.has_verified_outcome} />}
           </div>
         </div>
       </div>
@@ -134,6 +180,31 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }: AgentCardProps) {
               <Cpu size={10} />Model
             </span>
             <ProviderBadge llm={ps.llm} />
+          </div>
+        )}
+
+        {/* Current work (#69) */}
+        {currentTaskTitle && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <Zap size={10} />Working on
+            </span>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {currentTaskTitle}
+            </span>
+          </div>
+        )}
+
+        {/* Last verified outcome (#69) */}
+        {lastVerdict && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>Last verified outcome</span>
+            <span style={{
+              fontFamily: 'var(--bp-font-mono)', fontSize: 10,
+              color: lastVerdict === 'successful' ? 'var(--bp-green)' : lastVerdict === 'unsuccessful' ? 'var(--bp-red)' : 'var(--bp-text-2)',
+            }}>
+              {lastVerdict}
+            </span>
           </div>
         )}
 
@@ -191,13 +262,24 @@ function AgentCard({ agent, onNavigate, onRun, onToggle }: AgentCardProps) {
         </button>
         <button
           onClick={handleToggle}
-          disabled={toggling}
+          disabled={toggling || isRetired}
           className="bp-btn bp-btn-secondary"
           style={{ fontSize: 11 }}
           title={isActive ? 'Pause' : 'Enable'}
         >
           {toggling ? <RefreshCw size={11} style={{ animation: 'bp-spin-slow 1s linear infinite' }} /> : isActive ? <Pause size={11} /> : <Play size={11} />}
         </button>
+        {!isConductor && !isRetired && (
+          <button
+            onClick={handleRetire}
+            disabled={retiring}
+            className="bp-btn bp-btn-secondary"
+            style={{ fontSize: 11, color: 'var(--bp-red)' }}
+            title="Retire — stops new work; in-flight work finishes, queued work is unassigned for reassignment"
+          >
+            {retiring ? <RefreshCw size={11} style={{ animation: 'bp-spin-slow 1s linear infinite' }} /> : <Archive size={11} />}
+          </button>
+        )}
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center' }}>
           <ChevronRight size={13} style={{ color: 'var(--bp-text-3)' }} />
         </div>
@@ -381,6 +463,12 @@ export default function Agents() {
   const [recommendations, setRecommendations] = useState<any[]>([])
   const [recsLoading, setRecsLoading] = useState(false)
   const [hiring, setHiring] = useState<string | null>(null)
+  // Business-scoped lifecycle cockpit data (#69) — lifecycle_state, current
+  // work and retention verdict per agent. Merged onto the installed-agent
+  // list below rather than replacing it; GET /agents stays the source of
+  // truth for install state, run stats and soul files.
+  const [roster, setRoster] = useState<any[]>([])
+  const [retiring, setRetiring] = useState<string | null>(null)
 
   const loadData = useCallback(() => {
     Promise.all([
@@ -401,8 +489,18 @@ export default function Agents() {
       .finally(() => setRecsLoading(false))
   }, [currentBusiness?.id])
 
+  const loadRoster = useCallback(() => {
+    if (!currentBusiness?.id) { setRoster([]); return }
+    getAgentRoster(currentBusiness.id)
+      .then((res: any) => setRoster(Array.isArray(res?.agents) ? res.agents : []))
+      .catch(() => setRoster([]))
+  }, [currentBusiness?.id])
+
   useEffect(() => { loadData() }, [loadData])
   useEffect(() => { loadRecommendations() }, [loadRecommendations])
+  useEffect(() => { loadRoster() }, [loadRoster])
+
+  const rosterById = new Map(roster.map((r: any) => [r.id, r]))
 
   async function handleRun(agent: any) {
     try {
@@ -421,6 +519,28 @@ export default function Agents() {
       addNotification({ type: 'success', message: `Agent ${newStatus}` })
     } catch (err: any) {
       addNotification({ type: 'error', message: err.message })
+    }
+  }
+
+  // Retirement (#69) — a distinct, terminal lifecycle state from 'paused'.
+  // It stops the agent being selected for new work; in-flight tasks are left
+  // to finish and merely-queued tasks are unassigned for reassignment (see
+  // POST /agents/:id/retire for the full documented semantics).
+  async function handleRetire(agent: any) {
+    if (!window.confirm(
+      `Retire ${agent.name}? It will no longer be selected for new work. ` +
+      `Any in-flight task will be allowed to finish; queued-but-not-started tasks will be unassigned for reassignment.`,
+    )) return
+    setRetiring(agent.id)
+    try {
+      const result: any = await retireAgent(agent.id, { business_id: currentBusiness?.id, reason: 'Retired from the Agents page.' })
+      setAgents(prev => prev.map(a => a.id === agent.id ? { ...a, status: 'retired' } : a))
+      addNotification({ type: 'success', message: result?.message ?? `${agent.name} retired` })
+      loadRoster()
+    } catch (err: any) {
+      addNotification({ type: 'error', message: err.message })
+    } finally {
+      setRetiring(null)
     }
   }
 
@@ -556,9 +676,12 @@ export default function Agents() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                rosterEntry={rosterById.get(agent.id)}
                 onNavigate={(id) => navigate(`/agents/${id}`)}
                 onRun={handleRun}
                 onToggle={handleToggle}
+                onRetire={handleRetire}
+                retiring={retiring === agent.id}
               />
             ))}
           </div>
@@ -615,11 +738,45 @@ export default function Agents() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                rosterEntry={rosterById.get(agent.id)}
                 onNavigate={(id) => navigate(`/agents/${id}`)}
                 onRun={handleRun}
                 onToggle={handleToggle}
+                onRetire={handleRetire}
+                retiring={retiring === agent.id}
               />
             ))}
+          </div>
+        </>
+      )}
+
+      {/* Retired agents — kept visible (not deleted) so ownership, cost and
+          past outcomes remain auditable; distinct from Paused (#69). */}
+      {!loading && retiredAgents.length > 0 && (
+        <>
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Archive size={11} />Retired — {retiredAgents.length}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 36 }}>
+            {retiredAgents.map(agent => {
+              const r = rosterById.get(agent.id)
+              return (
+                <div
+                  key={agent.id}
+                  onClick={() => navigate(`/agents/${agent.id}`)}
+                  className="bp-card"
+                  style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', opacity: 0.7 }}
+                >
+                  <span style={{ fontSize: 18 }}>{agent.profile_summary?.avatar ?? '🤖'}</span>
+                  <span style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 13, color: 'var(--bp-text-2)' }}>{agent.name}</span>
+                  {r?.retention && <RetentionBadge retention={r.retention} hasVerifiedOutcome={r.has_verified_outcome} />}
+                  <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginLeft: 'auto' }}>
+                    Not selected for new work
+                  </span>
+                  <ChevronRight size={13} style={{ color: 'var(--bp-text-3)' }} />
+                </div>
+              )
+            })}
           </div>
         </>
       )}
