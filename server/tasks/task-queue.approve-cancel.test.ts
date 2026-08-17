@@ -26,11 +26,18 @@ afterEach(() => {
 });
 
 function proposeTask(): { id: string } {
+  // action_type must actually be executable (in executor.ts's
+  // EXECUTABLE_ACTION_TYPES / action_registry.dispatched_by_executor) —
+  // these tests assert approveTask() enqueues a real, executable job.
+  // 'investigation' has no required connectors/business type and needs no
+  // approval-flow scaffolding beyond that. See issue #39: a registered but
+  // non-executable action_type (e.g. 'notification') is now routed to
+  // manual_review at approval instead of being enqueued.
   const task = createTask({
     business_id: BIZ,
     title: 'Approve/cancel fixture task',
     proposed_by: 'test',
-    action_type: 'notification',
+    action_type: 'investigation',
     action_payload: { note: 'x' },
     approval_mode: 'requires_approval',
   })!;

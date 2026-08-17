@@ -81,16 +81,23 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(() => approveTask(task.id, 'tester')).toThrow(/business_type_incompatible|supports business types/);
   });
 
-  test('the same action_type succeeds once the business profile is ecommerce', () => {
+  // Issue #39: product_suggestion is registered and valid for an ecommerce
+  // business, but has no executor.ts dispatch case (dispatched_by_executor
+  // is false) — approveTask() must route it straight to manual_review
+  // instead of enqueuing an execution_jobs row that could never succeed.
+  test('a valid but non-executable action_type is routed to manual_review, not enqueued', () => {
     updateBusinessProfile(BIZ, { business_type: 'ecommerce' });
     const task = propose('product_suggestion');
     const after = approveTask(task.id, 'tester');
-    expect(after!.status).toBe('approved');
+    expect(after!.status).toBe('manual_review');
+
+    const jobs = db.prepare(`SELECT * FROM execution_jobs WHERE task_id = ?`).all(task.id) as Array<{ status: string }>;
+    expect(jobs.length).toBe(0);
   });
 
   // gbp_post requires a 'gbp' connector but — unlike gbp_update — is not in
   // executor.ts's EXECUTABLE_ACTION_TYPES, for the same determinism reason.
-  test('a registered action_type with no configured connector now BLOCKS approval', () => {
+  test('a registered action_type with no configured connector still BLOCKS approval before the executable check runs', () => {
     updateBusinessProfile(BIZ, { business_type: 'other' });
     const task = propose('gbp_post'); // requires a 'gbp' connector — none configured for BIZ
     expect(() => approveTask(task.id, 'tester')).toThrow(/requires connector type/);
@@ -107,12 +114,19 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(() => approveTask(task.id, 'tester')).toThrow(/confidence/);
   });
 
-  test('a connected, confidence-scored-healthy connector clears both checks', () => {
+  // Issue #39: once every other validation gate clears (connector present
+  // and healthy), gbp_post is still not in EXECUTABLE_ACTION_TYPES, so this
+  // must land in manual_review with no execution_jobs row — not 'approved'
+  // with a job the worker can never complete.
+  test('a connected, confidence-scored-healthy connector clears validation but still routes to manual_review (no executor)', () => {
     updateBusinessProfile(BIZ, { business_type: 'other' });
     addHealthyConnector('gbp');
     const task = propose('gbp_post');
     const after = approveTask(task.id, 'tester');
-    expect(after!.status).toBe('approved');
+    expect(after!.status).toBe('manual_review');
+
+    const jobs = db.prepare(`SELECT * FROM execution_jobs WHERE task_id = ?`).all(task.id) as Array<{ status: string }>;
+    expect(jobs.length).toBe(0);
   });
 
   test('a BAP agent missing a required permission is blocked', () => {
@@ -127,7 +141,10 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
   });
 
   test('a BAP agent holding the required permission is not blocked by the permission check', () => {
-    upsertActionRegistryEntry('test_perm_action_2', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent' });
+    // dispatched_by_executor: true — this test is about the permission
+    // gate, not issue #39's executable-routing gate, so give it a real
+    // dispatch case to keep those two concerns isolated.
+    upsertActionRegistryEntry('test_perm_action_2', { required_permissions: ['tasks:approve'], side_effect_classification: 'internal_idempotent', dispatched_by_executor: true });
     const agentId = generateId();
     db.prepare(`
       INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, permissions, business_access)
@@ -139,7 +156,7 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
   });
 
   test('a dashboard/telegram approver is never subject to the permission check', () => {
-    upsertActionRegistryEntry('test_perm_action_3', { required_permissions: ['some:permission-nobody-has'], side_effect_classification: 'internal_idempotent' });
+    upsertActionRegistryEntry('test_perm_action_3', { required_permissions: ['some:permission-nobody-has'], side_effect_classification: 'internal_idempotent', dispatched_by_executor: true });
     const task = propose('test_perm_action_3');
     const after = approveTask(task.id, 'dashboard:admin');
     expect(after!.status).toBe('approved');
