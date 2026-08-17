@@ -15,6 +15,18 @@ import { fileURLToPath } from 'node:url';
 import db from '../db/db.js';
 import { listSystemIssues } from '../system/system-issues.js';
 
+// createSystemIssue() now fire-and-forget dispatches a notification for
+// severity >= error (see system-issues.ts's notifyIfSevereEnough), which
+// this file's 100%-cap tests would trigger for real — inserting a
+// `notifications` row that outlives the synchronous test body (the
+// dispatch is an unawaited dynamic import) and then blocks this file's own
+// cleanup()'s `DELETE FROM businesses` with a FK violation. Mocked here
+// (matching system-issues.notify.test.ts's own convention) so these tests
+// only ever assert on the durable system_issues row they're actually about.
+mock.module('../notifications/dispatcher.js', () => ({
+  dispatchToAll: mock(async () => []),
+}));
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const BIZ = 'biz_budget_warning_test';
