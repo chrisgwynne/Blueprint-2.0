@@ -10,6 +10,7 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { classifyOutcomeTaxonomy, emptyTaxonomyCounts } from '../tasks/outcome-taxonomy.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -37,7 +38,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
     }
 
     const tasks = db.prepare(`
-      SELECT t.id, t.title, t.action_type, t.proposed_by,
+      SELECT t.id, t.title, t.status, t.action_type, t.proposed_by,
              t.completed_at, t.approved_at,
              COALESCE(t.target_metric, '') as target_metric,
              COALESCE(t.target_metric_baseline, NULL) as baseline_value
@@ -47,6 +48,8 @@ router.get('/:businessId', (req: Request, res: Response) => {
       LIMIT ?
     `).all(...params, limit);
 
+    const taxonomyCounts = emptyTaxonomyCounts();
+
     const outcomes = (tasks as any[]).map((t) => {
       const checks = db.prepare(`
         SELECT * FROM task_outcomes WHERE task_id = ? ORDER BY weeks_after ASC
@@ -55,6 +58,19 @@ router.get('/:businessId', (req: Request, res: Response) => {
       const check_2w = checks.find(c => c.weeks_after === 2) ?? null;
       const check_4w = checks.find(c => c.weeks_after === 4) ?? null;
       const latest = check_4w ?? check_2w;
+
+      // Issue #63: honest activity/verified_action/outcome_measured/
+      // roi_not_measurable label + a citation (source outcome record +
+      // exact measurement window) so this figure can be traced back.
+      const taxonomy = classifyOutcomeTaxonomy({
+        task_id: t.id,
+        task_status: t.status,
+        action_type: t.action_type,
+        target_metric: t.target_metric || null,
+        completed_at: t.completed_at,
+        checks,
+      });
+      taxonomyCounts[taxonomy.state]++;
 
       return {
         task_id: t.id,
@@ -68,6 +84,9 @@ router.get('/:businessId', (req: Request, res: Response) => {
         check_2w,
         check_4w,
         final_verdict: latest?.verdict ?? 'pending',
+        taxonomy_state: taxonomy.state,
+        taxonomy_reason: taxonomy.reason,
+        citation: taxonomy.citation,
       };
     });
 
@@ -108,6 +127,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
         best_label: bestOutcome ? `+${Math.round(bestOutcome.change)}% ${bestOutcome.target_metric?.split('.').pop() ?? ''}` : null,
         best_sub: bestOutcome?.task_title ?? null,
         worst_label: worstOutcome ? `${Math.round(worstOutcome.change)}%` : null,
+        taxonomy_counts: taxonomyCounts,
       },
     });
   } catch (err) {

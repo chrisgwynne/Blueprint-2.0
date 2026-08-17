@@ -34,6 +34,7 @@ import {
 } from '../bap/route-helpers.js';
 import { computeFreshness } from '../connectors/freshness.js';
 import { isConnectorApplicable } from '../connectors/confidence.js';
+import { explainConnectorHealth } from '../connectors/health.js';
 
 // No blanket auth/rate-limit middleware here — see bap-goals.ts's
 // docstring on this file's mounting inside bap.ts's already-authenticated
@@ -73,6 +74,17 @@ function withFreshness(row: Record<string, unknown>): Record<string, unknown> {
     { type: row.type as string, last_sync: row.last_sync as string | null },
     row.business_id as string,
   );
+  // health_state/health_* are the issue #65 explainer surface — a superset
+  // of `status` that also distinguishes permission_required (a scope/
+  // permission fix, not a broken integration) and partial (synced, but the
+  // last sync didn't capture everything) from the coarser freshness value
+  // `status` already carries. `status` itself is left untouched below for
+  // BAP-consumer backward compatibility.
+  const health = explainConnectorHealth({
+    id: row.id as string, business_id: row.business_id as string, type: row.type as string,
+    name: row.name as string, status: row.status as string, last_sync: row.last_sync as string | null,
+    last_error: row.last_error as string | null, config: row.config as Record<string, unknown>,
+  });
   return normalizeTimestamps({
     id: row.id, business_id: row.business_id, type: row.type, name: row.name,
     status: applicable ? freshness.status : 'not_applicable', raw_status: row.status, last_sync: row.last_sync,
@@ -82,6 +94,11 @@ function withFreshness(row: Record<string, unknown>): Record<string, unknown> {
     stale_threshold_hours: freshness.stale_threshold_hours,
     created_at: row.created_at,
     ...(applicable ? {} : { not_applicable_reason: `This connector type is not used by this business (business_type is not 'ecommerce') and has never synced.` }),
+    health_state: health.state,
+    health_summary: health.summary,
+    health_impact: health.impact,
+    health_next_step: health.next_step,
+    health_coverage_complete: health.coverage_complete,
   }, ['last_sync', 'created_at']);
 }
 

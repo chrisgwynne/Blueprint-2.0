@@ -47,8 +47,10 @@ const DOCS_LINKS: Record<string, string> = {
 // Page title map
 const PAGE_TITLES: Record<string, string> = {
   '/':           'Dashboard',
+  '/digest':     'While You Were Away',
   '/signals':    'Signals',
   '/tasks':      'Tasks',
+  '/decision-centre': 'Decision Centre',
   '/chat':       'Chat',
   '/agents':     'Agents',
   '/connectors': 'Connectors',

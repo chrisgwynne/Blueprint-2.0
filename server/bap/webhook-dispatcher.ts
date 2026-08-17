@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import db from '../db/db.js';
 import { assertSafeWebhookUrl } from '../lib/ssrf-guard.js';
 import { quarantineAgentWebhook } from './webhook-reconciliation.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
 
 interface BapAgent {
   id: string;
@@ -44,6 +45,9 @@ function agentCanReceiveEvent(agent: BapAgent, businessId: unknown): boolean {
  * @param payload - event-specific data
  */
 export function dispatchWebhookEvent(eventType: string, payload: unknown): void {
+  // #67: an outbound webhook is visible outside Blueprint and cannot be taken
+  // back, so it is blocked rather than merely unrecorded.
+  guardSimulationSideEffect('webhook.dispatch', eventType, `dispatching BAP webhook event '${eventType}'`);
   // Find agents subscribed to this event
   let agents: BapAgent[];
   try {

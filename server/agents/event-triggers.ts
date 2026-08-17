@@ -26,6 +26,7 @@
  */
 
 import db from '../db/db.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
 
 interface EventTriggerConfig {
   event: string;
@@ -107,6 +108,9 @@ export async function dispatchAgentEvent(
   eventData: EventData = {},
   businessId: string,
 ): Promise<void> {
+  // #67: dispatching an agent event wakes real agents, which propose real
+  // work. A preview describes that; it does not trigger it.
+  guardSimulationSideEffect('agent_event.dispatch', eventType, `dispatching agent event '${eventType}'`);
   if (!eventType || !businessId) return;
 
   try {

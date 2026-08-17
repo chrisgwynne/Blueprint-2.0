@@ -1,10 +1,16 @@
 import React, { useEffect, useState, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { BookMarked, Play, ArrowLeft, CheckCircle2, XCircle, Lightbulb } from 'lucide-react'
+import {
+  BookMarked, Play, ArrowLeft, CheckCircle2, XCircle, Lightbulb,
+  GitBranch, ShieldCheck, AlertTriangle, HelpCircle, Undo2, FileSearch,
+} from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { parseTimestamp } from '../lib/time'
 import useStore from '../lib/store'
-import { getRetrospectives, getRetrospective, runRetrospective } from '../lib/api'
+import {
+  getRetrospectives, getRetrospective, runRetrospective,
+  reviewRetrospectiveProposal, rollbackRetrospectiveProposal,
+} from '../lib/api'
 import type { ElementType } from 'react'
 
 interface WhatWorkedItem {
@@ -36,6 +42,83 @@ interface AgentAssessment {
   note?: string
 }
 
+// ─── Structured operating-change proposals (#73) ─────────────────────────────
+
+interface CitedRecord {
+  kind: string
+  id: string
+  summary: string
+}
+
+interface ProposalConflict {
+  kind: string
+  subject: string
+  detail: string
+  other_business_id?: string | null
+}
+
+interface MeasuredEffect {
+  state: 'known' | 'unknown' | 'not_comparable'
+  value?: Record<string, number | null> | null
+  citation?: string | null
+  reason?: string | null
+}
+
+type ProposalTarget = 'policy' | 'workflow' | 'agent_lifecycle'
+type ProposalBasis = 'evidence_backed' | 'hypothesis' | 'conflicting_evidence'
+type ProposalStatus = 'proposed' | 'approved' | 'rejected' | 'expired' | 'abandoned'
+
+interface DraftRef {
+  kind: 'policy_patch' | 'playbook_version' | 'agent_lifecycle'
+  next_version?: number
+  base_version?: number | null
+  changes?: Array<{ field: string; from: unknown; to: unknown }>
+  workflow_id?: string
+  workflow_name?: string
+  version?: number
+  validation_state?: string
+  agent_id?: string
+  retention_verdict?: string
+  action?: string
+}
+
+interface Proposal {
+  id: string
+  target: ProposalTarget
+  title: string
+  statement: string
+  basis: ProposalBasis
+  basis_reason: string
+  cited_records?: CitedRecord[]
+  measured_effect?: MeasuredEffect | null
+  conflicts?: ProposalConflict[]
+  expected_benefit: string
+  risk: string
+  rollback_plan: string
+  expires_at?: string | null
+  draft_ref?: DraftRef | null
+  decision_task_id?: string | null
+  status: ProposalStatus
+  activation_result?: Record<string, unknown> | null
+  review_reason?: string | null
+  reviewed_by?: string | null
+  business_id: string
+}
+
+interface EvidenceGap {
+  subject: string
+  reason: string
+  detail: string
+  measured_outcomes: number
+  required_outcomes: number
+}
+
+interface UnstructuredSuggestion {
+  text: string
+  source: string
+  not_proposed_reason: string
+}
+
 interface RetroData {
   id: string
   period_start: string
@@ -48,6 +131,9 @@ interface RetroData {
   open_windows?: OpenWindowItem[]
   recommendations?: string[]
   operating_changes?: string[]
+  proposals?: Proposal[]
+  evidence_gaps?: EvidenceGap[]
+  unstructured_suggestions?: UnstructuredSuggestion[]
   kb_path?: string
   created_at: string
   triggered_by?: string
@@ -86,12 +172,276 @@ function Section<T>({ title, icon: Icon, color, items, render }: SectionProps<T>
   )
 }
 
+// ─── Proposal presentation (#73) ─────────────────────────────────────────────
+
+/**
+ * The basis badge is the most important thing on a proposal. It is what stops
+ * a reader treating "we noticed a pattern" as "we proved this fix works", so
+ * it is shown before the proposal text rather than tucked into a footnote.
+ */
+const BASIS_META: Record<ProposalBasis, { label: string; color: string; icon: ElementType; blurb: string }> = {
+  evidence_backed: {
+    label: 'Evidence-backed',
+    color: 'var(--bp-green)',
+    icon: ShieldCheck,
+    blurb: 'Measured outcome records support this pattern. That is not the same as proving the change will fix it.',
+  },
+  conflicting_evidence: {
+    label: 'Conflicting evidence',
+    color: 'var(--bp-amber)',
+    icon: AlertTriangle,
+    blurb: 'The records disagree. They have been shown side by side rather than averaged into one answer.',
+  },
+  hypothesis: {
+    label: 'Hypothesis',
+    color: 'var(--bp-text-3)',
+    icon: HelpCircle,
+    blurb: 'Not enough measured evidence to claim a pattern. This is something to try, not a finding.',
+  },
+}
+
+const TARGET_META: Record<ProposalTarget, { label: string; icon: ElementType }> = {
+  policy: { label: 'Operating policy', icon: ShieldCheck },
+  workflow: { label: 'Workflow / playbook', icon: GitBranch },
+  agent_lifecycle: { label: 'Agent lifecycle', icon: BookMarked },
+}
+
+const STATUS_COLOR: Record<ProposalStatus, string> = {
+  proposed: 'var(--bp-blue)',
+  approved: 'var(--bp-green)',
+  rejected: 'var(--bp-red)',
+  expired: 'var(--bp-text-3)',
+  abandoned: 'var(--bp-text-3)',
+}
+
+const mono = 'var(--bp-font-mono)'
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ fontFamily: mono, fontSize: 9, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--bp-text-3)' }}>
+        {label}
+      </div>
+      <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--bp-text-2)', lineHeight: 1.5, marginTop: 2 }}>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+/** What approving this proposal would actually activate, and where. */
+function DraftSummary({ draft }: { draft: DraftRef }) {
+  if (draft.kind === 'policy_patch') {
+    return (
+      <Field label="Draft it would activate">
+        Operating policy version <strong>{draft.next_version}</strong> (from version {draft.base_version}).
+        {Array.isArray(draft.changes) && draft.changes.length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            {draft.changes.map((c, i) => (
+              <div key={i} style={{ color: 'var(--bp-text-3)' }}>
+                <code>{c.field}</code>: {JSON.stringify(c.from)} → {JSON.stringify(c.to)}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ color: 'var(--bp-text-3)', marginTop: 4 }}>
+          No policy version is written until this is approved.
+        </div>
+      </Field>
+    )
+  }
+  if (draft.kind === 'playbook_version') {
+    return (
+      <Field label="Draft it would activate">
+        Draft playbook version <strong>{draft.version}</strong> of "{draft.workflow_name}"
+        {draft.base_version != null && <> (replacing version {draft.base_version})</>}
+        {draft.validation_state && <> · validation: {draft.validation_state}</>}
+        {draft.workflow_id && (
+          <> · <Link to={`/workflows/${draft.workflow_id}`} style={{ color: 'var(--bp-blue)' }}>open playbook →</Link></>
+        )}
+        <div style={{ color: 'var(--bp-text-3)', marginTop: 4 }}>
+          The draft exists now but never runs. Only the active version runs.
+        </div>
+      </Field>
+    )
+  }
+  return (
+    <Field label="Action it would take">
+      {draft.action === 'retire' ? 'Retire' : 'Move to standby'} agent <strong>{draft.agent_id}</strong>
+      {draft.retention_verdict && <> · retention verdict: {draft.retention_verdict}</>}
+    </Field>
+  )
+}
+
+interface ProposalCardProps {
+  proposal: Proposal
+  onReview: (proposal: Proposal, outcome: 'approve' | 'reject') => void
+  onRollback: (proposal: Proposal) => void
+  busy: boolean
+}
+
+function ProposalCard({ proposal, onReview, onRollback, busy }: ProposalCardProps) {
+  const [showRecords, setShowRecords] = useState(false)
+  const basis = BASIS_META[proposal.basis] ?? BASIS_META.hypothesis
+  const target = TARGET_META[proposal.target]
+  const BasisIcon = basis.icon
+  const TargetIcon = target?.icon ?? BookMarked
+  const pending = proposal.status === 'proposed'
+  const records = proposal.cited_records ?? []
+  const conflicts = proposal.conflicts ?? []
+
+  return (
+    <div className="bp-card" style={{ padding: 16, marginBottom: 12, borderLeft: `3px solid ${basis.color}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: mono, fontSize: 9,
+              letterSpacing: '0.08em', textTransform: 'uppercase', color: basis.color,
+              border: `1px solid ${basis.color}`, borderRadius: 3, padding: '2px 6px' }}>
+              <BasisIcon size={10} /> {basis.label}
+            </span>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: mono, fontSize: 9,
+              letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--bp-text-3)' }}>
+              <TargetIcon size={10} /> {target?.label ?? proposal.target}
+            </span>
+            <span style={{ fontFamily: mono, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase',
+              color: STATUS_COLOR[proposal.status] ?? 'var(--bp-text-3)' }}>
+              {proposal.status}
+            </span>
+          </div>
+          <div style={{ fontFamily: 'var(--bp-font-display)', fontWeight: 700, fontSize: 13 }}>
+            {proposal.title}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--bp-text)', lineHeight: 1.5, marginTop: 8 }}>
+        {proposal.statement}
+      </div>
+
+      <div style={{ fontFamily: mono, fontSize: 10, color: basis.color, lineHeight: 1.5, marginTop: 8,
+        background: 'var(--bp-bg-2)', padding: '6px 8px', borderRadius: 3 }}>
+        <div style={{ fontWeight: 700 }}>{basis.blurb}</div>
+        <div style={{ color: 'var(--bp-text-2)', marginTop: 3 }}>{proposal.basis_reason}</div>
+      </div>
+
+      {conflicts.length > 0 && (
+        <Field label="Conflicts (not averaged away)">
+          {conflicts.map((c, i) => (
+            <div key={i} style={{ marginTop: i === 0 ? 0 : 4, color: 'var(--bp-amber)' }}>{c.detail}</div>
+          ))}
+        </Field>
+      )}
+
+      <Field label="Expected benefit">{proposal.expected_benefit}</Field>
+      <Field label="Risk">{proposal.risk}</Field>
+      <Field label="Rollback">{proposal.rollback_plan}</Field>
+      {proposal.expires_at && (
+        <Field label="Expires">
+          {new Date(proposal.expires_at).toLocaleDateString()} — if nobody reviews it by then it lapses and its draft is abandoned.
+        </Field>
+      )}
+      {proposal.draft_ref && <DraftSummary draft={proposal.draft_ref} />}
+      {proposal.decision_task_id && (
+        <Field label="Decision queue">
+          <Link to={`/tasks/${proposal.decision_task_id}`} style={{ color: 'var(--bp-blue)' }}>
+            Review item {proposal.decision_task_id.slice(0, 8)} →
+          </Link>
+          {' '}Approval and rejection go through the same queue as any other decision.
+        </Field>
+      )}
+      {proposal.review_reason && (
+        <Field label={`Reviewer note${proposal.reviewed_by ? ` (${proposal.reviewed_by})` : ''}`}>
+          {proposal.review_reason}
+        </Field>
+      )}
+
+      {records.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button onClick={() => setShowRecords((v) => !v)} className="bp-btn bp-btn-ghost" style={{ fontSize: 10 }}>
+            <FileSearch size={10} /> {showRecords ? 'Hide' : 'Show'} the {records.length} record(s) analysed
+          </button>
+          {showRecords && (
+            <div style={{ marginTop: 6, maxHeight: 220, overflowY: 'auto' }}>
+              {records.map((r, i) => (
+                <div key={i} style={{ fontFamily: mono, fontSize: 10, color: 'var(--bp-text-3)', padding: '3px 0',
+                  borderBottom: '1px solid var(--bp-border)' }}>
+                  <code>{r.kind}</code> {r.id.slice(0, 8)} — {r.summary}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        {pending && (
+          <>
+            <button onClick={() => onReview(proposal, 'approve')} disabled={busy}
+              className="bp-btn bp-btn-primary" style={{ fontSize: 11 }}>
+              <CheckCircle2 size={11} /> Approve &amp; activate
+            </button>
+            <button onClick={() => onReview(proposal, 'reject')} disabled={busy}
+              className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+              <XCircle size={11} /> Reject
+            </button>
+          </>
+        )}
+        {proposal.status === 'approved' && proposal.target !== 'agent_lifecycle' && (
+          <button onClick={() => onRollback(proposal)} disabled={busy}
+            className="bp-btn bp-btn-ghost" style={{ fontSize: 11 }}>
+            <Undo2 size={11} /> Roll back
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
 interface RetroDetailProps {
   retro: RetroData
   onBack: () => void
+  onChanged: () => void
 }
 
-function RetroDetail({ retro, onBack }: RetroDetailProps) {
+function RetroDetail({ retro, onBack, onChanged }: RetroDetailProps) {
+  const [busy, setBusy] = useState(false)
+
+  async function handleReview(proposal: Proposal, outcome: 'approve' | 'reject') {
+    const reason = window.prompt(
+      outcome === 'approve'
+        ? 'Optional note: why is this change worth making?'
+        : 'A rejection reason is required — the proposing side learns from why, not that.',
+      '',
+    )
+    if (outcome === 'reject' && !reason?.trim()) return
+    setBusy(true)
+    try {
+      await reviewRetrospectiveProposal(proposal.business_id, proposal.id, {
+        outcome, reason: reason?.trim() || undefined,
+      })
+      onChanged()
+    } catch (err) {
+      alert(`Review failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function handleRollback(proposal: Proposal) {
+    const reason = window.prompt('Why are you rolling this change back?', '')
+    if (!reason?.trim()) return
+    setBusy(true)
+    try {
+      await rollbackRetrospectiveProposal(proposal.business_id, proposal.id, reason.trim())
+      onChanged()
+    } catch (err) {
+      alert(`Rollback failed: ${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <div>
       <button onClick={onBack} className="bp-btn bp-btn-ghost" style={{ fontSize: 11, marginBottom: 14 }}>
@@ -182,6 +532,76 @@ function RetroDetail({ retro, onBack }: RetroDetailProps) {
       <Section<OpenWindowItem> title="Open measurement windows" icon={BookMarked} color="var(--bp-amber)" items={retro.open_windows}
         render={(w) => (<><strong>{w.action_type}</strong> ({w.count}) — {w.note}</>)} />
 
+      {/* ── Proposed operating changes (#73) ── */}
+      <div className="bp-card" style={{ padding: 18, marginBottom: 14, borderLeft: '3px solid var(--bp-purple)' }}>
+        <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-purple)', textTransform: 'uppercase', marginBottom: 6 }}>
+          Proposed operating changes
+        </div>
+        <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--bp-text-3)', lineHeight: 1.5, marginBottom: 12 }}>
+          Bounded changes this retrospective is proposing, each targeting one system. Nothing here has taken
+          effect: a proposal becomes real only when you approve it, and the change is then made by the system
+          that owns it — the operating policy editor, the playbook versioner, or the agent lifecycle controls.
+        </div>
+
+        {Array.isArray(retro.proposals) && retro.proposals.length > 0 ? (
+          retro.proposals.map((p) => (
+            <ProposalCard key={p.id} proposal={p} busy={busy}
+              onReview={handleReview} onRollback={handleRollback} />
+          ))
+        ) : (
+          <div style={{ fontFamily: mono, fontSize: 11, color: 'var(--bp-text-3)' }}>
+            No operating change was proposed from this period. See the evidence gaps below for what was
+            looked at and why it did not support one.
+          </div>
+        )}
+      </div>
+
+      {/* ── Where the evidence ran out ── */}
+      {Array.isArray(retro.evidence_gaps) && retro.evidence_gaps.length > 0 && (
+        <div className="bp-card" style={{ padding: 18, marginBottom: 14, borderLeft: '3px solid var(--bp-text-3)' }}>
+          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Where the evidence ran out
+          </div>
+          <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--bp-text-3)', lineHeight: 1.5, marginBottom: 10 }}>
+            Subjects that were analysed and deliberately produced no proposal. "We could not tell" is a
+            result — a low-confidence guess would not be.
+          </div>
+          {retro.evidence_gaps.map((g, i) => (
+            <div key={i} style={{ fontFamily: mono, fontSize: 11, color: 'var(--bp-text-2)', padding: '6px 0',
+              borderBottom: i < retro.evidence_gaps!.length - 1 ? '1px solid var(--bp-border)' : 'none' }}>
+              <strong>{g.subject}</strong>{' '}
+              <span style={{ color: 'var(--bp-text-3)' }}>({g.reason.replace(/_/g, ' ')})</span>
+              <div style={{ color: 'var(--bp-text-3)', marginTop: 2 }}>{g.detail}</div>
+              <div style={{ color: 'var(--bp-text-3)', marginTop: 2 }}>
+                {g.measured_outcomes} of {g.required_outcomes} measured outcome(s) needed.
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Narrative that stayed narrative ── */}
+      {Array.isArray(retro.unstructured_suggestions) && retro.unstructured_suggestions.length > 0 && (
+        <div className="bp-card" style={{ padding: 18, marginBottom: 14 }}>
+          <div style={{ fontFamily: mono, fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 6 }}>
+            Analyst suggestions kept as narrative
+          </div>
+          <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--bp-text-3)', lineHeight: 1.5, marginBottom: 10 }}>
+            Written advice from the retrospective that no record could back. It is shown, but it was
+            deliberately not turned into an approvable operating change.
+          </div>
+          {retro.unstructured_suggestions.map((s, i) => (
+            <div key={i} style={{ fontFamily: mono, fontSize: 11, color: 'var(--bp-text-2)', padding: '6px 0',
+              borderBottom: i < retro.unstructured_suggestions!.length - 1 ? '1px solid var(--bp-border)' : 'none' }}>
+              {s.text}
+              <div style={{ color: 'var(--bp-text-3)', fontStyle: 'italic', marginTop: 3 }}>
+                {s.not_proposed_reason}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       {Array.isArray(retro.recommendations) && retro.recommendations.length > 0 && (
         <div className="bp-card" style={{ padding: 18, marginBottom: 14, borderLeft: '3px solid var(--bp-purple)' }}>
           <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-purple)', textTransform: 'uppercase', marginBottom: 10 }}>
@@ -199,8 +619,12 @@ function RetroDetail({ retro, onBack }: RetroDetailProps) {
 
       {Array.isArray(retro.operating_changes) && retro.operating_changes.length > 0 && (
         <div className="bp-card" style={{ padding: 18 }}>
-          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 10 }}>
-            How Blueprint should operate differently
+          <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em', color: 'var(--bp-text-3)', textTransform: 'uppercase', marginBottom: 4 }}>
+            Analyst's written view: how Blueprint should operate differently
+          </div>
+          <div style={{ fontFamily: mono, fontSize: 10, color: 'var(--bp-text-3)', lineHeight: 1.5, marginBottom: 10 }}>
+            Prose, not proposals. Only the items under "Proposed operating changes" above can actually be
+            approved and take effect.
           </div>
           {retro.operating_changes.map((c, i) => (
             <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 12, color: 'var(--bp-text-2)', padding: '4px 0' }}>
@@ -264,6 +688,19 @@ export default function Retrospectives() {
     navigate('/retrospectives')
   }
 
+  /**
+   * Re-fetch after a review or rollback. The proposals are read live from the
+   * server rather than patched locally, because approving one activates a
+   * change in another system — the authoritative status is whatever that
+   * system ended up in, not what the click intended.
+   */
+  const handleRefreshSelected = useCallback(async () => {
+    if (!currentBusiness || !selected) return
+    try {
+      setSelected(await getRetrospective(currentBusiness.id, selected.id) as RetroData)
+    } catch { /* leave the current view in place rather than blanking it */ }
+  }, [currentBusiness, selected])
+
   if (!currentBusiness) {
     return <div style={{ padding: 40, color: 'var(--bp-text-3)' }}>Select a business.</div>
   }
@@ -285,7 +722,7 @@ export default function Retrospectives() {
       )}
 
       {selected ? (
-        <RetroDetail retro={selected} onBack={handleBack} />
+        <RetroDetail retro={selected} onBack={handleBack} onChanged={handleRefreshSelected} />
       ) : list.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 12 }}>
           No retrospectives yet. Click "Run retrospective now" to generate the first one.

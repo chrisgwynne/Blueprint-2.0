@@ -9,9 +9,45 @@ import { isAuthenticated } from '../middleware/auth.js';
 import {
   startWorkflow, approveWorkflowStep, rejectWorkflowStep, cancelWorkflow,
 } from '../workflows/workflow-engine.js';
+import { PlaybookValidationError, parsePlaybookDefinition } from '../workflows/playbook-schema.js';
+import {
+  savePlaybookDraft, validatePlaybookVersion, activatePlaybookVersion,
+  listPlaybookVersions, getPlaybookVersion, getActivePlaybookVersion,
+  rollbackPlaybookVersion, cancelScheduledPlaybookVersion, listPlaybookEvents,
+  PlaybookNotFoundError, PlaybookStateError,
+} from '../workflows/playbook-versions.js';
+import { simulatePlaybook } from '../workflows/playbook-simulation.js';
+import {
+  startPlaybookRun, advancePlaybookRun, approvePlaybookStep, rejectPlaybookStep,
+  retryPlaybookStep, compensatePlaybookRun, cancelPlaybookRun, describePlaybookRun,
+} from '../workflows/playbook-engine.js';
 
 const router = Router();
 router.use(isAuthenticated);
+
+/**
+ * The dashboard actor. `dashboard:` is load-bearing, not cosmetic: the
+ * operating policy's autonomy gate treats a dashboard actor as a human
+ * decision and an unprefixed one as Blueprint acting unattended.
+ */
+function actorOf(req: Request): string {
+  const session = req.session as unknown as Record<string, unknown> | undefined;
+  return `dashboard:${(session?.username as string) || (session?.userId as string) || 'human'}`;
+}
+
+/**
+ * One place that maps the playbook error vocabulary onto HTTP, so a
+ * validation failure is always a 400 carrying its violations (actionable
+ * for the author) rather than an opaque 500.
+ */
+function sendPlaybookError(res: Response, err: unknown): Response {
+  if (err instanceof PlaybookValidationError) {
+    return res.status(400).json({ error: err.message, violations: err.violations });
+  }
+  if (err instanceof PlaybookNotFoundError) return res.status(404).json({ error: err.message });
+  if (err instanceof PlaybookStateError) return res.status(409).json({ error: err.message });
+  return res.status(500).json({ error: (err as Error).message });
+}
 
 function parseRow(r: Record<string, unknown> | null): Record<string, unknown> | null {
   if (!r) return null;
@@ -35,6 +71,216 @@ function safeParse(v: unknown, fallback: unknown): unknown {
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return fallback; }
 }
+
+// ─── Playbooks: version lifecycle (#74) ──────────────────────────────────────
+//
+// Declared BEFORE the generic /:businessId/:workflowId handlers. Every route
+// here carries a literal path segment ('playbook' / 'playbook-runs'), so the
+// two families cannot shadow each other whatever the declaration order.
+
+router.get('/:businessId/:workflowId/playbook/versions', (req: Request, res: Response) => {
+  try {
+    const ref = { workflowId: String(req.params.workflowId), businessId: String(req.params.businessId) };
+    res.json({
+      versions: listPlaybookVersions(ref),
+      active: getActivePlaybookVersion(ref),
+    });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.get('/:businessId/:workflowId/playbook/events', (req: Request, res: Response) => {
+  try {
+    const ref = { workflowId: String(req.params.workflowId), businessId: String(req.params.businessId) };
+    res.json({ events: listPlaybookEvents(ref, parseInt(String(req.query.limit ?? '100'), 10) || 100) });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+/** Create a new DRAFT version. Creating never activates — that is a separate, explicit act. */
+router.post('/:businessId/:workflowId/playbook/versions', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const version = savePlaybookDraft({
+      workflowId: String(req.params.workflowId),
+      businessId: String(req.params.businessId),
+      definition: body.definition ?? body,
+      actor: actorOf(req),
+      change_reason: (body.change_reason as string | null) ?? null,
+      base_version: body.base_version == null ? null : Number(body.base_version),
+      validate: body.validate !== false,
+    });
+    res.status(201).json({ version });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/:workflowId/playbook/versions/:version/validate', (req: Request, res: Response) => {
+  try {
+    const ref = { workflowId: String(req.params.workflowId), businessId: String(req.params.businessId) };
+    res.json(validatePlaybookVersion(ref, parseInt(String(req.params.version), 10), actorOf(req)));
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/:workflowId/playbook/versions/:version/activate', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const version = activatePlaybookVersion({
+      workflowId: String(req.params.workflowId),
+      businessId: String(req.params.businessId),
+      version: parseInt(String(req.params.version), 10),
+      actor: actorOf(req),
+      effective_at: (body.effective_at as string | null) ?? null,
+      change_reason: (body.change_reason as string | null) ?? null,
+    });
+    res.json({ version });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/:workflowId/playbook/versions/:version/cancel-schedule', (req: Request, res: Response) => {
+  try {
+    const version = cancelScheduledPlaybookVersion({
+      workflowId: String(req.params.workflowId),
+      businessId: String(req.params.businessId),
+      version: parseInt(String(req.params.version), 10),
+      actor: actorOf(req),
+      reason: ((req.body ?? {}) as Record<string, unknown>).reason as string | null,
+    });
+    res.json({ version });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/:workflowId/playbook/rollback', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (body.to_version == null) return res.status(400).json({ error: 'to_version is required.' });
+    const version = rollbackPlaybookVersion({
+      workflowId: String(req.params.workflowId),
+      businessId: String(req.params.businessId),
+      to_version: Number(body.to_version),
+      actor: actorOf(req),
+      change_reason: (body.change_reason as string | null) ?? null,
+    });
+    res.json({ version });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+/**
+ * Preview. A GET would be more RESTful, but inputs and (for an unsaved
+ * draft) a whole definition are too large for a query string. This writes
+ * nothing — see playbook-simulation.ts.
+ */
+router.post('/:businessId/:workflowId/playbook/simulate', (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    const workflowId = String(req.params.workflowId);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const ref = { workflowId, businessId };
+
+    // Simulate an unsaved draft when one is supplied, a stored version when
+    // a number is given, and otherwise whatever is active today.
+    let definition;
+    let version: number | null = null;
+    if (body.definition) {
+      definition = parsePlaybookDefinition(body.definition, businessId);
+    } else if (body.version != null) {
+      const stored = getPlaybookVersion(ref, Number(body.version));
+      if (!stored) return res.status(404).json({ error: `Version ${body.version} does not exist for this playbook.` });
+      definition = stored.definition;
+      version = stored.version;
+    } else {
+      const active = getActivePlaybookVersion(ref);
+      if (!active) return res.status(409).json({ error: 'This workflow has no active playbook version to simulate.' });
+      definition = active.definition;
+      version = active.version;
+    }
+
+    res.json(simulatePlaybook({
+      businessId, definition, workflowId, version,
+      inputs: (body.inputs as Record<string, unknown>) ?? {},
+    }));
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+// ─── Playbooks: runs (#74) ───────────────────────────────────────────────────
+
+router.post('/:businessId/:workflowId/playbook/runs', (req: Request, res: Response) => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = startPlaybookRun({
+      workflowId: String(req.params.workflowId),
+      businessId: String(req.params.businessId),
+      inputs: (body.inputs as Record<string, unknown>) ?? {},
+      actor: actorOf(req),
+      trigger_reason: (body.reason as string | null) ?? 'Manual playbook run',
+      idempotency_key: (body.idempotency_key as string | null)
+        ?? (req.get('Idempotency-Key') || null),
+    });
+    res.status(result.reused ? 200 : 202).json(result);
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.get('/:businessId/playbook-runs/:runId', (req: Request, res: Response) => {
+  try {
+    res.json(describePlaybookRun(String(req.params.runId), String(req.params.businessId)));
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/advance', (req: Request, res: Response) => {
+  try {
+    const status = advancePlaybookRun(String(req.params.runId), String(req.params.businessId), actorOf(req));
+    res.json({ status });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/steps/:stepIndex/approve', (req: Request, res: Response) => {
+  try {
+    const status = approvePlaybookStep({
+      runId: String(req.params.runId), businessId: String(req.params.businessId),
+      stepIndex: parseInt(String(req.params.stepIndex), 10), actor: actorOf(req),
+    });
+    res.json({ status });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/steps/:stepIndex/reject', (req: Request, res: Response) => {
+  try {
+    const status = rejectPlaybookStep({
+      runId: String(req.params.runId), businessId: String(req.params.businessId),
+      stepIndex: parseInt(String(req.params.stepIndex), 10), actor: actorOf(req),
+      reason: ((req.body ?? {}) as Record<string, unknown>).reason as string || 'Rejected by reviewer',
+    });
+    res.json({ status });
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/steps/:stepIndex/retry', (req: Request, res: Response) => {
+  try {
+    // Deliberately returns 200 with `retried: false` when a retry is
+    // refused: "this already executed, so I will not repeat it" is a
+    // successful, informative answer, not an error.
+    res.json(retryPlaybookStep({
+      runId: String(req.params.runId), businessId: String(req.params.businessId),
+      stepIndex: parseInt(String(req.params.stepIndex), 10), actor: actorOf(req),
+    }));
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/rollback', (req: Request, res: Response) => {
+  try {
+    res.json(compensatePlaybookRun({
+      runId: String(req.params.runId), businessId: String(req.params.businessId), actor: actorOf(req),
+      reason: ((req.body ?? {}) as Record<string, unknown>).reason as string | null,
+    }));
+  } catch (err) { sendPlaybookError(res, err); }
+});
+
+router.post('/:businessId/playbook-runs/:runId/cancel', (req: Request, res: Response) => {
+  try {
+    const status = cancelPlaybookRun({
+      runId: String(req.params.runId), businessId: String(req.params.businessId), actor: actorOf(req),
+      reason: ((req.body ?? {}) as Record<string, unknown>).reason as string | null,
+    });
+    res.json({ status });
+  } catch (err) { sendPlaybookError(res, err); }
+});
 
 // ─── List workflows ──────────────────────────────────────────────────────────
 

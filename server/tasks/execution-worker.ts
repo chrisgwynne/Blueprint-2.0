@@ -24,6 +24,10 @@ import {
   type ExecutionJobRow,
 } from './execution-jobs.js';
 import { getInstanceId } from '../jobs/scheduler-lock.js';
+import {
+  recordAmbiguousOutcome, recordExecutionResult, recordExternalAcknowledgement,
+  recordPreExecutionRejection, recordRetryScheduled, safeReceipt,
+} from './action-receipts.js';
 
 const MAX_JOBS_PER_TICK = 10;
 function stableStringify(value: unknown): string {
@@ -105,6 +109,19 @@ async function runOneJob(job: ExecutionJobRow, owner: string): Promise<void> {
       });
     } catch {}
     markManualReview(job.id, integrity.reason ?? 'Approved task changed before execution; reapproval is required.');
+    // The action provably never ran — an explicit pre-execution rejection
+    // record (#70) rather than a receipt left dangling at 'authorized'.
+    safeReceipt(() => recordPreExecutionRejection({
+      task: {
+        id: task.id, business_id: task.business_id, version: job.task_version,
+        action_type: task.action_type, title: task.title,
+        proposed_by: task.proposed_by, created_at: task.created_at,
+      },
+      stage: 'payload_integrity',
+      reason: integrity.reason ?? 'Approved task changed before execution; reapproval is required.',
+      actor: 'system:execution-integrity',
+      evidence: integrity.evidence ?? null,
+    }));
     return;
   }
 
@@ -123,6 +140,16 @@ async function runOneJob(job: ExecutionJobRow, owner: string): Promise<void> {
       updateTaskStatus(task.id, 'manual_review', 'system:execution-worker', { outcome: reason });
     } catch {}
     markManualReview(job.id, reason);
+    safeReceipt(() => recordPreExecutionRejection({
+      task: {
+        id: task.id, business_id: task.business_id, version: job.task_version,
+        action_type: task.action_type, title: task.title,
+        proposed_by: task.proposed_by, created_at: task.created_at,
+      },
+      stage: 'no_executor',
+      reason,
+      actor: 'system:execution-worker',
+    }));
     return;
   }
 
@@ -190,9 +217,29 @@ export async function recoverStuckJobs(): Promise<{ recovered: number; requeued:
           outcome_data: job.external_reference,
         });
         completeJob(job.id, { outcome: 'recovered', outcome_data: job.external_reference });
+        // The receipt this recovery settles is the SAME one the interrupted
+        // attempt opened — correlated by (task, approved version), so the
+        // crash and its recovery are one record, not two conflicting ones.
+        safeReceipt(() => {
+          recordExternalAcknowledgement({
+            taskId: task.id, taskVersion: job.task_version,
+            actionType: job.action_type, outcomeData: job.external_reference, recovered: true,
+          });
+          recordExecutionResult({
+            taskId: task.id, taskVersion: job.task_version, status: 'success',
+            summary: 'Recovered after an interrupted execution — the external reference recorded before the crash ' +
+              'proves the external write had already succeeded; nothing was re-executed.',
+            detail: job.external_reference,
+            taskStatus: 'complete',
+          });
+        });
         stats.recovered++;
       } catch (err) {
         markManualReview(job.id, `Recovery could not finalise a completed external write: ${(err as Error).message}`);
+        safeReceipt(() => recordAmbiguousOutcome(
+          task.id, job.task_version,
+          `Recovery could not finalise a completed external write: ${(err as Error).message}`,
+        ));
         stats.manualReview++;
       }
       continue;
@@ -204,9 +251,17 @@ export async function recoverStuckJobs(): Promise<{ recovered: number; requeued:
           outcome: 'Recovered after an interrupted execution — action type is safe to retry from scratch.',
         });
         requeueAfterRecovery(job.id, 'Requeued by crash recovery: internal/idempotent action type, no external reference at risk.');
+        safeReceipt(() => recordRetryScheduled(
+          task.id, job.task_version, 'crash_recovery',
+          'Execution was interrupted; the action type is internal/idempotent, so a fresh attempt was requeued.',
+        ));
         stats.requeued++;
       } catch (err) {
         markManualReview(job.id, `Recovery could not requeue a safe-to-retry job: ${(err as Error).message}`);
+        safeReceipt(() => recordAmbiguousOutcome(
+          task.id, job.task_version,
+          `Recovery could not requeue a safe-to-retry job: ${(err as Error).message}`,
+        ));
         stats.manualReview++;
       }
       continue;
@@ -225,6 +280,12 @@ export async function recoverStuckJobs(): Promise<{ recovered: number; requeued:
       'Lease expired mid-execution for an external-write action with no external_reference recorded — ' +
       'the create call may have already succeeded. Verify manually before retrying.'
     );
+    safeReceipt(() => recordAmbiguousOutcome(
+      task.id, job.task_version,
+      'Lease expired mid-execution for an external-write action with no external reference recorded — ' +
+      'whether the external object was created cannot be determined without a human check.',
+      { job_id: job.id, action_type: job.action_type, attempt_count: job.attempt_count },
+    ));
     stats.manualReview++;
   }
 
@@ -258,12 +319,31 @@ function handleFailure(job: ExecutionJobRow, actionType: string | null, error: s
       `('${actionType}') — cannot safely auto-retry without risking a duplicate. ${error}`
     );
     try { updateTaskStatus(job.task_id, 'manual_review', 'system:executor', { outcome: `Needs manual review: ${error}` }); } catch {}
+    safeReceipt(() => recordAmbiguousOutcome(
+      job.task_id, job.task_version,
+      `Execution failed with no recorded external reference for an external-write action ('${actionType}') — ` +
+      `whether the external object was created cannot be determined without a human check. ${error}`,
+      { job_id: job.id, attempt_count: current?.attempt_count ?? job.attempt_count },
+    ));
     return;
   }
 
   const outcome = failJob(job.id, error);
   if (outcome.status === 'dead_letter') {
     try { updateTaskStatus(job.task_id, 'failed', 'system:executor', { outcome: `Execution failed after ${outcome.attempt} attempts: ${error}` }); } catch {}
+    safeReceipt(() => recordExecutionResult({
+      taskId: job.task_id, taskVersion: job.task_version, status: 'failure',
+      summary: `Execution failed after ${outcome.attempt} attempts: ${error}`,
+      detail: { job_id: job.id, attempts: outcome.attempt },
+      taskStatus: 'failed',
+    }));
+  } else {
+    // Retry scheduled — the same receipt keeps accumulating attempts rather
+    // than a second receipt appearing for the same approved action.
+    safeReceipt(() => recordRetryScheduled(
+      job.task_id, job.task_version, 'worker_retry',
+      `Attempt ${outcome.attempt} failed; a retry is scheduled. ${error}`,
+    ));
   }
   // status === 'queued' (retry scheduled): leave the task's own status as
   // whatever executeTask() left it at (typically 'failed' or 'blocked')

@@ -16,6 +16,7 @@
 import db from '../../db/db.js';
 import { assertBusiness, getOutcomeHistory } from './store.js';
 import type { OutcomeHistory } from './store.js';
+import type { TrialVerdict } from './types.js';
 
 export type RetentionVerdict = 'retain' | 'monitor' | 'downgrade' | 'retire';
 
@@ -33,6 +34,9 @@ export interface RetentionAssessment {
     open: number;
     total_cost_usd: number;
     mean_calibration_error: number | null;
+    /** The most recent MEASURED trial's verdict — "last verified outcome" for the cockpit (#69). */
+    last_verdict: TrialVerdict | null;
+    last_verdict_reason: string | null;
   };
 }
 
@@ -117,6 +121,8 @@ export function evaluateRetention(businessId: string): RetentionAssessment[] {
         open: history.open,
         total_cost_usd: history.total_cost_usd,
         mean_calibration_error: history.mean_calibration_error,
+        last_verdict: history.last_verdict,
+        last_verdict_reason: history.last_verdict_reason,
       },
     };
   });

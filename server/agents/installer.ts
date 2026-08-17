@@ -20,6 +20,7 @@ import db from '../db/db.js';
 import { checkAgentReadiness } from './readiness.js';
 import { setLifecycleState, type AgentLifecycleState } from './agentLifecycle.js';
 import { ROLE_SPECS } from './agentActivationRules.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
 import { recordInstallation, recordUninstallation } from './hiring/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -72,6 +73,12 @@ export function installAgent(
   businessId: string,
   installedBy = 'human',
 ): InstallResult {
+  // #67: hiring an agent is durable operational work. A preview may say a
+  // hire WOULD happen; it may never install one.
+  guardSimulationSideEffect(
+    'agent.install', templateId,
+    `installing (hiring) agent template '${templateId}' for business '${businessId}'`,
+  );
   if (!templateId) throw new Error('templateId is required');
   if (!businessId) throw new Error('businessId is required');
   if (!templateExists(templateId)) {

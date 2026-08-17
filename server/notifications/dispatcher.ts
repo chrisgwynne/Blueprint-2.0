@@ -1,5 +1,6 @@
 import db, { generateId } from '../db/db.js';
 import { send as telegramSend } from './telegram.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
 
 interface Notification {
   id?: string;
@@ -22,6 +23,12 @@ interface DispatchResult {
  * Route a notification to the correct adapter and persist it to the DB.
  */
 export async function dispatch(notification: Notification): Promise<DispatchResult> {
+  // #67: 'Simulation cannot ... send messages'. Blocked at the single point
+  // every channel adapter is reached through.
+  guardSimulationSideEffect(
+    'notification.dispatch', notification.channel ?? null,
+    `sending a '${notification.channel ?? 'unknown'}' notification titled '${notification.title ?? ''}'`,
+  );
   const id = notification.id ?? generateId();
   const now = new Date().toISOString();
 

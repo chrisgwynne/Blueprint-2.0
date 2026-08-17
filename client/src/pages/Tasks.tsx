@@ -3,6 +3,8 @@ import { formatDistanceToNow, format } from 'date-fns'
 import { parseTimestamp } from '../lib/time.js'
 import { LayoutGrid, List, Plus, X, Check, RefreshCw, Clock, ChevronRight, MessageSquare, Send, User, Cpu, GitBranch } from 'lucide-react'
 import TaskKanban from '../components/TaskKanban.jsx'
+// "Why did Blueprint do this?" (#60) — the same panel the hiring roster uses.
+import ExplanationPanel, { WhyButton } from '../components/ExplanationPanel.js'
 import useStore from '../lib/store.js'
 import { getTasks, createTask, approveTask, rejectTask, getTaskDetail, getTaskHistory, addTaskComment } from '../lib/api.js'
 
@@ -339,6 +341,8 @@ interface TaskDetailDrawerProps {
 
 function TaskDetailDrawer({ taskId, onClose, onUpdate }: TaskDetailDrawerProps) {
   const addNotification = useStore((s) => s.addNotification)
+  const currentBusiness = useStore((s) => s.currentBusiness)
+  const [showWhy,  setShowWhy]  = useState(false)
   const [detail,   setDetail]   = useState<any>(null)
   const [history,  setHistory]  = useState<any[]>([])
   const [loading,  setLoading]  = useState(true)
@@ -453,6 +457,9 @@ function TaskDetailDrawer({ taskId, onClose, onUpdate }: TaskDetailDrawerProps) 
                       {Math.round(task.confidence * 100)}% confidence
                     </span>
                   )}
+                  {/* #60 — the trigger, evidence, policy and outcome behind
+                      this task, in the same panel used across the app. */}
+                  <WhyButton onClick={() => setShowWhy(true)} />
                 </div>
               </div>
 
@@ -713,6 +720,15 @@ function TaskDetailDrawer({ taskId, onClose, onUpdate }: TaskDetailDrawerProps) 
           )}
         </div>
       </div>
+
+      {showWhy && (
+        <ExplanationPanel
+          businessId={currentBusiness?.id}
+          kind="task"
+          subjectId={taskId}
+          onClose={() => setShowWhy(false)}
+        />
+      )}
     </>
   )
 }

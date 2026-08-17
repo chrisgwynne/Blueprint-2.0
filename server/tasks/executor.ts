@@ -19,6 +19,9 @@ import { createTaskEvent } from './task-events.js';
 import { parseJson } from '../types/shared.js';
 import { classifyAction, buildIdempotencyMarker } from './execution-safety.js';
 import { setExternalReference, type ExecutionJobRow } from './execution-jobs.js';
+import {
+  recordExecutionStarted, recordExternalAcknowledgement, recordExecutionResult, safeReceipt,
+} from './action-receipts.js';
 import type * as GithubModule from '../connectors/github/index.js';
 import type * as WixModule from '../connectors/wix/index.js';
 import type * as ShopifyModule from '../connectors/shopify/index.js';
@@ -131,6 +134,10 @@ const EXECUTABLE_ACTION_TYPES = new Set<string>([
   // Connector lifecycle — surfaced by agents, reviewed by human
   'connect_connector',
   'research_connector',
+  // Operating change a retrospective proposed and a human approved (#73).
+  // The handler activates nothing itself — it calls the owning subsystem's
+  // activation function (#68 policy, #74 playbook, #69 agent lifecycle).
+  'retrospective_operating_change',
 ]);
 
 export function isExecutable(actionType: string): boolean {
@@ -1550,6 +1557,12 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     { action_type: task.action_type }
   );
 
+  // Verified action receipt (#70): the 'executed' clock starts here. Every
+  // receipt hook in this function is best-effort — bookkeeping must never
+  // change whether or how an action runs.
+  const taskVersion = Number(task.version ?? 1) || 1;
+  safeReceipt(() => recordExecutionStarted(task.id, taskVersion, job?.id ?? null));
+
   // Dispatch
   let result: ExecuteResult;
   try {
@@ -1580,6 +1593,7 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
       case 'meta_ads_update':           result = await executeMetaAdsUpdate(task); break;
       case 'connect_connector':         result = await executeConnectConnector(task); break;
       case 'research_connector':        result = await executeResearchConnector(task); break;
+      case 'retrospective_operating_change': result = await executeRetrospectiveOperatingChange(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }
@@ -1594,6 +1608,22 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     if (job && classifyAction(task.action_type) === 'external_verifiable' && result.outcome_data) {
       try { setExternalReference(job.id, result.outcome_data); } catch {}
     }
+
+    // Same durability reasoning, one level up: the receipt's
+    // externally-acknowledged state is written here, BEFORE the task's
+    // 'complete' transition, so a crash in the gap still leaves a record
+    // that the external system handed back an identity. Recorded for any
+    // action whose outcome carries an external ID/permalink — not just the
+    // external_verifiable set — because "the API acknowledged it" is worth
+    // recording wherever it is true. An acknowledgement is explicitly NOT
+    // verification: nothing here claims the change took effect.
+    safeReceipt(() => recordExternalAcknowledgement({
+      taskId: task.id,
+      taskVersion,
+      actionType: task.action_type,
+      outcomeData: result.outcome_data,
+      recovered: /already (exists|created)/i.test(result.outcome ?? ''),
+    }));
   } catch (err) {
     // A missing connector means the task is blocked waiting for setup —
     // not broken. Mark it blocked so the user knows what to do, and so it
@@ -1617,6 +1647,16 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
         { error: (err as Error).message }
       );
     } catch {}
+    safeReceipt(() => recordExecutionResult({
+      taskId: task.id,
+      taskVersion,
+      status: isConnectorMissing ? 'blocked' : 'failure',
+      summary: isConnectorMissing
+        ? `Blocked before completion: ${(err as Error).message}`
+        : `Execution failed: ${(err as Error).message}`,
+      detail: { error: (err as Error).message },
+      taskStatus: newStatus,
+    }));
     if (!isConnectorMissing) {
       console.error(`[executor] Task ${taskId} failed:`, err);
       // Self-healing: diagnose executor failures (not missing-connector blocks)
@@ -1647,8 +1687,28 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     );
   } catch (err) {
     console.error(`[executor] Task ${taskId} succeeded but final transition failed:`, err);
+    safeReceipt(() => recordExecutionResult({
+      taskId: task.id,
+      taskVersion,
+      status: 'partial',
+      summary: `Execution succeeded but the task status update failed: ${(err as Error).message}`,
+      detail: result.outcome_data,
+      taskStatus: task.status,
+    }));
     return { ok: false, error: `Execution succeeded but status update failed: ${(err as Error).message}` };
   }
+
+  // A handler that deliberately settled somewhere short of 'complete'
+  // (e.g. a draft awaiting human review) is a *partial* result, not a
+  // success — the receipt says which.
+  safeReceipt(() => recordExecutionResult({
+    taskId: task.id,
+    taskVersion,
+    status: finalStatus === 'complete' ? 'success' : 'partial',
+    summary: result.outcome,
+    detail: result.outcome_data,
+    taskStatus: finalStatus,
+  }));
 
   console.log(`[executor] Task ${taskId} (${task.action_type}) executed [${finalStatus}]: ${result.outcome}`);
   return { ok: true, outcome: result.outcome, outcome_data: result.outcome_data, status: finalStatus };
@@ -1967,6 +2027,42 @@ Produce a connector proposal as JSON:
   return {
     outcome: `Connector spec for "${spec.connector_name as string}" produced. Recommendation: ${spec.recommendation as string}.${issueUrl ? ` GitHub issue created.` : ''}`,
     outcome_data: { connector_name: spec.connector_name, recommendation: spec.recommendation, kb_path: kbPath, issue_url: issueUrl },
+  };
+}
+
+/**
+ * Activate an operating change a retrospective proposed (#73).
+ *
+ * This handler is the ONLY path from a retrospective finding to a real
+ * behaviour change, and it is reached only after approveTask() has taken the
+ * task through every policy, registry and applicability gate. It performs no
+ * activation of its own: applyApprovedProposal() dispatches to #68's
+ * savePolicyVersion(), #74's activatePlaybookVersion() or #69's existing
+ * retire/standby controls, whichever the approved proposal targets.
+ *
+ * The retrospective engine itself has no route here — it can only create the
+ * proposal and the review item a human must approve first.
+ */
+async function executeRetrospectiveOperatingChange(task: Task): Promise<ExecuteResult> {
+  const proposalId = task.action_payload?.proposal_id;
+  if (typeof proposalId !== 'string' || proposalId === '') {
+    throw new Error('retrospective_operating_change requires action_payload.proposal_id');
+  }
+
+  const { applyApprovedProposal } = await import('../brain/retrospective-proposals.js');
+  // The approver is the authority for the change, not the executor. Falling
+  // back to the executor identity would attribute a human's operating
+  // decision to the system.
+  const actor = String(task.approved_by ?? '').trim() || 'system:executor';
+  const result = applyApprovedProposal(proposalId, task.business_id, actor);
+
+  return {
+    outcome: result.outcome,
+    outcome_data: {
+      proposal_id: result.proposal_id,
+      target: result.target,
+      ...result.detail,
+    },
   };
 }
 

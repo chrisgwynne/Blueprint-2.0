@@ -8,6 +8,7 @@ import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { evaluateRetention, type RetentionAssessment } from '../agents/hiring/retention.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENTS_DIR = resolve(__dirname, '..', 'agents');
@@ -159,6 +160,40 @@ router.get('/', async (req: Request, res: Response) => {
 
 const BUSY_STATES = ['triggered', 'assigned', 'working', 'awaiting_approval'];
 
+/**
+ * Health derivation for the roster (#69 lifecycle cockpit) — mirrors the
+ * status logic in the `/` handler above (kept as a separate, pure, tested
+ * function rather than refactoring that handler in place, so this addition
+ * cannot change the behaviour of the existing AgentPanel endpoint).
+ *
+ *   retired      — agent has been formally retired (see POST /agents/:id/retire)
+ *   pending_hire: template exists but agent is pending (needs connector)
+ *   paused:       user or system paused/disabled
+ *   running:      currently executing
+ *   error:        3+ consecutive non-skipped failures
+ *   stale:        no completed run in 2× its configured poll interval
+ *   sleeping:     last non-skipped run recent OR last run was a skip
+ *   idle:         default — has completed runs, no work right now
+ */
+export function deriveAgentHealth(opts: {
+  legacyStatus: string | null;
+  isRunning: boolean;
+  consecutiveFailures: number;
+  msSinceLastRun: number;
+  pollIntervalMinutes: number;
+  lastRunStatus: string | null;
+}): string {
+  const { legacyStatus, isRunning, consecutiveFailures, msSinceLastRun, pollIntervalMinutes, lastRunStatus } = opts;
+  if (legacyStatus === 'retired') return 'retired';
+  if (legacyStatus === 'pending') return 'pending_hire';
+  if (legacyStatus === 'paused' || legacyStatus === 'disabled') return 'paused';
+  if (isRunning) return 'running';
+  if (consecutiveFailures >= 3) return 'error';
+  if (Number.isFinite(msSinceLastRun) && msSinceLastRun > pollIntervalMinutes * 2 * 60 * 1000) return 'stale';
+  if (lastRunStatus === 'skipped') return 'sleeping';
+  return 'idle';
+}
+
 function parseJsonArray(raw: unknown): string[] {
   if (Array.isArray(raw)) return raw.filter((x): x is string => typeof x === 'string');
   if (typeof raw === 'string') {
@@ -189,6 +224,19 @@ router.get('/roster', async (req: Request, res: Response) => {
       const mod = await import('../agents/poll-intervals.js') as unknown as { getPollInterval: (id: string) => number };
       getPollInterval = mod.getPollInterval;
     } catch { /* optional */ }
+
+    // Retention verdicts (#69) — advisory retain/monitor/downgrade/retire
+    // assessment per agent THIS business has installed, computed from measured
+    // trial outcomes (evaluateRetention is already business-scoped + isolated;
+    // see hiring/retention.ts). Without a business_id there is no installation
+    // record to assess against, so every agent's retention stays null rather
+    // than guessing from the global `agents` row.
+    const retentionByAgent = new Map<string, RetentionAssessment>();
+    if (businessId) {
+      try {
+        for (const r of evaluateRetention(businessId)) retentionByAgent.set(r.agent_id, r);
+      } catch { /* unknown/invalid business — leave retention empty, don't fail the roster */ }
+    }
 
     const out = agents.map((a) => {
       const lifecycle = a.lifecycle_state
@@ -233,11 +281,42 @@ router.get('/roster', async (req: Request, res: Response) => {
       const total = s + f;
       const pollIntervalMin = getPollInterval ? getPollInterval(a.id) : 60;
 
+      // Health (#69) — currently-running run, consecutive-failure streak, and
+      // staleness against the poll interval. Same signals the AgentPanel (`/`
+      // above) surfaces, recomputed here rather than shared so this addition
+      // cannot change that endpoint's behaviour.
+      const runningRun = db.prepare(`
+        SELECT id FROM agent_runs WHERE agent_id = ? AND status = 'running' LIMIT 1
+      `).get(a.id) as { id: string } | undefined;
+      const lastAnyRun = db.prepare(`
+        SELECT status, started_at FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC LIMIT 1
+      `).get(a.id) as { status: string; started_at: string } | undefined;
+      const recentNonSkipped = db.prepare(`
+        SELECT status FROM agent_runs WHERE agent_id = ? AND status != 'skipped'
+         ORDER BY started_at DESC LIMIT 5
+      `).all(a.id) as Array<{ status: string }>;
+      const consecutiveFails = recentNonSkipped.findIndex((r) => r.status !== 'failed');
+      const failing = consecutiveFails === -1 ? recentNonSkipped.length : consecutiveFails;
+      const msSinceAny = lastAnyRun?.started_at
+        ? Date.now() - new Date(lastAnyRun.started_at + (lastAnyRun.started_at.endsWith('Z') ? '' : 'Z')).getTime()
+        : Infinity;
+      const health = deriveAgentHealth({
+        legacyStatus: a.status,
+        isRunning: !!runningRun,
+        consecutiveFailures: failing,
+        msSinceLastRun: msSinceAny,
+        pollIntervalMinutes: pollIntervalMin,
+        lastRunStatus: lastAnyRun?.status ?? null,
+      });
+
+      const retention = retentionByAgent.get(a.id) ?? null;
+
       return {
         id: a.id,
         name: a.name ?? a.id,
         avatar: AVATARS[a.id] ?? '🤖',
         lifecycle_state: lifecycle,
+        health,
         role: a.role,
         purpose: a.purpose,
         current_task: currentTask,
@@ -261,6 +340,12 @@ router.get('/roster', async (req: Request, res: Response) => {
         failure_count: f,
         success_rate: total > 0 ? Math.round((s / total) * 100) / 100 : null,
         busy: BUSY_STATES.includes(lifecycle),
+        // Retention verdict + evidence (#69) — retain/monitor/downgrade/retire,
+        // business-scoped, null when no business_id was supplied.
+        retention,
+        // Distinguishes an installed/standby agent with no track record yet
+        // from one with actual measured, verified productive activity.
+        has_verified_outcome: retention ? retention.evidence.successful > 0 : null,
       };
     });
 

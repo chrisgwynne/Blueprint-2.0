@@ -117,6 +117,7 @@ export const runAgent = (id: string, body: unknown = {}) => post(`/agents/${id}/
 export const getAgentRuns = (id: string, params?: Params) => get(`/agents/${id}/runs`, params)
 export const getAgentRun = (id: string, runId: string) => get(`/agents/${id}/runs/${runId}`)
 export const updateAgent = (id: string, data: unknown) => patch(`/agents/${id}`, data)
+export const retireAgent = (id: string, body: { business_id?: string; reason?: string } = {}) => post(`/agents/${id}/retire`, body)
 export const getAgentProfile = (id: string) => get(`/agents/${id}/profile`)
 export const updateAgentFile = (id: string, filename: string, content: string) => request('PUT', `/agents/${id}/files/${encodeURIComponent(filename)}`, { content })
 export const patchAgentProfile = (id: string, data: unknown) => patch(`/agents/${id}/profile`, data)
@@ -275,6 +276,55 @@ export const getAgentOutcomePerformance = (businessId: string) => get(`/outcomes
 export const getOutcomeTimeline = (businessId: string, params?: Params) => get(`/outcomes/${businessId}/timeline`, params)
 
 // ============================================
+// Verified action receipts (issue #70)
+// ============================================
+
+export const getActionReceipts = (businessId: string, params?: Params) => get(`/receipts/${businessId}`, params)
+export const getActionReceipt = (businessId: string, receiptId: string) => get(`/receipts/${businessId}/${receiptId}`)
+export const getTaskActionReceipts = (businessId: string, taskId: string) => get(`/receipts/${businessId}/task/${taskId}`)
+
+// ============================================
+// "Why did Blueprint do this?" explanations (issue #60)
+// ============================================
+
+/** Subjects the explanation panel can render. Mirrors the server's registry. */
+export type ExplanationKind = 'task' | 'decision' | 'hiring_analysis' | 'hiring_candidate'
+
+/**
+ * One explanation for one decision. Read-only: everything in the payload is
+ * a rendering of records other modules authored, already redacted server-side.
+ */
+export const getExplanation = (businessId: string, kind: ExplanationKind, id: string) =>
+  get(`/explanations/${businessId}/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`)
+
+/** The vocabulary (quality/causal-claim/disposition meanings) the panel renders. */
+export const getExplanationVocabulary = () => get('/explanations/kinds')
+
+// ============================================
+// "What happened while I was away?" digest (issue #62)
+// ============================================
+
+/**
+ * Omit `since` for the default catch-up (since your last acknowledgement).
+ * Passing `since` is the explicit override: it ignores the watermark so a
+ * period can be deliberately re-read, and leaves the watermark intact.
+ */
+export const getAwayDigest = (businessId: string | null, params?: Params) =>
+  get(businessId ? `/digest/${businessId}` : '/digest', params)
+
+export const getDigestWatermark = (businessId: string) => get(`/digest/${businessId}/watermark`)
+
+export const acknowledgeDigest = (body: {
+  business_id?: string | null
+  acknowledged_through?: string | null
+  digest_id?: string | null
+  items?: Record<string, string>
+}) => post('/digest/acknowledge', body)
+
+export const resetDigestWatermark = (businessId: string | null) =>
+  post('/digest/reset', { business_id: businessId })
+
+// ============================================
 // Email (Feature 5)
 // ============================================
 
@@ -301,6 +351,42 @@ export const cancelWorkflowRun = (businessId: string, runId: string) =>
   post(`/workflows/${businessId}/runs/${runId}/cancel`)
 export const proposeWorkflow = (businessId: string, trigger: unknown) =>
   post(`/workflows/${businessId}/propose`, { trigger })
+
+// ============================================
+// Playbooks — versioned, bounded workflows (#74)
+// ============================================
+export const getPlaybookVersions = (businessId: string, workflowId: string) =>
+  get(`/workflows/${businessId}/${workflowId}/playbook/versions`)
+export const getPlaybookEvents = (businessId: string, workflowId: string) =>
+  get(`/workflows/${businessId}/${workflowId}/playbook/events`)
+export const createPlaybookDraft = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions`, data)
+export const validatePlaybookVersion = (businessId: string, workflowId: string, version: number) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions/${version}/validate`, {})
+export const activatePlaybookVersion = (businessId: string, workflowId: string, version: number, data: unknown = {}) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions/${version}/activate`, data)
+export const rollbackPlaybookVersion = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/rollback`, data)
+/** Preview only — the server performs no action, creates no task and writes no receipt. */
+export const simulatePlaybook = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/simulate`, data)
+export const startPlaybookRun = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/runs`, data)
+export const getPlaybookRun = (businessId: string, runId: string) =>
+  get(`/workflows/${businessId}/playbook-runs/${runId}`)
+export const advancePlaybookRun = (businessId: string, runId: string) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/advance`, {})
+export const approvePlaybookStep = (businessId: string, runId: string, stepIndex: number) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/approve`, {})
+export const rejectPlaybookStep = (businessId: string, runId: string, stepIndex: number, data: unknown) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/reject`, data)
+export const retryPlaybookStep = (businessId: string, runId: string, stepIndex: number) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/retry`, {})
+export const rollbackPlaybookRun = (businessId: string, runId: string, data: unknown = {}) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/rollback`, data)
+export const cancelPlaybookRun = (businessId: string, runId: string, data: unknown = {}) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/cancel`, data)
+
 
 // ============================================
 // Goals (Prompt 2)
@@ -338,6 +424,29 @@ export const modelScenario = (businessId: string, question: string, context: unk
 export const deleteScenario = (businessId: string, id: string) => del(`/scenarios/${businessId}/${id}`)
 
 // ============================================
+// Recommendation comparison (issue #66)
+//
+// `compareCandidates` is READ ONLY — it approves nothing and executes
+// nothing. `recordComparisonDecision` writes one decision-memory row and
+// still does NOT approve or execute the selected candidate.
+// ============================================
+export interface ComparisonCandidateRef { id: string; kind?: 'task' | 'opportunity' | 'strategy' }
+
+export const getComparableCandidates = (businessId: string) =>
+  get(`/comparisons/${businessId}/candidates`)
+export const compareCandidates = (businessId: string, candidates: ComparisonCandidateRef[]) =>
+  post(`/comparisons/${businessId}/compare`, { candidates })
+export const recordComparisonDecision = (
+  businessId: string,
+  payload: {
+    candidates: ComparisonCandidateRef[]
+    outcome: 'selected' | 'deferred'
+    selected_candidate_id?: string | null
+    rationale: string
+  },
+) => post(`/comparisons/${businessId}/decision`, payload)
+
+// ============================================
 // Conflicts (Feature 2)
 // ============================================
 export const getConflicts = (businessId: string, params = '') =>
@@ -354,6 +463,18 @@ export const auditConflicts = (businessId: string) => post(`/conflicts/${busines
 export const getRetrospectives = (businessId: string) => get(`/retrospectives/${businessId}`)
 export const getRetrospective = (businessId: string, id: string) => get(`/retrospectives/${businessId}/${id}`)
 export const runRetrospective = (businessId: string) => post(`/retrospectives/${businessId}/run`)
+
+// Retrospective operating-change proposals (#73). Approve/reject routes
+// through the decision queue server-side; there is no "activate" endpoint.
+export const getRetrospectiveProposals = (businessId: string, status?: string) =>
+  get(`/retrospectives/${businessId}/proposals`, status ? { status } : undefined)
+export const reviewRetrospectiveProposal = (
+  businessId: string, proposalId: string,
+  body: { outcome: 'approve' | 'reject'; reason?: string; override_reason?: string },
+) => post(`/retrospectives/${businessId}/proposals/${proposalId}/review`, body)
+export const rollbackRetrospectiveProposal = (
+  businessId: string, proposalId: string, reason?: string,
+) => post(`/retrospectives/${businessId}/proposals/${proposalId}/rollback`, { reason })
 
 // ============================================
 // Goal suggestions (Feature 6)
@@ -475,6 +596,30 @@ export const getSecurityOutboundLog = (params?: Params) => get('/security/outbou
 export const getDecisions = (businessId: string, params?: Params) => get(`/decisions/${businessId}`, params)
 export const getDecisionDetail = (businessId: string, id: string) => get(`/decisions/${businessId}/${id}`)
 
+// ─── Decision Centre — the pending review queue (#61) ───────────────────────
+// The counterpart to the decision history above: what still needs a human,
+// classified by the per-business operating policy (#68).
+export const getDecisionQueue = (businessId: string, params?: Params) => get(`/decision-queue/${businessId}`, params)
+export const getDecisionClasses = (businessId: string) => get(`/decision-queue/${businessId}/classes`)
+export const reviewPendingDecision = (
+  businessId: string,
+  taskId: string,
+  body: {
+    outcome: 'approve' | 'reject' | 'defer' | 'amend'
+    reason?: string | null
+    override_reason?: string | null
+    amended_payload?: unknown
+    approve_after_amend?: boolean
+    defer_until?: string | null
+  },
+) => post(`/decision-queue/${businessId}/${taskId}/review`, body)
+/** Previews a standing policy rule; saving stays in the policy editor (#68). */
+export const proposePolicyRule = (
+  businessId: string,
+  taskId: string,
+  ruleKind: 'always_require_human' | 'cap_auto_approve_tier',
+) => post(`/decision-queue/${businessId}/${taskId}/propose-rule`, { rule_kind: ruleKind })
+
 // ─── Knowledge Graph (Phase 3) ──────────────────────────────────────────────
 export const getGraph = (businessId: string, params: Params) => get(`/graph/${businessId}`, params)
 export const rebuildGraph = (businessId: string) => post(`/graph/${businessId}/rebuild`)
@@ -530,3 +675,92 @@ export const cancelSocialPost = (bizId: string, postId: string) => post(`${socia
 export const publishSocialPost = (bizId: string, postId: string) => post(`${socialBase(bizId)}/posts/${postId}/publish`)
 export const uploadSocialMedia = (bizId: string, body: object) => post(`${socialBase(bizId)}/media/upload`, body)
 export const deleteStagedMedia = (bizId: string, token: string, connectorId: string) => del(`${socialBase(bizId)}/media/${token}`, { connectorId })
+
+// ============================================
+// Operating Policies (#68)
+// ============================================
+export const getOperatingPolicy = (businessId: string) => get(`/operating-policies/${businessId}`)
+export const getOperatingPolicyVersion = (businessId: string, version: number) => get(`/operating-policies/${businessId}/versions/${version}`)
+export const previewOperatingPolicy = (businessId: string, patch: unknown, effectiveAt?: string | null) =>
+  post(`/operating-policies/${businessId}/preview`, { patch, effective_at: effectiveAt ?? null })
+export const saveOperatingPolicy = (
+  businessId: string,
+  body: { patch: unknown; effective_at?: string | null; change_reason?: string | null; base_version?: number | null },
+) => post(`/operating-policies/${businessId}`, body)
+export const rollbackOperatingPolicy = (businessId: string, toVersion: number, changeReason?: string | null) =>
+  post(`/operating-policies/${businessId}/rollback`, { to_version: toVersion, change_reason: changeReason ?? null })
+export const cancelScheduledOperatingPolicy = (businessId: string, version: number, reason?: string | null) =>
+  post(`/operating-policies/${businessId}/versions/${version}/cancel`, { reason: reason ?? null })
+export const getPolicyPortfolios = () => get('/operating-policies/portfolios')
+export const savePolicyPortfolio = (body: { id?: string; name: string; business_ids: string[] }) =>
+  post('/operating-policies/portfolios', body)
+
+// ============================================
+// Executive command centre (#59)
+// ============================================
+// The one deliberately cross-business read in the API. `business_ids` is an
+// ad hoc selection; `portfolio_id` names one of #68's saved policy
+// portfolios as a shorthand for the same thing. Read-only by design —
+// acting on a decision goes through reviewPendingDecision() above, which
+// re-derives the item's policy standing at the moment of the decision.
+export const getCommandCentre = (params?: Params) => get('/command-centre', params)
+export const getCommandCentreScope = () => get('/command-centre/scope')
+
+// ============================================
+// Portfolios and portfolio comparison (#71)
+// ============================================
+// A saved, named grouping of businesses, compared metric-by-metric. Distinct
+// from the command centre above (which triages decisions per business) and
+// from #68's policy portfolios (which must partition businesses, where these
+// may overlap freely). The writes here record membership only — grouping a
+// business grants no access to it and takes no action on it.
+export const getPortfolios = () => get('/portfolios')
+export const getPortfolio = (id: string) => get(`/portfolios/${id}`)
+export const createPortfolio = (body: { name: string; description?: string | null; business_ids: string[] }) =>
+  post('/portfolios', body)
+export const updatePortfolio = (id: string, body: { name?: string; description?: string | null }) =>
+  patch(`/portfolios/${id}`, body)
+export const deletePortfolio = (id: string) => del(`/portfolios/${id}`)
+export const addPortfolioMembers = (id: string, businessIds: string[], reason?: string) =>
+  post(`/portfolios/${id}/members`, { business_ids: businessIds, reason: reason ?? null })
+// DELETE carries no body through the shared helper, so ids travel as a query
+// param — the route accepts both forms.
+export const removePortfolioMembers = (id: string, businessIds: string[]) =>
+  del(`/portfolios/${id}/members`, { business_ids: businessIds.join(',') })
+export const getPortfolioHistory = (id: string, params?: Params) => get(`/portfolios/${id}/history`, params)
+export const getPortfolioComparison = (id: string, params?: Params) =>
+  get(`/portfolios/${id}/comparison`, params)
+export const importPolicyPortfolio = (policyPortfolioId: string, name?: string) =>
+  post('/portfolios/import-policy-portfolio', { policy_portfolio_id: policyPortfolioId, name })
+
+// ============================================
+// Natural-language audit/history search (issue #72)
+// ============================================
+//
+// Two layers on the server, and the response makes both visible:
+// `interpretation` says how the question became filters (and whether the
+// language model was even reachable), and `results` are real rows, each
+// carrying the table and primary key it came from. A `summary` of kind
+// 'grounded_narrative' is INFERRED and labelled as such; one of kind
+// 'withheld' means a narrative was produced and discarded because it could
+// not be traced back to the retrieved records.
+
+export interface AuditSearchFilters {
+  record_types?: string[]
+  statuses?: string[]
+  terms?: string[]
+  from?: string | null
+  to?: string | null
+}
+
+export const getAuditSearchVocabulary = (businessId: string) =>
+  get(`/audit-search/${businessId}/vocabulary`)
+
+export const runAuditSearch = (
+  businessId: string,
+  body: { query: string; filters?: AuditSearchFilters; limit?: number; summarise?: boolean },
+) => post(`/audit-search/${businessId}`, body)
+
+/** Resolve one citation ref (`decision#dec_1`) back to its record. */
+export const getAuditSearchRecord = (businessId: string, ref: string) =>
+  get(`/audit-search/${businessId}/record/${encodeURIComponent(ref)}`)

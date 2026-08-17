@@ -15,6 +15,9 @@ const KB             = lazy(() => import('./pages/KB.tsx'))
 const SystemHealth   = lazy(() => import('./pages/SystemHealth.tsx'))
 const Chat           = lazy(() => import('./pages/Chat.tsx'))
 const Outcomes       = lazy(() => import('./pages/Outcomes.tsx'))
+const Receipts       = lazy(() => import('./pages/Receipts.tsx'))
+const Digest         = lazy(() => import('./pages/Digest.tsx'))
+const AuditSearch    = lazy(() => import('./pages/AuditSearch.tsx'))
 const ROI            = lazy(() => import('./pages/ROI.tsx'))
 const Workflows      = lazy(() => import('./pages/Workflows.tsx'))
 const Goals          = lazy(() => import('./pages/Goals.tsx'))
@@ -26,12 +29,17 @@ const Timeline       = lazy(() => import('./pages/Timeline.tsx'))
 const Settings       = lazy(() => import('./pages/Settings.tsx'))
 const Opportunities  = lazy(() => import('./pages/Opportunities.tsx'))
 const Decisions      = lazy(() => import('./pages/Decisions.tsx'))
+const DecisionCentre = lazy(() => import('./pages/DecisionCentre.tsx'))
+const ExecutiveCommandCentre = lazy(() => import('./pages/ExecutiveCommandCentre.tsx'))
+const PortfolioView  = lazy(() => import('./pages/PortfolioView.tsx'))
 const Recommendations = lazy(() => import('./pages/Recommendations.tsx'))
+const Comparison     = lazy(() => import('./pages/Comparison.tsx'))
 const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
 const RelationshipGraph = lazy(() => import('./pages/RelationshipGraph.tsx'))
 const LoginPage      = lazy(() => import('./pages/LoginPage.tsx'))
 const Onboarding     = lazy(() => import('./pages/Onboarding.tsx'))
 const TrustOps       = lazy(() => import('./pages/TrustOps.tsx'))
+const PolicyEditor   = lazy(() => import('./pages/PolicyEditor.tsx'))
 const SocialPublishing = lazy(() => import('./pages/SocialPublishing.tsx'))
 
 // Minimal fallback shown while a page chunk is loading for the first time.
@@ -163,6 +171,9 @@ function App() {
           <Route path="chat" element={<Chat />} />
           <Route path="chat/:conversationId" element={<Chat />} />
           <Route path="outcomes" element={<Outcomes />} />
+          <Route path="receipts" element={<Receipts />} />
+          <Route path="digest" element={<Digest />} />
+          <Route path="audit-search" element={<AuditSearch />} />
           <Route path="roi" element={<ROI />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="goals" element={<Goals />} />
@@ -174,11 +185,16 @@ function App() {
           <Route path="projects/:projectId" element={<Projects />} />
           <Route path="timeline" element={<Timeline />} />
           <Route path="opportunities" element={<Opportunities />} />
+          <Route path="command-centre" element={<ExecutiveCommandCentre />} />
+          <Route path="portfolio" element={<PortfolioView />} />
+          <Route path="decision-centre" element={<DecisionCentre />} />
           <Route path="decisions" element={<Decisions />} />
           <Route path="recommendations" element={<Recommendations />} />
+          <Route path="comparison" element={<Comparison />} />
           <Route path="calibration" element={<Calibration />} />
           <Route path="graph" element={<RelationshipGraph />} />
           <Route path="trust" element={<TrustOps />} />
+          <Route path="policy" element={<PolicyEditor />} />
           <Route path="social-publishing" element={<SocialPublishing />} />
           <Route path="settings" element={<Settings />} />
         </Route>

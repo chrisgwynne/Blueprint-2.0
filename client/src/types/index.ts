@@ -30,6 +30,10 @@ export interface Business {
   updated_at: string;
 }
 
+// Issue #65: normalized connector health/freshness state, distinct from the
+// raw connection `status` above — see server/connectors/health.ts.
+export type ConnectorHealthState = 'healthy' | 'stale' | 'partial' | 'failing' | 'permission_required' | 'not_applicable';
+
 export interface Connector {
   id: string;
   business_id: string;
@@ -40,6 +44,14 @@ export interface Connector {
   last_error: string | null;
   config: Record<string, unknown>;
   created_at: string;
+  // Present when the server has computed the issue #65 health explanation
+  // (GET /api/connectors/:businessId) — optional so older cached data /
+  // other endpoints that don't compute it don't break typing.
+  health_state?: ConnectorHealthState;
+  health_summary?: string;
+  health_impact?: string | null;
+  health_next_step?: string | null;
+  health_coverage_complete?: boolean | null;
 }
 
 export interface Signal {
@@ -359,12 +371,39 @@ export type ActivationChannel = 'signal' | 'schedule' | 'manual' | 'workflow' | 
 
 export type AgentRiskLevel = 'low' | 'medium' | 'high';
 
+/** Advisory retain/monitor/downgrade/retire verdict (server/agents/hiring/retention.ts). */
+export type RetentionVerdict = 'retain' | 'monitor' | 'downgrade' | 'retire';
+
+export interface RetentionAssessment {
+  agent_id: string;
+  verdict: RetentionVerdict;
+  reason: string;
+  evidence: {
+    installed_at: string | null;
+    trials_total: number;
+    successful: number;
+    neutral: number;
+    unsuccessful: number;
+    insufficient_data: number;
+    open: number;
+    total_cost_usd: number;
+    mean_calibration_error: number | null;
+    last_verdict: string | null;
+    last_verdict_reason: string | null;
+  };
+}
+
+/** Same health vocabulary as GET /api/agents-status (the AgentPanel status field). */
+export type AgentHealth = 'retired' | 'pending_hire' | 'paused' | 'running' | 'error' | 'stale' | 'sleeping' | 'idle';
+
 /** A single agent as returned by GET /api/agents-status/roster. */
 export interface AgentRosterEntry {
   id: string;
   name: string;
   avatar: string;
   lifecycle_state: AgentLifecycleState;
+  /** Present since #69 — running/error/stale/paused/retired/etc. */
+  health?: AgentHealth;
   role: string | null;
   purpose: string | null;
   current_task: { id: string; title: string; status: string } | null;
@@ -388,6 +427,10 @@ export interface AgentRosterEntry {
   failure_count: number;
   success_rate: number | null;
   busy: boolean;
+  /** Business-scoped retain/monitor/downgrade/retire verdict (#69) — null without a business_id. */
+  retention?: RetentionAssessment | null;
+  /** Distinguishes an installed/standby agent with no track record from one with measured, verified outcomes (#69). */
+  has_verified_outcome?: boolean | null;
 }
 
 export interface AgentRosterResponse {

@@ -197,6 +197,26 @@ const mountRoutes = async () => {
   const { default: exportRoutes } = await import('./routes/export.js');
   const { default: systemHealthRoutes } = await import('./routes/system-health.js');
   const { default: outcomesRoutes } = await import('./routes/outcomes.js');
+  const { default: receiptsRoutes } = await import('./routes/receipts.js');
+  const { default: digestRoutes } = await import('./routes/digest.js');
+  // Explanations (#60) — "why did Blueprint do this?" for tasks, decision
+  // memory rows and hiring decisions. A pure read over the records #53,
+  // #61, #63, #66, #68 and #70 already author; it computes nothing new.
+  const { default: explanationsRoutes } = await import('./routes/explanations.js');
+  // Natural-language audit/history search (#72) — a retrieval layer over
+  // the records #61, #63, #68 and #70 already author. A model turns the
+  // question into filters; the filters run as real SQL; every result is a
+  // cited row, and any generated summary is verified against those rows
+  // before it is shown.
+  const { default: auditSearchRoutes } = await import('./routes/audit-search.js');
+  // Safe simulation / preview mode (#67) — one preview shape for every
+  // supported action and workflow type, and the separately-authorised
+  // execution step that re-validates a preview against live data before
+  // acting on it. The side-effect guarantees are enforced in the shared
+  // execution paths (db.prepare, createTask, approveTask,
+  // enqueueExecutionJob, installAgent, safeFetch and the dispatchers), not
+  // in this route — see server/simulation/simulation-context.ts.
+  const { default: simulationsRoutes } = await import('./routes/simulations.js');
   const { default: chatRoutes } = await import('./routes/chat.js');
   const { default: workflowsRoutes } = await import('./routes/workflows.js');
   const { default: goalsRoutes } = await import('./routes/goals.js');
@@ -207,6 +227,7 @@ const mountRoutes = async () => {
   const { default: roiRoutes } = await import('./routes/roi.js');
   const { default: brainRoutes } = await import('./routes/brain.js');
   const { default: scenariosRoutes } = await import('./routes/scenarios.js');
+  const { default: comparisonsRoutes } = await import('./routes/comparisons.js');
   const { default: conflictsRoutes } = await import('./routes/conflicts.js');
   const { default: retrospectivesRoutes } = await import('./routes/retrospectives.js');
   const { default: investigationsRoutes } = await import('./routes/investigations.js');
@@ -217,12 +238,27 @@ const mountRoutes = async () => {
   // dashboard. Same underlying engines, isAuthenticated instead of a BAP
   // key — see each file's docstring.
   const { default: decisionsRoutes } = await import('./routes/decisions.js');
+  // Decision Centre (#61) — the pending-review queue. decisions.ts above is
+  // the read-only "why did we decide this" history; this is what still needs
+  // a human, derived from tasks and classified by the #68 operating policy.
+  const { default: decisionQueueRoutes } = await import('./routes/decision-queue.js');
+  // Executive command centre (#59) — the cross-business decision view. The
+  // one deliberately multi-business read in the dashboard API; it joins the
+  // decision queue, receipts, ROI and connector health that the per-business
+  // surfaces above already own, and computes nothing of its own.
+  const { default: commandCentreRoutes } = await import('./routes/command-centre.js');
+  // #71 — saved portfolios and the comparative cross-business view over
+  // them. Distinct from the command centre above: that one triages
+  // decisions per business, this one compares businesses per metric and
+  // refuses to rank figures that were derived differently.
+  const { default: portfolioRoutes } = await import('./routes/portfolios.js');
   const { default: graphRoutes } = await import('./routes/graph.js');
   const { default: reviewRoutes } = await import('./routes/review.js');
   // Phase 2-INT — Autonomous Intelligence Foundation: Business Profile,
   // Action Registry, Connector Confidence, World Model, System Issues.
   const { default: intelligenceRoutes } = await import('./routes/intelligence.js');
   const { default: trustRoutes } = await import('./routes/trust.js');
+  const { default: operatingPoliciesRoutes } = await import('./routes/operating-policies.js');
   const { default: socialPublishingRoutes } = await import('./routes/social-publishing.js');
   const { default: socialMediaServingRoutes } = await import('./routes/social-media-serving.js');
   const { sseHandler } = await import('./lib/sse-bus.js');
@@ -246,6 +282,11 @@ const mountRoutes = async () => {
   app.use('/api/export', exportRoutes);
   app.use('/api/system', systemHealthRoutes);
   app.use('/api/outcomes', outcomesRoutes);
+  app.use('/api/receipts', receiptsRoutes);
+  app.use('/api/digest', digestRoutes);
+  app.use('/api/explanations', explanationsRoutes);
+  app.use('/api/audit-search', auditSearchRoutes);
+  app.use('/api/simulations', simulationsRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/workflows', workflowsRoutes);
   app.use('/api/goals', goalsRoutes);
@@ -256,16 +297,21 @@ const mountRoutes = async () => {
   app.use('/api/roi', roiRoutes);
   app.use('/api/brain', brainRoutes);
   app.use('/api/scenarios', scenariosRoutes);
+  app.use('/api/comparisons', comparisonsRoutes);
   app.use('/api/conflicts', conflictsRoutes);
   app.use('/api/retrospectives', retrospectivesRoutes);
   app.use('/api/investigations', investigationsRoutes);
   app.use('/api/goal-suggestions', goalSuggestionsRoutes);
   app.use('/api/security', securityRoutes);
   app.use('/api/decisions', decisionsRoutes);
+  app.use('/api/decision-queue', decisionQueueRoutes);
+  app.use('/api/command-centre', commandCentreRoutes);
+  app.use('/api/portfolios', portfolioRoutes);
   app.use('/api/graph', graphRoutes);
   app.use('/api/review', reviewRoutes);
   app.use('/api/intelligence', intelligenceRoutes);
   app.use('/api/trust', trustRoutes);
+  app.use('/api/operating-policies', operatingPoliciesRoutes);
   app.use('/api/social-publishing', socialPublishingRoutes);
   // Public media serving — no auth, secured by HMAC-signed time-limited URLs
   app.use('/social-media', socialMediaServingRoutes);

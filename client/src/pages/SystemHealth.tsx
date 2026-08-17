@@ -16,11 +16,26 @@ const STATUS_COLORS: Record<string, { label: string; color: string; bg: string }
 }
 
 const CONN_STATUS: Record<string, { dot: string; label: string; color: string }> & { disconnected: { dot: string; label: string; color: string } } = {
-  live:         { dot: '🟢', label: 'Live',         color: 'var(--bp-green)' },
-  stale:        { dot: '🟡', label: 'Stale',        color: 'var(--bp-amber)' },
-  error:        { dot: '🔴', label: 'Error',        color: 'var(--bp-red)'   },
-  disconnected: { dot: '⚪', label: 'Disconnected', color: 'var(--bp-text-3)' },
-  syncing:      { dot: '🔵', label: 'Syncing',      color: 'var(--bp-blue)'  },
+  live:           { dot: '🟢', label: 'Live',           color: 'var(--bp-green)' },
+  stale:          { dot: '🟡', label: 'Stale',          color: 'var(--bp-amber)' },
+  error:          { dot: '🔴', label: 'Error',          color: 'var(--bp-red)'   },
+  disconnected:   { dot: '⚪', label: 'Disconnected',   color: 'var(--bp-text-3)' },
+  syncing:        { dot: '🔵', label: 'Syncing',        color: 'var(--bp-blue)'  },
+  not_applicable: { dot: '⚪', label: 'Not applicable', color: 'var(--bp-text-3)' },
+}
+
+// Issue #65: the connector's understandable health state — a superset of
+// the raw connectivity status above that also distinguishes a
+// permission/scope problem (fix: reconnect with the right scope) and a
+// partial sync (fix: nothing broken, just incomplete — re-sync) from a
+// generic failure, per server/connectors/health.ts.
+const HEALTH_STATE: Record<string, { dot: string; label: string; color: string }> = {
+  healthy:             { dot: '🟢', label: 'Healthy',             color: 'var(--bp-green)' },
+  stale:               { dot: '🟡', label: 'Stale',               color: 'var(--bp-amber)' },
+  partial:             { dot: '🟠', label: 'Partial coverage',    color: 'var(--bp-amber)' },
+  failing:             { dot: '🔴', label: 'Failing',             color: 'var(--bp-red)'   },
+  permission_required: { dot: '🟣', label: 'Permission required', color: '#818cf8'         },
+  not_applicable:      { dot: '⚪', label: 'Not applicable',      color: 'var(--bp-text-3)' },
 }
 
 const AGENT_STATUS: Record<string, { color: string; label: string }> & { idle: { color: string; label: string } } = {
@@ -73,15 +88,22 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 // ─── Connectors table ─────────────────────────────────────────────────────────
+// Grouped by business (server already sorts connectors by business, type —
+// see system-health.ts's `ORDER BY b.name, c.type`), with an optional
+// business filter so a large multi-business install isn't one giant list.
 function ConnectorsTable({ connectors, onSync }: { connectors: any[]; onSync: (id: string) => Promise<void> }) {
-  const [expandedErr, setExpandedErr] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState<string | null>(null)
   const [syncing, setSyncing] = useState<Record<string, boolean>>({})
+  const [businessFilter, setBusinessFilter] = useState<string>('all')
 
   if (!connectors?.length) {
     return <div style={{ padding: 16, fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-3)' }}>
       No connectors configured.
     </div>
   }
+
+  const businesses = Array.from(new Set(connectors.map((c) => c.business_name))).sort()
+  const visible = businessFilter === 'all' ? connectors : connectors.filter((c) => c.business_name === businessFilter)
 
   async function handleSync(id: string) {
     setSyncing(prev => ({ ...prev, [id]: true }))
@@ -90,83 +112,121 @@ function ConnectorsTable({ connectors, onSync }: { connectors: any[]; onSync: (i
   }
 
   return (
-    <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
-        <thead>
-          <tr style={{ borderBottom: '1px solid var(--bp-border)', background: 'var(--bp-surface-2)' }}>
-            <Th>Connector</Th>
-            <Th>Business</Th>
-            <Th>Status</Th>
-            <Th>Last sync</Th>
-            <Th>Next sync</Th>
-            <Th align="right">Metrics</Th>
-            <Th align="right">Signals</Th>
-            <Th></Th>
-          </tr>
-        </thead>
-        <tbody>
-          {connectors.map((c) => {
-            const cfg = CONN_STATUS[c.status] ?? CONN_STATUS.disconnected
-            const rowBg = c.status === 'stale' ? 'rgba(245,158,11,0.05)'
-                       : c.status === 'error' ? 'rgba(255,82,82,0.05)'
-                       : 'transparent'
-            const overdue = c.status === 'stale' && c.next_sync_in_minutes != null && c.next_sync_in_minutes < 0
-            const actionable = c.status === 'stale' || c.status === 'error' || c.status === 'disconnected'
-            return (
-              <React.Fragment key={c.id}>
-                <tr style={{ borderBottom: '1px solid var(--bp-border)', background: rowBg }}>
-                  <Td><strong style={{ color: 'var(--bp-text)' }}>{c.name}</strong></Td>
-                  <Td>{c.business_name}</Td>
-                  <Td>
-                    <span style={{ color: cfg.color }}>
-                      {cfg.dot} {cfg.label}
-                    </span>
-                  </Td>
-                  <Td>{fmtRel(c.last_sync)}</Td>
-                  <Td>
-                    {overdue ? (
-                      <span style={{ color: 'var(--bp-amber)' }}>⚠ overdue</span>
-                    ) : c.next_sync_in_minutes != null ? fmtMinutes(c.next_sync_in_minutes) : '—'}
-                  </Td>
-                  <Td align="right">{c.metrics_stored?.toLocaleString() ?? 0}</Td>
-                  <Td align="right">{c.signals_enabled ?? 0}</Td>
-                  <Td>
-                    {actionable && (
-                      <button
-                        onClick={() => handleSync(c.id)}
-                        disabled={syncing[c.id]}
-                        className="bp-btn bp-btn-ghost"
-                        style={{ fontSize: 10, padding: '3px 8px' }}
-                      >
-                        <RefreshCw size={10} style={{
-                          animation: syncing[c.id] ? 'bp-spin-slow 1s linear infinite' : 'none',
-                        }} /> Sync
-                      </button>
-                    )}
-                    {c.last_error && (
-                      <button
-                        onClick={() => setExpandedErr(expandedErr === c.id ? null : c.id)}
-                        className="bp-btn bp-btn-ghost"
-                        style={{ fontSize: 10, padding: '3px 8px', marginLeft: 4 }}
-                      >
-                        {expandedErr === c.id ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
-                        error
-                      </button>
-                    )}
-                  </Td>
-                </tr>
-                {expandedErr === c.id && c.last_error && (
-                  <tr style={{ background: 'rgba(255,82,82,0.05)' }}>
-                    <td colSpan={8} style={{ padding: 12, fontSize: 10, color: 'var(--bp-red)', borderBottom: '1px solid var(--bp-border)' }}>
-                      <strong>Last error:</strong> {c.last_error}
-                    </td>
+    <div>
+      {businesses.length > 1 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Business</span>
+          <select
+            value={businessFilter}
+            onChange={(e) => setBusinessFilter(e.target.value)}
+            className="bp-select"
+            style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}
+          >
+            <option value="all">All businesses</option>
+            {businesses.map((b) => <option key={b} value={b}>{b}</option>)}
+          </select>
+        </div>
+      )}
+      <div className="bp-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+          <thead>
+            <tr style={{ borderBottom: '1px solid var(--bp-border)', background: 'var(--bp-surface-2)' }}>
+              <Th>Connector</Th>
+              <Th>Business</Th>
+              <Th>Health</Th>
+              <Th>Last success</Th>
+              <Th>Next sync</Th>
+              <Th align="right">Metrics</Th>
+              <Th align="right">Signals</Th>
+              <Th></Th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((c) => {
+              const healthCfg = HEALTH_STATE[c.health_state] ?? HEALTH_STATE[c.status] ?? CONN_STATUS[c.status] ?? CONN_STATUS.disconnected
+              const degraded = c.health_state && c.health_state !== 'healthy' && c.health_state !== 'not_applicable'
+              const rowBg = c.health_state === 'failing' ? 'rgba(255,82,82,0.05)'
+                         : c.health_state === 'permission_required' ? 'rgba(129,140,248,0.06)'
+                         : (c.health_state === 'stale' || c.health_state === 'partial') ? 'rgba(245,158,11,0.05)'
+                         : 'transparent'
+              const overdue = c.health_state === 'stale' && c.next_sync_in_minutes != null && c.next_sync_in_minutes < 0
+              const actionable = c.health_state === 'stale' || c.health_state === 'failing' || c.health_state === 'partial' || c.health_state === 'permission_required'
+              const hasDetail = !!(c.health_impact || c.health_next_step || c.last_error)
+              return (
+                <React.Fragment key={c.id}>
+                  <tr style={{ borderBottom: '1px solid var(--bp-border)', background: rowBg }}>
+                    <Td><strong style={{ color: 'var(--bp-text)' }}>{c.name}</strong></Td>
+                    <Td>{c.business_name}</Td>
+                    <Td>
+                      <span style={{ color: healthCfg.color }} title={c.health_summary}>
+                        {healthCfg.dot} {healthCfg.label}
+                      </span>
+                      {c.health_coverage_complete === false && (
+                        <span style={{ marginLeft: 6, color: 'var(--bp-amber)' }} title="Latest sync did not capture the full dataset">partial</span>
+                      )}
+                    </Td>
+                    <Td>{fmtRel(c.last_sync)}</Td>
+                    <Td>
+                      {overdue ? (
+                        <span style={{ color: 'var(--bp-amber)' }}>⚠ overdue</span>
+                      ) : c.next_sync_in_minutes != null ? fmtMinutes(c.next_sync_in_minutes) : '—'}
+                    </Td>
+                    <Td align="right">{c.metrics_stored?.toLocaleString() ?? 0}</Td>
+                    <Td align="right">{c.signals_enabled ?? 0}</Td>
+                    <Td>
+                      {actionable && (
+                        <button
+                          onClick={() => handleSync(c.id)}
+                          disabled={syncing[c.id]}
+                          className="bp-btn bp-btn-ghost"
+                          style={{ fontSize: 10, padding: '3px 8px' }}
+                        >
+                          <RefreshCw size={10} style={{
+                            animation: syncing[c.id] ? 'bp-spin-slow 1s linear infinite' : 'none',
+                          }} /> Sync
+                        </button>
+                      )}
+                      {hasDetail && (
+                        <button
+                          onClick={() => setExpanded(expanded === c.id ? null : c.id)}
+                          className="bp-btn bp-btn-ghost"
+                          style={{ fontSize: 10, padding: '3px 8px', marginLeft: 4 }}
+                        >
+                          {expanded === c.id ? <ChevronUp size={10} /> : <ChevronDown size={10} />}
+                          details
+                        </button>
+                      )}
+                    </Td>
                   </tr>
-                )}
-              </React.Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+                  {expanded === c.id && hasDetail && (
+                    <tr style={{ background: degraded ? 'rgba(245,158,11,0.05)' : 'transparent' }}>
+                      <td colSpan={8} style={{ padding: 12, fontSize: 10, borderBottom: '1px solid var(--bp-border)' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {c.health_impact && (
+                            <div style={{ color: 'var(--bp-text-2)' }}>
+                              <strong style={{ color: 'var(--bp-text)' }}>Impact:</strong> {c.health_impact}
+                            </div>
+                          )}
+                          {c.health_next_step && (
+                            <div style={{ color: 'var(--bp-text-2)' }}>
+                              <strong style={{ color: 'var(--bp-text)' }}>Next step:</strong> {c.health_next_step}
+                            </div>
+                          )}
+                          {c.last_error && (
+                            <div style={{ color: 'var(--bp-red)' }}>
+                              <strong>Last error:</strong> {c.last_error}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }

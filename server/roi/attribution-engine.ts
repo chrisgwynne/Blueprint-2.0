@@ -27,6 +27,7 @@
 import db from '../db/db.js';
 import { getBaselines, getCurrentMetric } from './baselines.js';
 import { estimateMonthlyValue } from './value-estimator.js';
+import { classifyOutcomeTaxonomy, emptyTaxonomyCounts, type TaxonomyResult } from '../tasks/outcome-taxonomy.js';
 
 // Confidence thresholds from the spec.
 const DATA_STATES = [
@@ -92,6 +93,57 @@ export function computeROIReport(businessId: string, opts: { period_start?: stri
     });
   }
 
+  // ─── Outcome taxonomy (issue #63) ───────────────────────────────────────
+  // Every task belonging to this business gets one of four honest labels —
+  // activity / verified_action / outcome_measured / roi_not_measurable —
+  // computed by classifyOutcomeTaxonomy (server/tasks/outcome-taxonomy.ts).
+  // This is the single source of truth: attributed line items below pull
+  // their taxonomy_state + citation from this same map rather than
+  // re-deriving it, so the label and the £ figure never disagree.
+  const taxonomyTaskRows = db.prepare(`
+    SELECT id, status, action_type, target_metric, completed_at
+      FROM tasks WHERE business_id = ?
+  `).all(businessId) as Array<{ id: string; status: string; action_type: string | null; target_metric: string | null; completed_at: string | null }>;
+
+  const taxonomyCheckRows = db.prepare(`
+    SELECT o.id, o.task_id, o.weeks_after, o.verdict, o.check_date
+      FROM task_outcomes o JOIN tasks t ON t.id = o.task_id
+     WHERE t.business_id = ?
+     ORDER BY o.weeks_after ASC
+  `).all(businessId) as Array<{ id: string; task_id: string; weeks_after: number; verdict: string | null; check_date: string }>;
+
+  const taxonomyChecksByTask = new Map<string, typeof taxonomyCheckRows>();
+  for (const c of taxonomyCheckRows) {
+    const list = taxonomyChecksByTask.get(c.task_id) ?? [];
+    list.push(c);
+    taxonomyChecksByTask.set(c.task_id, list);
+  }
+
+  const taxonomyByTaskId = new Map<string, TaxonomyResult>();
+  const taxonomyCounts = emptyTaxonomyCounts();
+  const pendingMeasurement: Array<{ task_id: string } & TaxonomyResult> = [];
+  for (const t of taxonomyTaskRows) {
+    const result = classifyOutcomeTaxonomy({
+      task_id: t.id,
+      task_status: t.status,
+      action_type: t.action_type,
+      target_metric: t.target_metric,
+      completed_at: t.completed_at,
+      checks: taxonomyChecksByTask.get(t.id) ?? [],
+    });
+    taxonomyCounts[result.state]++;
+    taxonomyByTaskId.set(t.id, result);
+    if (result.state === 'roi_not_measurable') {
+      pendingMeasurement.push({ task_id: t.id, ...result });
+    }
+  }
+  // Soonest-expected-first so the dashboard can show "what's about to land".
+  pendingMeasurement.sort((a, b) => {
+    const ae = a.citation.window_end ? new Date(a.citation.window_end).getTime() : Infinity;
+    const be = b.citation.window_end ? new Date(b.citation.window_end).getTime() : Infinity;
+    return ae - be;
+  });
+
   // ─── Task-linked attribution ────────────────────────────────────────────
   // Any task with a measured outcome that's linked to one of our baseline
   // metrics gets a share of attribution. Confidence graded per the spec:
@@ -136,6 +188,12 @@ export function computeROIReport(businessId: string, opts: { period_start?: stri
       if (windowClosed && magnitudeMeaningful) confidence = 'high';
       else if (windowClosed || magnitudeMeaningful) confidence = 'medium';
 
+      // Pull the taxonomy label + citation from the single source of truth
+      // built above, rather than re-deriving it — this task is always
+      // 'outcome_measured' here (a verdict exists), but the citation
+      // (outcome_id, exact window dates) comes from that shared map.
+      const taxonomy = taxonomyByTaskId.get(o.task_id);
+
       const record = {
         task_id: o.task_id,
         task_title: o.task_title,
@@ -149,6 +207,14 @@ export function computeROIReport(businessId: string, opts: { period_start?: stri
         value_confidence: est.confidence,
         weeks_after: o.weeks_after,
         checked_at: o.check_date,
+        taxonomy_state: taxonomy?.state ?? 'outcome_measured',
+        citation: taxonomy?.citation ?? {
+          task_id: o.task_id,
+          outcome_id: null,
+          window_start: o.task_completed_at ?? null,
+          window_end: o.check_date,
+          window_end_is_expected: false,
+        },
       };
 
       if (o.verdict === 'improved') attributedImprovements.push(record);
@@ -243,6 +309,15 @@ export function computeROIReport(businessId: string, opts: { period_start?: stri
     attributed_decline_usd_per_month: Math.round(attributedDeclineUsd * 100) / 100,
     roi_ratio: roiRatio != null ? Math.round(roiRatio * 10) / 10 : null,
     narrative,
+    // Issue #63: honest activity/verified_action/outcome_measured/
+    // roi_not_measurable taxonomy across every task on this business, plus
+    // the tasks currently sitting in an open measurement window (soonest
+    // expected close first) so the dashboard can show what's still pending
+    // without claiming a result that doesn't exist yet.
+    taxonomy: {
+      counts: taxonomyCounts,
+      pending_measurement: pendingMeasurement.slice(0, 50),
+    },
   };
 }
 

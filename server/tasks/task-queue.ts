@@ -7,7 +7,13 @@ import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
 import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
+import {
+  openReceipt, recordPreExecutionRejection, recordCancellation, recordFollowUp, safeReceipt,
+} from './action-receipts.js';
 import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
+import { effectiveDailyTaskCap, evaluateAutonomyGate, resolveOperatingPolicy, tierRank } from '../policy/operating-policy.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
+import { authorizeFromPreview } from '../simulation/simulation-store.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -74,6 +80,17 @@ export interface CreateTaskParams {
   [key: string]: unknown;  // allow extra fields passed by callers
 }
 
+/** Options for approveTask(). Additive — every existing caller is unaffected. */
+export interface ApproveTaskOptions {
+  /**
+   * A #67 simulation preview this approval is being made on the strength of.
+   * When supplied it is re-validated against live state before anything
+   * changes, and approval is refused if the preview has expired, has already
+   * been used, or no longer matches the data it was computed from.
+   */
+  simulationPreviewId?: string | null;
+}
+
 interface UpdateStatusMetadata {
   outcome?: string;
   outcome_data?: unknown;
@@ -97,7 +114,15 @@ function fireWebhook(event: string, data: unknown): void {
 }
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  proposed: ['approved', 'rejected', 'cancelled'],
+  // 'deferred' is reachable from 'proposed' so a human reviewer in the
+  // decision centre (#61) can push a proposal to later instead of being
+  // forced into a yes/no. The system already produced deferred tasks via
+  // jobs/constraint-check.ts's smart spacing, but it wrote the status with
+  // raw SQL, bypassing this table — a human deferral goes through
+  // updateTaskStatus()/deferTask() like every other transition, and
+  // brain/restraint.ts's resurfaceDeferredTasks() picks it back up on the
+  // same schedule.
+  proposed: ['approved', 'rejected', 'cancelled', 'deferred'],
   approved: ['executing', 'rejected', 'cancelled', 'manual_review'],
   // 'approved' here is deliberately narrow: it's ONLY used by
   // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
@@ -132,6 +157,26 @@ function safeJSON<T>(raw: unknown, fallback: T): T {
   }
 }
 
+/**
+ * The subset of a task an action receipt (#70) needs to identify what was
+ * requested. Kept here so every pre-execution rejection site records the
+ * same shape without repeating the field list.
+ */
+function receiptTaskFacts(task: {
+  id: string; business_id: string; version?: number; action_type?: string | null;
+  title?: string | null; proposed_by?: string | null; created_at?: string | null;
+}): { id: string; business_id: string; version: number; action_type: string | null; title: string | null; proposed_by: string | null; created_at: string | null } {
+  return {
+    id: task.id,
+    business_id: task.business_id,
+    version: Number(task.version ?? 1) || 1,
+    action_type: task.action_type ?? null,
+    title: task.title ?? null,
+    proposed_by: task.proposed_by ?? null,
+    created_at: task.created_at ?? null,
+  };
+}
+
 function createProposalValidationError(message: string, issues: ValidationIssue[]): Error & { issues: ValidationIssue[]; statusCode: number } {
   const err = new Error(message) as Error & { issues: ValidationIssue[]; statusCode: number };
   err.issues = issues;
@@ -155,6 +200,13 @@ function parseRow(row: Record<string, unknown> | null): TaskRow | null {
  * Create a new task.
  */
 export function createTask(taskData: CreateTaskParams): TaskRow | null {
+  // #67: 'Simulation cannot create tasks'. Enforced at the single function
+  // every proposal path in Blueprint funnels through, so a preview cannot
+  // create one however indirectly it got here.
+  guardSimulationSideEffect(
+    'task.create', taskData.action_type ?? null,
+    `creating task '${taskData.title}' for business '${taskData.business_id}'`,
+  );
   const {
     business_id,
     signal_id = null,
@@ -238,7 +290,10 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (applicability.status === 'not_applicable') {
     throw new Error(`Task is not actionable: ${applicability.reason}`);
   }
-  const risk = calculateApprovalTier({ actionType: action_type, payload: action_payload, baseTier: trust_tier, agentConfidence: confidence, applicabilityStatus: applicability.status });
+  // #68: risk tiering uses this business's Operating Policy thresholds, and
+  // the resulting evidence records which policy version produced the tier.
+  const proposalPolicy = resolveOperatingPolicy(business_id);
+  const risk = calculateApprovalTier({ actionType: action_type, payload: action_payload, baseTier: trust_tier, agentConfidence: confidence, applicabilityStatus: applicability.status, policy: proposalPolicy });
   const revenue = explainRevenueRelevance(business_id, { title, description, action_type });
 
   const id = generateId();
@@ -478,7 +533,45 @@ function triggerWorkerTick(): void {
  * picks up any job the immediate wake-up call missed
  * (e.g. because the process crashed right after this function returned).
  */
-export function approveTask(id: string, approvedBy: string): TaskRow | null {
+export function approveTask(
+  id: string,
+  approvedBy: string,
+  options: ApproveTaskOptions = {},
+): TaskRow | null {
+  // #67: approving is the execution step a preview precedes, so it must
+  // never itself run inside a simulation. Guarded before anything is read.
+  guardSimulationSideEffect('task.approve', id, `approving task '${id}' as '${approvedBy}'`);
+
+  // â”€â”€â”€ Separately authorised execution (#67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // When this approval is being made ON THE STRENGTH OF a preview, the
+  // preview is re-validated against live state FIRST. Not "was a preview
+  // shown?" but "is what it showed still true?" â€” if the task was edited,
+  // re-tiered, already approved, or the operating policy or connectors
+  // moved since, authorisation is refused with a report naming exactly what
+  // drifted, and the operator has to preview again.
+  //
+  // This is the mechanism behind "cannot reuse stale approval silently":
+  // silence is impossible, because a drifted snapshot throws rather than
+  // proceeding. See server/simulation/simulation-store.ts.
+  if (options.simulationPreviewId) {
+    const authorization = authorizeFromPreview({
+      previewId: options.simulationPreviewId,
+      actor: approvedBy,
+      expectedKind: 'task_approval',
+      expectedTargetId: id,
+    });
+    if (!authorization.ok) {
+      const err = new Error(
+        `Task cannot be approved from this preview: ${authorization.message} ` +
+        'Approval must be authorised against a current preview, never a stale one.',
+      ) as Error & { statusCode: number; code: string; drift: unknown };
+      err.statusCode = 409;
+      err.code = authorization.reason ?? 'preview_not_current';
+      err.drift = authorization.drift;
+      throw err;
+    }
+  }
+
   const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string; trust_tier: string; approval_mode: string; action_type: string | null; action_payload: string } | null;
   if (!existingRaw) throw new Error(`Task '${id}' not found.`);
   const existing = parseRow(existingRaw)!;
@@ -495,12 +588,55 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   // action_type (manual to-do) always passes untouched.
   const businessProfile = getBusinessProfile(existing.business_id);
 
-  // â”€â”€â”€ Business Profile automation_policy: daily autonomous-task cap â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // "max_autonomous_tasks_per_day" caps how many tasks Blueprint approves
-  // through non-human channels (BAP, Telegram, timed auto-approval) in a
-  // calendar day â€” it does not cap what a human explicitly approves
-  // through the dashboard, which is always allowed to proceed.
-  const dailyCap = businessProfile?.automation_policy?.max_autonomous_tasks_per_day;
+  // â”€â”€â”€ Operating Policy: autonomy limits and approval requirements (#68) â”€â”€â”€â”€
+  // THE central policy integration point. The per-business Operating Policy
+  // decides whether Blueprint may approve this task on its own: the master
+  // autonomy switch, dry-run mode, action types that always need a human,
+  // the auto-approval tier ceiling, connector applicability rules, and the
+  // daily cap. None of it constrains a human approving through the
+  // dashboard — the policy governs what Blueprint does unattended, not what
+  // a person chooses to do.
+  //
+  // The pre-#68 setting, business_profiles.automation_policy
+  // .max_autonomous_tasks_per_day, is still honoured: effectiveDailyTaskCap()
+  // takes the STRICTER of the two, so an Operating Policy can never quietly
+  // loosen a cap an operator already set on the business profile.
+  const registryEntry = existing.action_type ? getActionRegistryEntry(existing.action_type) : null;
+  const autonomy = evaluateAutonomyGate({
+    businessId: existing.business_id,
+    approvedBy,
+    actionType: existing.action_type,
+    tier: (['green', 'yellow', 'orange', 'red'] as const).find((t) => t === existing.trust_tier) ?? null,
+    requiredConnectorTypes: registryEntry?.required_connector_types ?? [],
+  });
+  const effectivePolicy = autonomy.policy;
+
+  if (!autonomy.allowed) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: 'operating_policy_blocked_autonomous_approval',
+      severity: 'warning',
+      title: `Task "${existing.title}" cannot be auto-approved â€” blocked by operating policy`,
+      description: autonomy.reason ?? 'Blocked by this business\'s operating policy.',
+      related_task_id: id,
+      related_action_type: existing.action_type,
+      metadata: {
+        policy_code: autonomy.code,
+        policy_id: effectivePolicy.policy_id,
+        policy_version: effectivePolicy.policy_version,
+        policy_scope: effectivePolicy.policy_scope,
+      },
+    });
+    throw new Error(
+      `Task cannot be approved: ${autonomy.reason} ` +
+      'A Blueprint System Issue has been created explaining why.'
+    );
+  }
+
+  const { cap: dailyCap, source: capSource } = effectiveDailyTaskCap(
+    effectivePolicy,
+    businessProfile?.automation_policy?.max_autonomous_tasks_per_day ?? null,
+  );
   if (dailyCap != null && !approvedBy.startsWith('dashboard:')) {
     const todayCount = (db.prepare(`
       SELECT COUNT(*) as n FROM tasks
@@ -508,18 +644,37 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
         AND approved_at >= datetime('now', 'start of day')
     `).get(existing.business_id) as { n: number }).n;
     if (todayCount >= dailyCap) {
+      const capLabel = capSource === 'operating_policy'
+        ? `operating policy autonomy.max_autonomous_tasks_per_day (${effectivePolicy.citation})`
+        : 'automation_policy.max_autonomous_tasks_per_day';
       createSystemIssue({
         business_id: existing.business_id,
         issue_type: 'automation_policy_daily_cap_reached',
         severity: 'warning',
         title: `Task "${existing.title}" cannot be auto-approved â€” daily autonomous task cap reached`,
-        description: `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
+        description: `${capLabel} is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
         related_task_id: id,
         related_action_type: existing.action_type,
+        metadata: {
+          cap: dailyCap, cap_source: capSource, approved_today: todayCount,
+          policy_id: effectivePolicy.policy_id,
+          policy_version: effectivePolicy.policy_version,
+          policy_scope: effectivePolicy.policy_scope,
+        },
       });
+      safeReceipt(() => recordPreExecutionRejection({
+        task: receiptTaskFacts(existing),
+        stage: 'automation_policy_cap',
+        reason:
+          `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) ` +
+          'already recorded today, so this action was never authorized or executed.',
+        actor: approvedBy,
+        evidence: { daily_cap: dailyCap, approvals_today: todayCount },
+      }));
       throw new Error(
-        `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day, ` +
-        `and ${todayCount} have already been approved today. A human can still approve this task via the dashboard. ` +
+        `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day ` +
+        `(from ${capLabel}), and ${todayCount} have already been approved today. ` +
+        'A human can still approve this task via the dashboard. ' +
         'A Blueprint System Issue has been created explaining why.'
       );
     }
@@ -540,11 +695,48 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   if (approvalApplicability.status === 'not_applicable') {
     db.prepare('UPDATE tasks SET applicability_status = ?, applicability_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(approvalApplicability.status, approvalApplicability.reason, id);
+    safeReceipt(() => recordPreExecutionRejection({
+      task: receiptTaskFacts(existing),
+      stage: 'applicability',
+      reason: `Not applicable to this business: ${approvalApplicability.reason}`,
+      actor: approvedBy,
+      evidence: { applicability_status: approvalApplicability.status },
+    }));
     throw new Error(`Task cannot be approved: ${approvalApplicability.reason}`);
   }
-  const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status });
+  const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status, policy: effectivePolicy });
   db.prepare('UPDATE tasks SET trust_tier = ?, approval_risk_evidence = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(approvalRisk.tier, JSON.stringify(approvalRisk.evidence), id);
+
+  // Re-check the auto-approval ceiling against the tier just recalculated:
+  // applicability or payload may have escalated the task since it was
+  // proposed, and the gate above only saw the stored tier.
+  if (!approvedBy.startsWith('dashboard:')
+      && effectivePolicy.document.approvals.auto_approve_max_tier !== null
+      && tierRank(approvalRisk.tier) > tierRank(effectivePolicy.document.approvals.auto_approve_max_tier)) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: 'operating_policy_blocked_autonomous_approval',
+      severity: 'warning',
+      title: `Task "${existing.title}" cannot be auto-approved â€” risk tier above policy ceiling`,
+      description: `Re-evaluated approval tier is '${approvalRisk.tier}', above approvals.auto_approve_max_tier '${effectivePolicy.document.approvals.auto_approve_max_tier}'.`,
+      related_task_id: id,
+      related_action_type: existing.action_type,
+      metadata: {
+        policy_code: 'tier_above_auto_approve_ceiling',
+        recalculated_tier: approvalRisk.tier,
+        policy_id: effectivePolicy.policy_id,
+        policy_version: effectivePolicy.policy_version,
+        policy_scope: effectivePolicy.policy_scope,
+      },
+    });
+    throw new Error(
+      `Task cannot be approved: its re-evaluated approval tier is '${approvalRisk.tier}', above this business's ` +
+      `approvals.auto_approve_max_tier of '${effectivePolicy.document.approvals.auto_approve_max_tier}'. ` +
+      `A human can still approve this task via the dashboard. (effective ${effectivePolicy.citation}) ` +
+      'A Blueprint System Issue has been created explaining why.'
+    );
+  }
 
   const connectors = db.prepare('SELECT * FROM connectors WHERE business_id = ?').all(existing.business_id) as Connector[];
   const actionValidation = validateAction({
@@ -567,6 +759,13 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       related_action_type: existing.action_type,
       metadata: { issues: actionValidation.issues },
     });
+    safeReceipt(() => recordPreExecutionRejection({
+      task: receiptTaskFacts(existing),
+      stage: 'action_validation',
+      reason: actionValidation.issues.map((i) => i.message).join(' '),
+      actor: approvedBy,
+      evidence: { issues: actionValidation.issues },
+    }));
     throw new Error(
       `Task cannot be approved: ${actionValidation.issues.map((i) => i.message).join(' ')} ` +
       'A Blueprint System Issue has been created explaining why.'
@@ -619,6 +818,22 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
 
     const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
     const actionType = String(after.action_type ?? '').trim();
+
+    // Verified action receipt (#70) — opened in the SAME transaction as the
+    // approval itself, exactly like the execution job above it, so an
+    // approved action can never exist without a receipt recording who
+    // authorized it and when. The receipt is keyed on the freshly-bumped
+    // version, which is also the idempotency marker every retry and every
+    // externally-created object for this approval will carry.
+    const receipt = openReceipt({
+      task: {
+        id: after.id, business_id: after.business_id, version: after.version,
+        action_type: after.action_type, title: after.title,
+        proposed_by: after.proposed_by, created_at: after.created_at,
+      },
+      authorizedBy: approvedBy,
+    });
+
     if (actionType !== '') {
       // Issue #39: `actionValidation.entry.dispatched_by_executor` mirrors
       // executor.ts's EXECUTABLE_ACTION_TYPES set 1:1 (see db.ts migration
@@ -644,15 +859,40 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       // operator attention, so they stay 'approved' with no job, same as a
       // plain manual (action_type-less) task.
       if (actionValidation.entry?.dispatched_by_executor) {
-        enqueueExecutionJob(after);
+        const job = enqueueExecutionJob(after);
+        if (receipt) {
+          db.prepare('UPDATE action_receipts SET execution_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(job.id, receipt.id);
+        }
       } else if (actionValidation.entry?.side_effect_classification === 'external_verifiable') {
         // No-op: task remains 'approved', tracked but not queued for
-        // Blueprint execution or manual review.
+        // Blueprint execution or manual review. The receipt records the
+        // authorization and says plainly that Blueprint is not the executor
+        // — otherwise a receipt stuck at 'authorized' forever would read as
+        // a stalled action rather than an intentional hand-off.
+        recordFollowUp(after.id, Number(after.version ?? 1), {
+          notes: [
+            `action_type '${actionType}' is executed and verified by an external system, not by Blueprint. ` +
+            'This receipt records the authorization only.',
+          ],
+        });
       } else {
-        return updateTaskStatus(id, 'manual_review', 'system:action-registry', {
-          outcome: `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
-            'implementation -- routed directly to manual review instead of being queued for automated execution.',
-        })!;
+        const reason =
+          `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
+          'implementation -- routed directly to manual review instead of being queued for automated execution.';
+        // Nothing will ever execute this: an explicit pre-execution
+        // rejection record, not a receipt left dangling at 'authorized'.
+        recordPreExecutionRejection({
+          task: {
+            id: after.id, business_id: after.business_id, version: after.version,
+            action_type: after.action_type, title: after.title,
+            proposed_by: after.proposed_by, created_at: after.created_at,
+          },
+          stage: 'no_executor',
+          reason,
+          actor: 'system:action-registry',
+        });
+        return updateTaskStatus(id, 'manual_review', 'system:action-registry', { outcome: reason })!;
       }
     }
     return after;
@@ -669,6 +909,19 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     confidence: existing.confidence ?? null,
     author: approvedBy, related_task_id: id, related_signal_id: existing.signal_id ?? null,
     related_goal_id: existing.goal_id ?? null,
+    // Cite the exact policy version the gating above used, not a fresh
+    // resolve — a policy activating mid-approval must not make the record
+    // claim a version that was not actually applied (#68).
+    effective_policy_id: effectivePolicy.policy_id,
+    effective_policy_version: effectivePolicy.policy_version,
+    effective_policy_scope: effectivePolicy.policy_scope,
+    evidence: [{
+      type: 'operating_policy',
+      citation: effectivePolicy.citation,
+      approval_tier: approvalRisk.tier,
+      auto_approve_max_tier: effectivePolicy.document.approvals.auto_approve_max_tier,
+      thresholds_applied: effectivePolicy.document.thresholds,
+    }],
   });
 
   fireWebhook('task.approved', {
@@ -716,6 +969,12 @@ export function cancelTask(id: string, cancelledBy: string, reason = ''): TaskRo
   });
 
   const after = runCancel();
+  // A cancelled action stops mattering as "pending"; the receipt records
+  // that it never completed rather than being quietly dropped.
+  safeReceipt(() => recordCancellation(
+    id, Number((existing.version as number | undefined) ?? 1) || 1, cancelledBy,
+    reason || 'Cancelled before execution completed.',
+  ));
   audit(existing.business_id as string, 'task', id, 'cancel', cancelledBy, parseRow(existing), after, { reason });
   fireWebhook('task.cancelled', { task_id: id, business_id: existing.business_id, cancelled_by: cancelledBy, reason });
   return after;
@@ -802,6 +1061,25 @@ export function rejectTask(id: string, rejectedBy: string, reason = '', opts: Re
   });
   runReject();
 
+  // An explicit pre-execution rejection record (#70): a human said no, so
+  // the action provably never ran. Recorded for a task rejected while still
+  // 'proposed' as well as one rejected after approval — in the latter case
+  // it settles the receipt approval already opened.
+  safeReceipt(() => recordPreExecutionRejection({
+    task: receiptTaskFacts({
+      id,
+      business_id: existing.business_id as string,
+      version: existing.version as number | undefined,
+      action_type: existing.action_type as string | null,
+      title: existing.title as string | null,
+      proposed_by: existing.proposed_by as string | null,
+      created_at: existing.created_at as string | null,
+    }),
+    stage: 'human_rejection',
+    reason: reason || 'Rejected by a human reviewer before execution.',
+    actor: rejectedBy,
+  }));
+
   const before = parseRow(existing);
   const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
   audit(existing.business_id, 'task', id, 'reject', rejectedBy, before, after, { reason });
@@ -815,5 +1093,147 @@ export function rejectTask(id: string, rejectedBy: string, reason = '', opts: Re
     related_goal_id: (before?.goal_id as string | null) ?? null,
   });
 
+  return after;
+}
+
+/**
+ * Defer a proposal to a later date — the decision centre's "not now" (#61).
+ *
+ * A reviewer who is neither ready to approve nor willing to reject needs an
+ * outcome that is honest about that, instead of leaving the item to rot in
+ * the queue or rejecting something they actually want later. The task moves
+ * to 'deferred' with the resurface date the reviewer chose, and
+ * brain/restraint.ts's resurfaceDeferredTasks() puts it back into 'proposed'
+ * when that date passes — the same machinery the system's own smart-spacing
+ * deferrals already use, so there is no second scheduler to maintain.
+ *
+ * The deferral is a recorded decision like any other, so it carries the
+ * operating policy version in force (#68) via recordDecision().
+ */
+export function deferTask(
+  id: string,
+  deferredBy: string,
+  reason: string,
+  deferUntil: string,
+): TaskRow | null {
+  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string } | null;
+  if (!existing) throw new Error(`Task '${id}' not found.`);
+  if (existing.status !== 'proposed') {
+    throw new Error(`Cannot defer task in status '${existing.status}'. Task must be 'proposed'.`);
+  }
+  if (!reason || !reason.trim()) {
+    throw new Error('A deferral reason is required: a decision to postpone is still a decision, and it is recorded as one.');
+  }
+  const until = new Date(deferUntil);
+  if (Number.isNaN(until.getTime())) {
+    throw new Error(`defer_until '${deferUntil}' is not a valid ISO-8601 timestamp (e.g. 2026-09-01T09:00:00.000Z).`);
+  }
+  if (until.getTime() <= Date.now()) {
+    throw new Error('defer_until must be in the future — a deferral to a past date would resurface immediately.');
+  }
+
+  const before = parseRow(existing);
+  db.prepare(`
+    UPDATE tasks SET
+      status = 'deferred', deferred_until = ?, deferred_reason = ?, deferred_by = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'proposed'
+  `).run(until.toISOString(), reason.trim(), deferredBy, id);
+  const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
+
+  audit(existing.business_id, 'task', id, 'defer', deferredBy, before, after, { reason, defer_until: until.toISOString() });
+  recordDecision({
+    business_id: existing.business_id,
+    decision_type: 'task_deferral',
+    title: `Deferred: ${existing.title}`,
+    decision: `Deferred task "${existing.title}" until ${until.toISOString()}: ${reason.trim()}`,
+    reasoning: reason.trim(),
+    author: deferredBy,
+    related_task_id: id,
+    related_signal_id: (before?.signal_id as string | null) ?? null,
+    related_goal_id: (before?.goal_id as string | null) ?? null,
+    evidence: [{ type: 'deferral', defer_until: until.toISOString(), deferred_by: deferredBy }],
+  });
+  return after;
+}
+
+/**
+ * Amend a proposal's payload before approving it — the decision centre's
+ * "yes, but not like that" (#61).
+ *
+ * Approve-with-modification only means something if the modification is
+ * visible afterwards, so the payload as proposed is preserved in
+ * pre_amendment_payload and the change is recorded as its own decision.
+ * The amendment is deliberately NOT an approval: the caller approves
+ * separately through approveTask(), which re-runs the full gate — payload
+ * validation, applicability and the risk-tier calculation — against the
+ * amended payload. A human edit therefore cannot smuggle a payload past
+ * the checks the original proposal had to pass.
+ */
+export function amendTaskPayload(
+  id: string,
+  amendedBy: string,
+  amendedPayload: Record<string, unknown>,
+  reason: string,
+): TaskRow | null {
+  const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string } | null;
+  if (!existingRaw) throw new Error(`Task '${id}' not found.`);
+  const existing = parseRow(existingRaw)!;
+  if (existing.status !== 'proposed') {
+    throw new Error(`Cannot amend task in status '${existing.status}'. Task must be 'proposed'.`);
+  }
+  if (!reason || !reason.trim()) {
+    throw new Error('An amendment reason is required: changing what an agent proposed is a decision, and it is recorded as one.');
+  }
+  if (!amendedPayload || typeof amendedPayload !== 'object' || Array.isArray(amendedPayload)) {
+    throw new Error('amended_payload must be a JSON object.');
+  }
+
+  // Validate the amended payload against the action's registered schema
+  // before it is stored, so a malformed human edit is rejected at the point
+  // it is made rather than surfacing later at approval time.
+  if (existing.action_type) {
+    const entry = getActionRegistryEntry(existing.action_type);
+    if (entry) {
+      const issues = validatePayloadAgainstSchema(entry.payload_schema, amendedPayload);
+      if (issues.length > 0) {
+        throw new Error(
+          `Amended payload is not valid for action type '${existing.action_type}': ` +
+          issues.map((i) => i.message).join(' ')
+        );
+      }
+    }
+  }
+
+  const originalPayload = existing.action_payload ?? {};
+  db.prepare(`
+    UPDATE tasks SET
+      action_payload = ?,
+      pre_amendment_payload = COALESCE(pre_amendment_payload, ?),
+      amended_by = ?, amended_at = CURRENT_TIMESTAMP,
+      version = version + 1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'proposed'
+  `).run(JSON.stringify(amendedPayload), JSON.stringify(originalPayload), amendedBy, id);
+  const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
+
+  audit(existing.business_id, 'task', id, 'amend', amendedBy, existing, after, { reason });
+  recordDecision({
+    business_id: existing.business_id,
+    decision_type: 'task_amendment',
+    title: `Amended: ${existing.title}`,
+    decision: `Amended the proposed payload of task "${existing.title}" before review: ${reason.trim()}`,
+    reasoning: reason.trim(),
+    author: amendedBy,
+    related_task_id: id,
+    related_signal_id: existing.signal_id ?? null,
+    related_goal_id: existing.goal_id ?? null,
+    evidence: [{
+      type: 'payload_amendment',
+      payload_as_proposed: originalPayload,
+      payload_as_amended: amendedPayload,
+      amended_by: amendedBy,
+    }],
+  });
   return after;
 }

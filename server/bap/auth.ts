@@ -103,7 +103,15 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'scorecards:read',
   'approval_policies:read',
   'measurement_policies:read',
+  // #68 — per-business operating policy. Read-only: an agent may see the
+  // rules it is governed by, but authoring governance is an operator act,
+  // so there is deliberately no operating_policies:write grant.
+  'operating_policies:read',
   'provider_preflight:read',
+  // Issue #70 — verified action receipts. Read-only: receipts are produced
+  // by the approval/execution path itself and no BAP route writes one, so
+  // there is deliberately no `receipts:write` counterpart to grant.
+  'receipts:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

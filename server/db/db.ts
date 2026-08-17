@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { mkdirSync, readFileSync } from 'fs';
 import { resolveDbPath, isMemoryDbPath } from './resolve-db-path.js';
+import { simulationScopesActive, assertSimulationSafeSql } from '../simulation/simulation-context.js';
 
 const __dbdir = dirname(fileURLToPath(import.meta.url));
 // Stable base for resolving a relative DATABASE_PATH — the repo root, NOT
@@ -41,6 +42,25 @@ const db = new Database(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 db.exec('PRAGMA busy_timeout = 5000');
+
+// â”€â”€â”€ Simulation side-effect guard (issue #67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// Preview/simulation modes must not write. Before #67 that was guaranteed
+// per-module, by each preview being careful about its imports. This wraps
+// db.prepare() so the guarantee is enforced HERE instead: every write in the
+// server reaches SQLite through prepare(), so a statement issued three
+// frames deep inside shared code is caught just as reliably as one written
+// in the preview module itself. See server/simulation/simulation-context.ts.
+//
+// Cost outside a simulation is a single integer comparison
+// (simulationScopesActive()), so this is safe on a path this hot. db.exec()
+// is used only by the migration block below, at load time, and is left
+// alone deliberately â€” guarding it would mean guarding schema creation.
+const __rawPrepare = db.prepare.bind(db);
+db.prepare = function guardedPrepare(this: unknown, sql: string, ...rest: unknown[]) {
+  if (simulationScopesActive()) assertSimulationSafeSql(String(sql));
+  return (__rawPrepare as (...args: unknown[]) => unknown)(sql, ...rest);
+} as typeof db.prepare;
 
 const needsSchema = !db.prepare(
   "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'"
@@ -1576,7 +1596,527 @@ try {
   }
 } catch (err) {
   console.warn('[db] business_capabilities FK migration warning:', (err as Error).message);
-}// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+}
+
+// ─── Per-business Operating Policy (#68) ─────────────────────────────────────
+// A policy version is immutable once written: an edit, a scheduled change
+// and a rollback are all "a new row with a higher version", which is what
+// makes "which policy was in force when we decided X" answerable forever.
+// (scope, scope_key) is the isolation boundary — scope_key is a business_id
+// for scope='business' and a portfolio id for scope='portfolio', so there
+// is no query shape that can read across businesses by accident.
+const OPERATING_POLICY_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS operating_policy_portfolios (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    business_ids JSON NOT NULL DEFAULT '[]',
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS operating_policies (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('business','portfolio')),
+    scope_key TEXT NOT NULL,
+    business_id TEXT REFERENCES businesses(id),
+    portfolio_id TEXT REFERENCES operating_policy_portfolios(id),
+    version INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('scheduled','active','superseded')),
+    document JSON NOT NULL,
+    overrides JSON NOT NULL DEFAULT '{}',
+    effective_at DATETIME NOT NULL,
+    activated_at DATETIME,
+    superseded_at DATETIME,
+    superseded_by_id TEXT,
+    source TEXT NOT NULL DEFAULT 'edit',
+    rolled_back_from_version INTEGER,
+    change_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scope, scope_key, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_operating_policies_lookup ON operating_policies(scope, scope_key, state, effective_at)`,
+  // At most one active version per scope — enforced by the database, not
+  // only by the transaction in savePolicyVersion(), so a crash between the
+  // supersede and the insert can never leave two live policies.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_operating_policies_one_active ON operating_policies(scope, scope_key) WHERE state = 'active'`,
+  `CREATE TABLE IF NOT EXISTS operating_policy_events (
+    id TEXT PRIMARY KEY,
+    policy_id TEXT,
+    scope TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    business_id TEXT,
+    version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    changed_fields JSON DEFAULT '[]',
+    before_document JSON,
+    after_document JSON,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_operating_policy_events_scope ON operating_policy_events(scope, scope_key, created_at)`,
+  // Additive for databases created before overrides were split out of the
+  // resolved document (see operating-policy.ts for why both are stored).
+  `ALTER TABLE operating_policies ADD COLUMN overrides JSON NOT NULL DEFAULT '{}'`,
+  // Every decision cites the operating policy that was in force when it was
+  // made. Version 0 / scope 'system_default' is a real answer ("no policy
+  // had been authored"), not a null hole.
+  `ALTER TABLE decisions ADD COLUMN effective_policy_id TEXT`,
+  `ALTER TABLE decisions ADD COLUMN effective_policy_version INTEGER`,
+  `ALTER TABLE decisions ADD COLUMN effective_policy_scope TEXT`,
+];
+for (const sql of OPERATING_POLICY_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] operating policy migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ Verified action receipts (issue #70) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// One durable, versioned, human-readable receipt per approved task version
+// â€” the record of what Blueprint was asked to do, who authorised it, what
+// it actually executed, what the external system acknowledged, and what a
+// later measurement verified. See server/tasks/action-receipts.ts.
+//
+// `correlation_key` is the SAME stable marker execution-safety.ts embeds
+// in the external objects it creates (`blueprint:task=<id>:v<version>`),
+// so Blueprint's receipt, its execution job (task_id + task_version) and
+// the object in GitHub/Shopify all share one identity. The UNIQUE index on
+// it is the "retries and duplicate deliveries never produce two
+// conflicting receipts" guarantee at the DB level, not by convention: a
+// retry of the same approved version can only ever update the one row.
+const RECEIPT_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS action_receipts (
+    id TEXT PRIMARY KEY,
+    receipt_version INTEGER NOT NULL DEFAULT 1,
+    business_id TEXT NOT NULL,
+    -- ON DELETE CASCADE, following the agent_run_events precedent: a
+    -- receipt describes one specific task and is meaningless without it,
+    -- so it must never outlive its subject as a dangling record.
+    -- Production never deletes tasks; this keeps fixtures/teardown honest.
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    task_version INTEGER NOT NULL DEFAULT 1,
+    correlation_key TEXT NOT NULL,
+    execution_job_id TEXT,
+    action_type TEXT,
+    title TEXT,
+    state TEXT NOT NULL DEFAULT 'authorized',
+    result_status TEXT NOT NULL DEFAULT 'pending',
+    result_summary TEXT,
+    result_detail JSON,
+    requested_at DATETIME,
+    requested_by TEXT,
+    authorized_at DATETIME,
+    authorized_by TEXT,
+    execution_started_at DATETIME,
+    executed_at DATETIME,
+    externally_acknowledged_at DATETIME,
+    verified_at DATETIME,
+    rejected_at DATETIME,
+    rejected_by TEXT,
+    rejection_stage TEXT,
+    rejection_reason TEXT,
+    external_system TEXT,
+    external_id TEXT,
+    external_permalink TEXT,
+    external_reference JSON,
+    verification_evidence JSON,
+    follow_up JSON,
+    anomalies JSON,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    attempt_history JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_correlation ON action_receipts(correlation_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_business ON action_receipts(business_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_business_state ON action_receipts(business_id, state)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_task ON action_receipts(task_id, task_version)`,
+];
+for (const sql of RECEIPT_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] action receipt migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// ─── Decision centre: human review outcomes on tasks (#61) ───────────────────
+// A reviewer working the decision queue can defer or amend a proposal, not
+// only approve or reject it. Both outcomes need a durable trace on the task
+// itself so "what did the human actually change, and who deferred this?" is
+// answerable without replaying the audit log.
+const DECISION_QUEUE_MIGRATIONS: string[] = [
+  // Who pushed this to later, as distinct from the system's own smart-spacing
+  // deferrals (jobs/constraint-check.ts), which set no actor.
+  `ALTER TABLE tasks ADD COLUMN deferred_by TEXT`,
+  // The payload exactly as proposed, kept when a reviewer amends it, so the
+  // amendment is a visible diff rather than a silent overwrite.
+  `ALTER TABLE tasks ADD COLUMN pre_amendment_payload JSON`,
+  `ALTER TABLE tasks ADD COLUMN amended_by TEXT`,
+  `ALTER TABLE tasks ADD COLUMN amended_at DATETIME`,
+  // Non-null only when a reviewer acted against the operating policy's
+  // recommendation for this item; the reason is mandatory at the API layer.
+  `ALTER TABLE tasks ADD COLUMN review_override_reason TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_business_status ON tasks(business_id, status)`,
+];
+for (const sql of DECISION_QUEUE_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] decision queue migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// ─── "What happened while I was away?" digest watermarks (issue #62) ─────────
+//
+// One durable row per (operator, business) recording how far through the
+// timeline that operator has actually acknowledged. Two distinct facts are
+// stored, because a digest needs both:
+//
+//   acknowledged_through — a TIME floor. Everything that happened at or
+//     before this instant has been seen. This is what makes the default
+//     window "since I last caught up" rather than "the last 7 days".
+//
+//   acknowledged_items   — a per-item {dedup_key: change_fingerprint} map.
+//     A pure time watermark cannot express "this pending decision is STILL
+//     pending and still identical, so don't show it to me again, but DO show
+//     it again the moment its risk tier escalates." An item is replayed iff
+//     its fingerprint differs from the acknowledged one, which is exactly
+//     the issue's "do not replay unchanged items … without hiding material
+//     changes" pair of requirements.
+//
+// Keyed on operator_key because Blueprint's auth is single-operator
+// (ADMIN_PASSWORD + session.userId — there is no users table), so the
+// session username IS the identity. The column is a plain TEXT key rather
+// than a FK for that reason; adding real users later needs no schema change
+// here, only a different value in this column.
+const DIGEST_WATERMARK_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS digest_watermarks (
+    id TEXT PRIMARY KEY,
+    operator_key TEXT NOT NULL,
+    -- '*' is a real, meaningful value: the all-businesses digest has its own
+    -- watermark, independent of the per-business ones, so acknowledging a
+    -- cross-business catch-up never silently marks a single business read.
+    business_id TEXT NOT NULL,
+    acknowledged_through DATETIME NOT NULL,
+    acknowledged_at DATETIME NOT NULL,
+    acknowledged_by TEXT,
+    -- The digest whose acknowledgement produced this watermark, so a
+    -- watermark is traceable to the exact readback it came from.
+    acknowledged_digest_id TEXT,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    acknowledged_items JSON NOT NULL DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_digest_watermarks_scope
+     ON digest_watermarks(operator_key, business_id)`,
+];
+for (const sql of DIGEST_WATERMARK_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] digest watermark migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// ─── Reporting portfolios (#71) ──────────────────────────────────────────────
+//
+// Deliberately NOT the same table as operating_policy_portfolios (#68), and
+// the reason is a constraint, not a preference. A policy portfolio must
+// PARTITION businesses — upsertPolicyPortfolio() rejects overlap, because a
+// business inheriting thresholds from two portfolios has no defined answer
+// to "which threshold wins". A reporting portfolio has the opposite
+// requirement: the same shop belongs in "UK", in "Ecommerce" and in "Q3
+// turnaround" at once, and forcing those to partition would make the view
+// useless. One table cannot hold both rules, so there are two, and #68's
+// remains the only one policy inheritance ever reads.
+//
+// Membership lives in its own row rather than a JSON array (as #68 uses)
+// because membership CHANGES are first-class here: an aggregate over a
+// 90-day window whose portfolio gained a business on day 80 is not a clean
+// comparison, and portfolio_membership_events is what lets the view say so
+// instead of quietly presenting it as one.
+const PORTFOLIO_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS portfolios (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS portfolio_members (
+    portfolio_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (portfolio_id, business_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_portfolio_members_business ON portfolio_members(business_id)`,
+  // Append-only. A removal is a row, never a delete, so "which businesses
+  // were in this portfolio when that comparison was run" stays answerable.
+  `CREATE TABLE IF NOT EXISTS portfolio_membership_events (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('added','removed')),
+    actor TEXT NOT NULL,
+    reason TEXT,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_portfolio_membership_events_portfolio
+     ON portfolio_membership_events(portfolio_id, occurred_at)`,
+];
+for (const sql of PORTFOLIO_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] portfolio migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// ─── Reusable bounded playbooks (issue #74) ──────────────────────────────────
+//
+// A playbook is a VERSIONED definition of an existing workflow, not a second
+// workflow system: `playbook_versions.workflow_id` points at the same
+// `workflows` row workflow-engine.ts has always executed, and runs still land
+// in `workflow_runs` / `workflow_step_runs`. What is new is the lifecycle
+// around the definition (draft → validated → scheduled → active →
+// superseded), copied deliberately from operating_policies (#68) rather than
+// invented: immutable versions, one active version per workflow enforced by a
+// partial unique index, rollback written forward as a new version, and a
+// separate append-only event table for the audit trail.
+//
+// The columns added to workflow_runs / workflow_step_runs are what bind a run
+// to ONE version (so a version change cannot alter an in-flight run) and to
+// the real action receipts (#70) each step's task produces.
+const PLAYBOOK_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS playbook_versions (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('draft','scheduled','active','superseded','archived')),
+    definition JSON NOT NULL,
+    -- Result of the last validation run against this exact definition.
+    -- Stored rather than recomputed so "it was valid when we activated it"
+    -- survives a later registry change that would now fail validation.
+    validation_state TEXT NOT NULL DEFAULT 'unvalidated'
+      CHECK (validation_state IN ('unvalidated','valid','invalid')),
+    validation_violations JSON DEFAULT '[]',
+    validated_at DATETIME,
+    validated_by TEXT,
+    effective_at DATETIME,
+    activated_at DATETIME,
+    superseded_at DATETIME,
+    superseded_by_id TEXT,
+    source TEXT NOT NULL DEFAULT 'edit',
+    rolled_back_from_version INTEGER,
+    change_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workflow_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_versions_lookup ON playbook_versions(workflow_id, state, effective_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_versions_business ON playbook_versions(business_id, state)`,
+  // At most one active version per workflow — enforced by the database, so a
+  // crash between supersede and insert cannot leave two live definitions.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_versions_one_active ON playbook_versions(workflow_id) WHERE state = 'active'`,
+  `CREATE TABLE IF NOT EXISTS playbook_events (
+    id TEXT PRIMARY KEY,
+    playbook_version_id TEXT,
+    workflow_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    run_id TEXT,
+    step_index INTEGER,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_events_workflow ON playbook_events(workflow_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_events_run ON playbook_events(run_id, created_at)`,
+
+  // ── Run-level: which version, what inputs, and the idempotency key ──
+  `ALTER TABLE workflow_runs ADD COLUMN playbook_version_id TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN playbook_version INTEGER`,
+  `ALTER TABLE workflow_runs ADD COLUMN inputs JSON DEFAULT '{}'`,
+  // Deterministic from (workflow, version, inputs, caller-supplied key). Two
+  // start calls carrying the same key resolve to the SAME run rather than
+  // duplicating every step's side effects — the run-level analogue of
+  // action-receipts.ts's correlation_key.
+  `ALTER TABLE workflow_runs ADD COLUMN run_key TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN stopped_reason TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN rollback_state TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN rollback_report JSON`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_run_key ON workflow_runs(run_key) WHERE run_key IS NOT NULL`,
+
+  // ── Step-level: typed identity, receipt linkage, risk, compensation ──
+  `ALTER TABLE workflow_step_runs ADD COLUMN step_kind TEXT DEFAULT 'manual'`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN action_type TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN resolved_input JSON`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN typed_output JSON`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN task_id TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN receipt_id TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN receipt_state TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN correlation_key TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN risk_tier TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN approval_reason TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN timeout_seconds INTEGER`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN attempt_count INTEGER DEFAULT 0`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN max_attempts INTEGER DEFAULT 1`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN rollback_status TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN rollback_detail TEXT`,
+  // One row per (run, step) — the DB-level guarantee that a retry can never
+  // fork one step into two independently-executing records.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_step_runs_unique ON workflow_step_runs(run_id, step_index)`,
+];
+for (const sql of PLAYBOOK_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] playbook migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ Safe simulation / preview mode (issue #67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// A preview is only trustworthy if acting on it is a SEPARATE, freshly
+// authorised step. That needs the preview to be durable rather than a
+// value the client holds and hands back: the client cannot be the
+// authority on what it was shown, and re-validation has to compare against
+// something the server wrote down itself.
+//
+// snapshot_hash fingerprints the inputs the preview was computed from, so
+// execution can detect that the world moved underneath it. expires_at
+// gives every preview a TTL, and consumed_at makes authorisation
+// single-use â€” an approval token cannot be replayed.
+const SIMULATION_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS simulation_previews (
+     id TEXT PRIMARY KEY,
+     business_id TEXT,
+     kind TEXT NOT NULL,
+     actor TEXT NOT NULL,
+     target_type TEXT,
+     target_id TEXT,
+     snapshot_hash TEXT NOT NULL,
+     snapshot_sources JSON NOT NULL DEFAULT '[]',
+     result JSON NOT NULL DEFAULT '{}',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     expires_at DATETIME NOT NULL,
+     consumed_at DATETIME,
+     consumed_by TEXT
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_simulation_previews_business ON simulation_previews(business_id, kind, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_simulation_previews_target ON simulation_previews(target_type, target_id, created_at)`,
+];
+for (const sql of SIMULATION_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] simulation migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// ─── Retrospective operating-change proposals (issue #73) ────────────────────
+//
+// A retrospective's findings used to end as free text in
+// retrospectives.recommendations / .operating_changes: readable, but not
+// something a human could approve, diff or roll back. This table is the
+// bounded, typed proposal that sits between "we noticed something" and "we
+// changed how Blueprint operates".
+//
+// It deliberately stores NO operating state of its own. A proposal points at
+// the draft its own subsystem created (#68 operating policy, #74 playbook
+// versions, #69 agent retention) and at the #61 decision-queue task a human
+// reviews. Approving one activates the underlying draft through that
+// subsystem's own activation function; nothing here can change behaviour.
+const RETROSPECTIVE_PROPOSAL_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS retrospective_proposals (
+    id TEXT PRIMARY KEY,
+    retrospective_id TEXT,
+    business_id TEXT NOT NULL,
+    -- Exactly one subsystem per proposal. A proposal that wanted to change
+    -- two things at once could not be approved or rolled back as a unit.
+    target TEXT NOT NULL CHECK (target IN ('policy','workflow','agent_lifecycle')),
+    title TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    -- The honesty field. 'evidence_backed' means measured outcome records
+    -- support it; 'hypothesis' means it is worth TRYING and says so;
+    -- 'conflicting_evidence' means the records disagree and were not averaged.
+    basis TEXT NOT NULL CHECK (basis IN ('evidence_backed','hypothesis','conflicting_evidence')),
+    basis_reason TEXT NOT NULL,
+    period_start DATETIME NOT NULL,
+    period_end DATETIME NOT NULL,
+    -- The specific task/outcome/decision/trial rows analysed, by id.
+    cited_records JSON NOT NULL DEFAULT '[]',
+    -- ComparableField (#66): known + citation, or unknown + a real reason.
+    measured_effect JSON,
+    conflicts JSON NOT NULL DEFAULT '[]',
+    expected_benefit TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    rollback_plan TEXT NOT NULL,
+    -- An unreviewed proposal is not a standing offer; it lapses.
+    expires_at DATETIME,
+    -- Pointer to the real draft this proposal created in its own subsystem.
+    draft_ref JSON,
+    decision_task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed'
+      CHECK (status IN ('proposed','approved','rejected','expired','abandoned')),
+    activation_result JSON,
+    reviewed_by TEXT,
+    reviewed_at DATETIME,
+    review_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_retrospective_proposals_business ON retrospective_proposals(business_id, status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_retrospective_proposals_retro ON retrospective_proposals(retrospective_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_retrospective_proposals_task ON retrospective_proposals(decision_task_id) WHERE decision_task_id IS NOT NULL`,
+
+  // Where a retrospective did NOT have enough evidence to propose anything.
+  // Recorded as a first-class result rather than omitted, so "we looked and
+  // could not tell" is visible instead of looking like "we found nothing".
+  `ALTER TABLE retrospectives ADD COLUMN evidence_gaps JSON DEFAULT '[]'`,
+  // LLM narrative suggestions that no measured record supports. Kept as
+  // narrative, explicitly NOT promoted to proposals.
+  `ALTER TABLE retrospectives ADD COLUMN unstructured_suggestions JSON DEFAULT '[]'`,
+
+  // The single action type a retrospective proposal is reviewed as. It is
+  // dispatched by executor.ts, whose handler calls the OWNING subsystem's
+  // activation function — the retrospective engine never activates anything.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval)
+   VALUES ('retrospective_operating_change', 'Activate an operating change a retrospective proposed (policy version, playbook version, or agent lifecycle action).', '[]', '[]', 'internal_idempotent', 'high', 1, 1)`,
+  `UPDATE action_registry SET dispatched_by_executor = 1, supports_rollback = 1, requires_approval = 1
+    WHERE action_type = 'retrospective_operating_change'`,
+];
+for (const sql of RETROSPECTIVE_PROPOSAL_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] retrospective proposal migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {
   try {

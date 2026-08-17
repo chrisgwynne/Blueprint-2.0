@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
+  Columns3,
   LayoutDashboard,
   Radio,
   CheckSquare,
@@ -16,6 +17,7 @@ import {
   Building2,
   Plus,
   Search,
+  FileSearch,
   BarChart2,
   Zap,
   ShoppingBag,
@@ -32,7 +34,7 @@ import {
   Store,
   type LucideIcon,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck, ScrollText, ReceiptText, Gavel, Inbox, Compass, Scale } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -88,6 +90,9 @@ interface NavItemConfig {
 
 const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Dashboard',     to: '/',           icon: LayoutDashboard, end: true },
+  { label: 'Command Centre', to: '/command-centre', icon: Compass },
+  { label: 'Portfolio',     to: '/portfolio',  icon: Scale },
+  { label: 'While You Were Away', to: '/digest', icon: Inbox },
   { label: 'Signals',       to: '/signals',    icon: Radio,           badge: 'openSignalCount' },
   { label: 'Tasks',         to: '/tasks',      icon: CheckSquare,     badge: 'pendingTaskCount' },
   { label: 'Chat',          to: '/chat',       icon: MessageSquare },
@@ -95,8 +100,11 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Goals',         to: '/goals',      icon: Target },
   { label: 'Opportunities', to: '/opportunities', icon: Lightbulb },
   { label: 'Recommendations', to: '/recommendations', icon: ListChecks },
+  { label: 'Compare',       to: '/comparison', icon: Columns3 },
   { label: 'Scenarios',     to: '/scenarios',  icon: Sparkles },
   { label: 'Conflicts',     to: '/conflicts',  icon: AlertTriangle },
+  { label: 'Audit Search',  to: '/audit-search', icon: FileSearch },
+  { label: 'Decision Centre', to: '/decision-centre', icon: Gavel },
   { label: 'Decisions',     to: '/decisions',  icon: History },
   { label: 'Retrospectives',to: '/retrospectives', icon: BookMarked },
   { label: 'Calibration',   to: '/calibration', icon: Gauge },
@@ -105,10 +113,12 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Agents',        to: '/agents',     icon: Bot },
   { label: 'Connectors',    to: '/connectors', icon: Plug },
   { label: 'Outcomes',      to: '/outcomes',   icon: Target },
+  { label: 'Action Receipts', to: '/receipts', icon: ReceiptText },
   { label: 'ROI',           to: '/roi',        icon: PiggyBank },
   { label: 'Knowledge Base',to: '/kb',         icon: BookOpen },
   { label: 'System Health', to: '/health',     icon: Activity,        healthDot: true },
   { label: 'Trust Ops',      to: '/trust',      icon: ShieldCheck },
+  { label: 'Operating Policy', to: '/policy',   icon: ScrollText },
   { label: 'Social Publishing', to: '/social-publishing', icon: Share2 },
   { label: 'Settings',      to: '/settings',   icon: Settings },
 ]
