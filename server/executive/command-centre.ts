@@ -74,6 +74,14 @@ import {
   type ApprovalTier,
 } from '../policy/operating-policy.js';
 import type { Connector } from '../types/db.js';
+// A deliberate two-file relationship, not a layering violation: this module
+// detects patterns ACROSS the businesses assembleCommandCentre() has already
+// summarised, using this file's own section()/evidenceLink()/summariseBusiness
+// primitives — it is part of the command centre's feature surface, split out
+// for readability, not an independent module reused from elsewhere the way
+// portfolio-comparison.ts is (which is why command-centre.ts must never
+// import portfolio-comparison.ts — see comparability.ts's docstring).
+import { detectCrossBusinessPatterns, type CrossBusinessPatternsSection } from './cross-business-patterns.js';
 
 // ─── Scope & authorization ───────────────────────────────────────────────────
 
@@ -197,7 +205,11 @@ export type EvidenceKind =
   // Added by #71's portfolio comparison, which drills into the same
   // business-scoped surfaces from a different framing. Kept in this one
   // builder so there is a single opinion about which route owns which record.
-  | 'goal';
+  | 'goal'
+  // Added by cross-business-patterns.ts's signal co-occurrence detection —
+  // the one evidence kind that points at server/signals rather than at a
+  // task-derived record.
+  | 'signal';
 
 /**
  * A pointer back to the record a summary line was derived from. `id` is
@@ -228,7 +240,8 @@ export function evidenceLink(
           : kind === 'roi_report' ? `/roi?business=${b}`
             : kind === 'outcome' ? `/outcomes?business=${b}&task=${i}`
               : kind === 'goal' ? `/goals?business=${b}&goal=${i}`
-                : `/tasks?business=${b}&task=${i}`;
+                : kind === 'signal' ? `/signals?business=${b}&signal=${i}`
+                  : `/tasks?business=${b}&task=${i}`;
   return { kind, id, business_id: businessId, href, label };
 }
 
@@ -747,6 +760,13 @@ export interface CommandCentreSummary {
   };
   /** Ranked, cross-business — what to look at first. */
   attention: AttentionItem[];
+  /**
+   * Correlated signals/metrics across 2+ businesses in the selection — the
+   * one thing a single-business view structurally cannot produce. Isolated
+   * in its own envelope so a detection failure never touches the sections
+   * above; see cross-business-patterns.ts.
+   */
+  cross_business_patterns: SectionEnvelope<CrossBusinessPatternsSection>;
 }
 
 function emptyLaneCounts(): Record<DecisionLane, number> {
@@ -1267,6 +1287,18 @@ export function assembleCommandCentre(options: CommandCentreOptions): CommandCen
   });
 
   const totals = rollUp(businesses);
+
+  // A cross-business computation, not per-business, so it is one section()
+  // call over the whole selection rather than a sixth field on each
+  // BusinessSummary — a detector bug or an unreadable prior window degrades
+  // this one section, exactly like every section above degrades on its own.
+  const crossBusinessPatterns = section<CrossBusinessPatternsSection>(
+    'cross_business_patterns_unavailable',
+    () => detectCrossBusinessPatterns({
+      businesses, window_start: windowStart, window_end: windowEnd, window_days: windowDays,
+    }),
+  );
+
   return {
     generated_at: nowIso(),
     window_start: windowStart,
@@ -1278,6 +1310,7 @@ export function assembleCommandCentre(options: CommandCentreOptions): CommandCen
     businesses,
     portfolio_totals: totals,
     attention: rankAttention(businesses),
+    cross_business_patterns: crossBusinessPatterns,
   };
 }
 

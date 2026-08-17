@@ -61,13 +61,23 @@ import {
 import {
   knownField, notComparableField, unknownField, type ComparableField,
 } from '../brain/comparison-engine.js';
-import { valuationBasisForMetric, type ValuationBasis } from '../roi/value-estimator.js';
-import { getBusinessProfile, inferBusinessType } from '../business/business-profile.js';
+import type { ValuationBasis } from '../roi/value-estimator.js';
 import {
   accessibleBusinessIds, membershipChangesInWindow, PortfolioError, requirePortfolio,
   type MembershipEvent, type Portfolio,
 } from './portfolio-registry.js';
 import type { BusinessType } from '../types/business-profile.js';
+// Moved to comparability.ts so it can also be reused by
+// server/executive/cross-business-patterns.ts without that module picking
+// up this file's dependency on command-centre.ts — see that file's
+// docstring for why the direction matters. Re-exported below under their
+// original names; #71's public API is unchanged.
+import {
+  businessTypeOf, deriveValuationBasis, resolveComparability,
+  type Comparability, type ComparabilityVerdict,
+} from './comparability.js';
+
+export { deriveValuationBasis, resolveComparability, type Comparability, type ComparabilityVerdict };
 
 // ─── The two sections #59 has no need for ────────────────────────────────────
 
@@ -201,50 +211,6 @@ export interface ComparedBusiness {
 
 export interface BusinessFacts extends ComparedBusiness {
   summary: BusinessSummary | null;
-}
-
-/**
- * Derive a business's valuation basis from the metrics behind its ROI
- * report, not from its type.
- *
- * Type is a proxy for how value is estimated; the metric list is the thing
- * itself. A "service" business that happens to have Stripe MRR connected
- * really does have measured revenue, and would be mislabelled by a
- * type-based rule. Type is used only as the conservative fallback in
- * resolveComparability() when no business has any valued outcome to read.
- *
- * Mixed within a single business resolves to `estimated_proxy`: the total is
- * only as sound as its weakest component.
- */
-export function deriveValuationBasis(summary: BusinessSummary | null): ValuationBasis | null {
-  const out = summary?.outcomes;
-  if (!out || out.status !== 'ok' || !out.data) return null;
-  const metrics = out.data.declines.map((d) => d.metric_name).filter((m): m is string => Boolean(m));
-  if (metrics.length === 0 && out.data.attributed_value_usd_per_month === 0
-      && out.data.attributed_decline_usd_per_month === 0) {
-    return null;
-  }
-  const bases = new Set(metrics.map((m) => valuationBasisForMetric(m)));
-  if (bases.size === 0) {
-    // Value exists but the contributing metric names are not exposed on the
-    // section; fall back to the report's own confidence as the signal.
-    return out.data.confidence_level === 'established' ? 'measured_revenue' : 'estimated_proxy';
-  }
-  return bases.has('estimated_proxy') ? 'estimated_proxy' : 'measured_revenue';
-}
-
-function businessTypeOf(businessId: string, fallbackFreeText: string | null): {
-  type: BusinessType; inferred: boolean;
-} {
-  const profile = getBusinessProfile(businessId);
-  if (profile?.business_type) {
-    const inferredFields = Array.isArray(profile.inferred_fields) ? profile.inferred_fields : [];
-    return {
-      type: profile.business_type as BusinessType,
-      inferred: inferredFields.includes('business_type') || !profile.confirmed_by_human,
-    };
-  }
-  return { type: inferBusinessType(fallbackFreeText), inferred: true };
 }
 
 function collectFacts(
@@ -605,100 +571,9 @@ export const PORTFOLIO_METRICS: MetricDefinition[] = [
   },
 ];
 
-// ─── Comparability ───────────────────────────────────────────────────────────
-
-export type Comparability = 'comparable' | 'not_comparable';
-
-export interface ComparabilityVerdict {
-  comparability: Comparability;
-  reason: string | null;
-  /**
-   * When not comparable, the groups that cannot be put on one scale, so the
-   * UI can show WHICH businesses conflict rather than a bare warning.
-   */
-  incompatible_groups: Array<{ basis: string; business_ids: string[] }> | null;
-}
-
-/**
- * Decide whether one metric can be ranked across this set of businesses.
- *
- * Only `derivation_sensitive` metrics can ever fail. Counts are counts
- * everywhere; a pending decision in a shop and a pending decision in an
- * agency are the same object. Currency and ratios are different: the same
- * "$/month" column can hold an observed revenue delta for one business and a
- * benchmark coefficient applied to a proxy metric for another, and ranking
- * those against each other asserts an equivalence that does not exist.
- *
- * Two signals, in order of strength:
- *
- *   1. VALUATION BASIS — measured directly from the metrics that actually
- *      produced each figure (#63's estimator owns which metrics are money).
- *      Divergence here is evidence, not inference, so it decides first.
- *   2. BUSINESS TYPE — the conservative fallback used when too few
- *      businesses have a valued outcome for signal 1 to say anything. A
- *      portfolio spanning an ecommerce and a service business is assumed
- *      not to be comparing like with like until the data shows otherwise.
- *
- * The failure mode this ordering avoids: a portfolio of two shops that both
- * happen to be 'ecommerce' should not be blocked from comparing revenue,
- * and a shop against a consultancy should not be silently blended even when
- * neither has enough data yet to prove they differ.
- */
-export function resolveComparability(
-  metric: MetricDefinition, businesses: ComparedBusiness[],
-): ComparabilityVerdict {
-  if (!metric.derivation_sensitive) {
-    return { comparability: 'comparable', reason: null, incompatible_groups: null };
-  }
-
-  const live = businesses.filter((b) => b.status !== 'unavailable');
-  if (live.length < 2) {
-    return { comparability: 'comparable', reason: null, incompatible_groups: null };
-  }
-
-  // 1. Measured divergence in how the money figure was produced.
-  const withBasis = live.filter((b) => b.valuation_basis != null);
-  const bases = new Set(withBasis.map((b) => b.valuation_basis!));
-  if (bases.size > 1) {
-    const groups = Array.from(bases).map((basis) => ({
-      basis,
-      business_ids: withBasis.filter((b) => b.valuation_basis === basis).map((b) => b.business_id),
-    }));
-    return {
-      comparability: 'not_comparable',
-      reason:
-        `${metric.label} is derived differently across these businesses. `
-        + 'Some figures are money that was directly observed (measured_revenue); others are '
-        + 'estimates produced by applying benchmark coefficients to a proxy metric '
-        + '(estimated_proxy). Both are expressed in currency, but they are not the same kind of '
-        + 'number, so they are shown per business and deliberately not ranked or summed.',
-      incompatible_groups: groups,
-    };
-  }
-
-  // 2. Conservative fallback: differing business types.
-  const types = new Set(live.map((b) => b.business_type));
-  if (types.size > 1) {
-    const groups = Array.from(types).map((t) => ({
-      basis: `business_type:${t}`,
-      business_ids: live.filter((b) => b.business_type === t).map((b) => b.business_id),
-    }));
-    return {
-      comparability: 'not_comparable',
-      reason:
-        `${metric.label} depends on how each business's value is estimated, and this portfolio spans `
-        + `more than one business type (${Array.from(types).sort().join(', ')}). `
-        + 'An ecommerce business’s revenue-based figure and a service business’s lead-based figure '
-        + 'are computed from different metric families, so they are shown separately rather than '
-        + 'ranked or combined into one total.',
-      incompatible_groups: groups,
-    };
-  }
-
-  return { comparability: 'comparable', reason: null, incompatible_groups: null };
-}
-
 // ─── Comparison assembly ─────────────────────────────────────────────────────
+// Comparability itself (resolveComparability, ComparabilityVerdict) now lives
+// in comparability.ts, imported and re-exported above.
 
 export interface MetricCell {
   business_id: string;
