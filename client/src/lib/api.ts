@@ -353,6 +353,42 @@ export const proposeWorkflow = (businessId: string, trigger: unknown) =>
   post(`/workflows/${businessId}/propose`, { trigger })
 
 // ============================================
+// Playbooks — versioned, bounded workflows (#74)
+// ============================================
+export const getPlaybookVersions = (businessId: string, workflowId: string) =>
+  get(`/workflows/${businessId}/${workflowId}/playbook/versions`)
+export const getPlaybookEvents = (businessId: string, workflowId: string) =>
+  get(`/workflows/${businessId}/${workflowId}/playbook/events`)
+export const createPlaybookDraft = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions`, data)
+export const validatePlaybookVersion = (businessId: string, workflowId: string, version: number) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions/${version}/validate`, {})
+export const activatePlaybookVersion = (businessId: string, workflowId: string, version: number, data: unknown = {}) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/versions/${version}/activate`, data)
+export const rollbackPlaybookVersion = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/rollback`, data)
+/** Preview only — the server performs no action, creates no task and writes no receipt. */
+export const simulatePlaybook = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/simulate`, data)
+export const startPlaybookRun = (businessId: string, workflowId: string, data: unknown) =>
+  post(`/workflows/${businessId}/${workflowId}/playbook/runs`, data)
+export const getPlaybookRun = (businessId: string, runId: string) =>
+  get(`/workflows/${businessId}/playbook-runs/${runId}`)
+export const advancePlaybookRun = (businessId: string, runId: string) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/advance`, {})
+export const approvePlaybookStep = (businessId: string, runId: string, stepIndex: number) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/approve`, {})
+export const rejectPlaybookStep = (businessId: string, runId: string, stepIndex: number, data: unknown) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/reject`, data)
+export const retryPlaybookStep = (businessId: string, runId: string, stepIndex: number) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/steps/${stepIndex}/retry`, {})
+export const rollbackPlaybookRun = (businessId: string, runId: string, data: unknown = {}) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/rollback`, data)
+export const cancelPlaybookRun = (businessId: string, runId: string, data: unknown = {}) =>
+  post(`/workflows/${businessId}/playbook-runs/${runId}/cancel`, data)
+
+
+// ============================================
 // Goals (Prompt 2)
 // ============================================
 export const getGoals = (businessId: string) => get(`/goals/${businessId}`)

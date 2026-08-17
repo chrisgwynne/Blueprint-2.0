@@ -233,9 +233,36 @@ async function runAgentForStep(agentId: string, taskInput: string, businessId: s
 
 // ─── Approval / Rejection ───────────────────────────────────────────────────
 
+/**
+ * A run started as a bounded playbook (issue #74) is bound to an immutable
+ * playbook version and driven by playbook-engine.ts, which derives approval
+ * from risk, dispatches typed actions and reads their receipts. Advancing
+ * such a run through this engine's simpler "bump current_step" logic would
+ * skip all of that, so these entry points delegate instead.
+ *
+ * Delegation rather than a thrown error on purpose: the scheduler, the
+ * signal engine and older API callers all reach these functions, and every
+ * one of them should keep working against a playbook run.
+ */
+function playbookVersionIdFor(runId: string): string | null {
+  const row = db.prepare('SELECT playbook_version_id FROM workflow_runs WHERE id = ?')
+    .get(runId) as { playbook_version_id: string | null } | null;
+  return row?.playbook_version_id ?? null;
+}
+
+async function playbookEngine(): Promise<typeof import('./playbook-engine.js')> {
+  return import('./playbook-engine.js');
+}
+
 export async function approveWorkflowStep(runId: string, stepIndex: number, approvedBy: string): Promise<void> {
-  const run = db.prepare('SELECT * FROM workflow_runs WHERE id=?').get(runId) as WorkflowRunRow | null;
+  const run = db.prepare('SELECT * FROM workflow_runs WHERE id=?').get(runId) as (WorkflowRunRow & { playbook_version_id?: string | null }) | null;
   if (!run) throw new Error('Run not found');
+
+  if (playbookVersionIdFor(runId)) {
+    const { approvePlaybookStep } = await playbookEngine();
+    approvePlaybookStep({ runId, businessId: run.business_id, stepIndex, actor: approvedBy });
+    return;
+  }
 
   const stepRun = db.prepare(
     'SELECT * FROM workflow_step_runs WHERE run_id=? AND step_index=?'
@@ -267,6 +294,12 @@ export async function rejectWorkflowStep(runId: string, stepIndex: number, reaso
   const run = db.prepare('SELECT * FROM workflow_runs WHERE id=?').get(runId) as WorkflowRunRow | null;
   if (!run) throw new Error('Run not found');
 
+  if (playbookVersionIdFor(runId)) {
+    const { rejectPlaybookStep } = await playbookEngine();
+    rejectPlaybookStep({ runId, businessId: run.business_id, stepIndex, reason, actor: rejectedBy });
+    return;
+  }
+
   db.prepare(`
     UPDATE workflow_step_runs
     SET status='failed', rejection_reason=?, approved_by=?, completed_at=CURRENT_TIMESTAMP
@@ -285,6 +318,13 @@ export async function rejectWorkflowStep(runId: string, stepIndex: number, reaso
 export async function cancelWorkflow(runId: string): Promise<void> {
   const run = db.prepare('SELECT * FROM workflow_runs WHERE id=?').get(runId) as WorkflowRunRow | null;
   if (!run) throw new Error('Run not found');
+
+  if (playbookVersionIdFor(runId)) {
+    const { cancelPlaybookRun } = await playbookEngine();
+    cancelPlaybookRun({ runId, businessId: run.business_id, actor: 'dashboard:human', reason: 'Cancelled by user' });
+    return;
+  }
+
   db.prepare(`
     UPDATE workflow_runs SET status='cancelled', error='Cancelled by user', completed_at=CURRENT_TIMESTAMP
     WHERE id=? AND status IN ('running', 'paused')
