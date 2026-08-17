@@ -1755,6 +1755,60 @@ for (const sql of DECISION_QUEUE_MIGRATIONS) {
   }
 }
 
+// ─── "What happened while I was away?" digest watermarks (issue #62) ─────────
+//
+// One durable row per (operator, business) recording how far through the
+// timeline that operator has actually acknowledged. Two distinct facts are
+// stored, because a digest needs both:
+//
+//   acknowledged_through — a TIME floor. Everything that happened at or
+//     before this instant has been seen. This is what makes the default
+//     window "since I last caught up" rather than "the last 7 days".
+//
+//   acknowledged_items   — a per-item {dedup_key: change_fingerprint} map.
+//     A pure time watermark cannot express "this pending decision is STILL
+//     pending and still identical, so don't show it to me again, but DO show
+//     it again the moment its risk tier escalates." An item is replayed iff
+//     its fingerprint differs from the acknowledged one, which is exactly
+//     the issue's "do not replay unchanged items … without hiding material
+//     changes" pair of requirements.
+//
+// Keyed on operator_key because Blueprint's auth is single-operator
+// (ADMIN_PASSWORD + session.userId — there is no users table), so the
+// session username IS the identity. The column is a plain TEXT key rather
+// than a FK for that reason; adding real users later needs no schema change
+// here, only a different value in this column.
+const DIGEST_WATERMARK_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS digest_watermarks (
+    id TEXT PRIMARY KEY,
+    operator_key TEXT NOT NULL,
+    -- '*' is a real, meaningful value: the all-businesses digest has its own
+    -- watermark, independent of the per-business ones, so acknowledging a
+    -- cross-business catch-up never silently marks a single business read.
+    business_id TEXT NOT NULL,
+    acknowledged_through DATETIME NOT NULL,
+    acknowledged_at DATETIME NOT NULL,
+    acknowledged_by TEXT,
+    -- The digest whose acknowledgement produced this watermark, so a
+    -- watermark is traceable to the exact readback it came from.
+    acknowledged_digest_id TEXT,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    acknowledged_items JSON NOT NULL DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_digest_watermarks_scope
+     ON digest_watermarks(operator_key, business_id)`,
+];
+for (const sql of DIGEST_WATERMARK_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] digest watermark migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {

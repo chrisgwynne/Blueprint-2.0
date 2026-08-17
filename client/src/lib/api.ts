@@ -284,6 +284,30 @@ export const getActionReceipt = (businessId: string, receiptId: string) => get(`
 export const getTaskActionReceipts = (businessId: string, taskId: string) => get(`/receipts/${businessId}/task/${taskId}`)
 
 // ============================================
+// "What happened while I was away?" digest (issue #62)
+// ============================================
+
+/**
+ * Omit `since` for the default catch-up (since your last acknowledgement).
+ * Passing `since` is the explicit override: it ignores the watermark so a
+ * period can be deliberately re-read, and leaves the watermark intact.
+ */
+export const getAwayDigest = (businessId: string | null, params?: Params) =>
+  get(businessId ? `/digest/${businessId}` : '/digest', params)
+
+export const getDigestWatermark = (businessId: string) => get(`/digest/${businessId}/watermark`)
+
+export const acknowledgeDigest = (body: {
+  business_id?: string | null
+  acknowledged_through?: string | null
+  digest_id?: string | null
+  items?: Record<string, string>
+}) => post('/digest/acknowledge', body)
+
+export const resetDigestWatermark = (businessId: string | null) =>
+  post('/digest/reset', { business_id: businessId })
+
+// ============================================
 // Email (Feature 5)
 // ============================================
 

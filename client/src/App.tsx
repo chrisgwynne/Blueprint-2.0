@@ -16,6 +16,7 @@ const SystemHealth   = lazy(() => import('./pages/SystemHealth.tsx'))
 const Chat           = lazy(() => import('./pages/Chat.tsx'))
 const Outcomes       = lazy(() => import('./pages/Outcomes.tsx'))
 const Receipts       = lazy(() => import('./pages/Receipts.tsx'))
+const Digest         = lazy(() => import('./pages/Digest.tsx'))
 const ROI            = lazy(() => import('./pages/ROI.tsx'))
 const Workflows      = lazy(() => import('./pages/Workflows.tsx'))
 const Goals          = lazy(() => import('./pages/Goals.tsx'))
@@ -168,6 +169,7 @@ function App() {
           <Route path="chat/:conversationId" element={<Chat />} />
           <Route path="outcomes" element={<Outcomes />} />
           <Route path="receipts" element={<Receipts />} />
+          <Route path="digest" element={<Digest />} />
           <Route path="roi" element={<ROI />} />
           <Route path="workflows" element={<Workflows />} />
           <Route path="goals" element={<Goals />} />
