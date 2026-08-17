@@ -1299,6 +1299,12 @@ const STARTUP_MIGRATIONS: string[] = [
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`,
   `CREATE INDEX IF NOT EXISTS idx_social_media_staging_expires ON social_media_staging(expires_at)`,
+  // #40 — quarantine flag for a bap_agents webhook that has failed
+  // assertSafeWebhookUrl() (either at reconciliation or delivery time), so
+  // the dispatcher can stop generating doomed deliveries for it without
+  // touching the agent's `status` (see webhook-reconciliation.ts).
+  `ALTER TABLE bap_agents ADD COLUMN webhook_disabled_at DATETIME`,
+  `ALTER TABLE bap_agents ADD COLUMN webhook_disabled_reason TEXT`,
 ];
 
 for (const sql of STARTUP_MIGRATIONS) {
