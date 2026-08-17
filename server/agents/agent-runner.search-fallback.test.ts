@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import db from '../db/db.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const BIZ = 'biz_search_fallback_test';
 const AGENT_ID = 'search-fallback-test';
-const AGENT_DIR = resolve(process.cwd(), 'server/agents', AGENT_ID);
+// CWD-independent, matching agent-runner.ts's own AGENTS_DIR resolution
+// (issue #41's pattern) — this file lives in server/agents/, so its own
+// dirname already points at the real agents directory regardless of
+// whether the test runner's cwd is the repo root or server/.
+const AGENT_DIR = resolve(__dirname, AGENT_ID);
 const PROFILE_PATH = resolve(AGENT_DIR, 'profile.yaml');
 const PROVIDER_BODY_MARKER = 'RAW_SEARCH_PHASE_PROVIDER_BODY_SHOULD_NOT_ESCAPE';
 const SECRET_MARKER = 'AIzaSySEARCH_PHASE_SECRET_SHOULD_NOT_ESCAPE';

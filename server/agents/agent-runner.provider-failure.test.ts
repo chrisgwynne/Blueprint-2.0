@@ -1,7 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import db from '../db/db.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const PROVIDER_BODY_MARKER = 'RAW_GOOGLE_BODY_SHOULD_NOT_ESCAPE';
 const SECRET_MARKER = 'AIzaSySECRET_SHOULD_NOT_ESCAPE';
@@ -16,7 +19,11 @@ mock.module('./self-healer.js', () => ({
 
 const BIZ = 'biz_provider_failure_test';
 const AGENT_ID = 'provider-failure-test';
-const AGENT_DIR = resolve(process.cwd(), 'server/agents', AGENT_ID);
+// CWD-independent, matching agent-runner.ts's own AGENTS_DIR resolution
+// (issue #41's pattern) — this file lives in server/agents/, so its own
+// dirname already points at the real agents directory regardless of
+// whether the test runner's cwd is the repo root or server/.
+const AGENT_DIR = resolve(__dirname, AGENT_ID);
 const PROFILE_PATH = resolve(AGENT_DIR, 'profile.yaml');
 const originalFetch = globalThis.fetch;
 let completionCalls = 0;
