@@ -128,6 +128,18 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // `decisions`, and no BAP route writes decision memory (see
   // bap-comparisons.ts's docstring for the full reasoning).
   'comparisons:read',
+  // Issue #80 — #71's saved multi-business portfolios and their comparative
+  // view. NOT #68's `operating_policy_portfolios`, which are a policy
+  // grouping that must partition businesses and are read through
+  // `operating_policies:read` as part of the resolved policy; these are
+  // general-purpose reporting groupings with deliberately overlapping
+  // membership (see bap-portfolios.ts's docstring). Read-only: curating
+  // which businesses get compared together is an operator's editorial act,
+  // so there is no `portfolios:write` counterpart. The paths carry no
+  // :businessId — a portfolio spans businesses — so the route applies the
+  // agent's `business_access` itself rather than relying on requirePermission
+  // to resolve one from the path.
+  'portfolios:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

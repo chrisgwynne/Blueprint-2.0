@@ -882,6 +882,16 @@ export interface PortfolioComparisonOptions {
   actor: string;
   windowDays?: number;
   sampleSize?: number;
+  /**
+   * An additional narrowing of the actor's scope, intersected with it and
+   * never widening it (see ScopeNarrowing in portfolio-registry.ts). Added
+   * for #80 so a BAP agent's `business_access` grant is applied while the
+   * comparison is COMPUTED rather than filtered off the finished object —
+   * ranks, aggregates and caveats are derived from the member set, so a
+   * business removed afterwards would still have moved every other
+   * business's rank and every total.
+   */
+  businessScope?: readonly string[];
 }
 
 /**
@@ -898,12 +908,14 @@ export function comparePortfolio(options: PortfolioComparisonOptions): Portfolio
   const windowEnd = nowIso();
   const windowStart = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
-  const portfolio: Portfolio = requirePortfolio(options.portfolioId, options.actor);
+  const portfolio: Portfolio = requirePortfolio(options.portfolioId, options.actor, {
+    scope: options.businessScope,
+  });
 
   // Belt and braces: the registry already scoped membership, but the
   // accessible set is re-read here so a portfolio can never be the thing
   // that widens what a request may see.
-  const accessible = new Set(accessibleBusinessIds(options.actor));
+  const accessible = new Set(accessibleBusinessIds(options.actor, options.businessScope));
   const memberIds = portfolio.business_ids.filter((id) => accessible.has(id));
 
   if (memberIds.length === 0) {
@@ -1008,7 +1020,7 @@ export function comparePortfolio(options: PortfolioComparisonOptions): Portfolio
   });
 
   const membershipChanges = membershipChangesInWindow(
-    portfolio.id, windowStart, windowEnd, options.actor,
+    portfolio.id, windowStart, windowEnd, options.actor, { scope: options.businessScope },
   );
 
   return {
