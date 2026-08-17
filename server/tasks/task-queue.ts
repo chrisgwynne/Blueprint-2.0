@@ -7,6 +7,7 @@ import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
 import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
+import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -591,6 +592,31 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       throw new Error(`Cannot approve task in status '${current.status}'. Task must be 'proposed'.`);
     }
 
+    // Approving a hire starts the clock on its bounded trial (#51) and
+    // records the positive decision alongside the negative ones, so the
+    // engine's memory covers both directions (#50). Same transaction as the
+    // status change — an approved hire always has a live trial to judge it by.
+    if (existing.action_type === 'hire_agent') {
+      const templateId = (existing.action_payload as { template_id?: unknown })?.template_id;
+      if (typeof templateId === 'string' && templateId) {
+        recordHiringDecision({
+          businessId: existing.business_id,
+          templateId,
+          decision: 'approved',
+          actor: approvedBy,
+          reason: 'Hire proposal approved.',
+          taskId: id,
+          analysisId: typeof (existing.action_payload as { analysis_id?: unknown })?.analysis_id === 'string'
+            ? (existing.action_payload as { analysis_id: string }).analysis_id : null,
+          evidenceFingerprint: typeof (existing.action_payload as { evidence_fingerprint?: unknown })?.evidence_fingerprint === 'string'
+            ? (existing.action_payload as { evidence_fingerprint: string }).evidence_fingerprint : null,
+          disposition: 'changed_circumstances',
+          reconsiderPolicy: 'new_evidence',
+        });
+        activateTrialForTask(existing.business_id, id);
+      }
+    }
+
     const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
     const actionType = String(after.action_type ?? '').trim();
     if (actionType !== '') {
@@ -696,9 +722,32 @@ export function cancelTask(id: string, cancelledBy: string, reason = ''): TaskRo
 }
 
 /**
- * Reject a task with an optional reason.
+ * Options for rejecting a hire proposal. These map onto the durable hiring
+ * suppression record (#44) so the operator's "no" is a decision the engine
+ * remembers, not just a status change on one task.
  */
-export function rejectTask(id: string, rejectedBy: string, reason = ''): TaskRow | null {
+export interface RejectOptions {
+  /**
+   * How binding the rejection is:
+   *   'hard_suppression'      — never re-propose until a human clears it
+   *   'temporary_deferral'    — re-propose after `expiresAt`
+   *   'changed_circumstances' — re-propose only on materially new evidence (default)
+   */
+  disposition?: 'hard_suppression' | 'temporary_deferral' | 'changed_circumstances';
+  reconsiderPolicy?: 'never' | 'after_expiry' | 'new_evidence';
+  expiresAt?: string | null;
+}
+
+/**
+ * Reject a task with an optional reason.
+ *
+ * For `hire_agent` tasks the status change and the durable hiring-suppression
+ * record are written in ONE transaction (#44). Before this, rejecting a hire
+ * proposal left no trace the hiring engine could see: its dedup only looked at
+ * tasks still in 'proposed'/'approved', so the next analysis re-proposed the
+ * role the operator had just declined, forever.
+ */
+export function rejectTask(id: string, rejectedBy: string, reason = '', opts: RejectOptions = {}): TaskRow | null {
   const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string } | null;
   if (!existing) throw new Error(`Task '${id}' not found.`);
 
@@ -708,13 +757,50 @@ export function rejectTask(id: string, rejectedBy: string, reason = ''): TaskRow
   }
 
   const now = new Date().toISOString();
-  db.prepare(`
-    UPDATE tasks SET
-      status = 'rejected',
-      rejection_reason = ?,
-      updated_at = ?
-    WHERE id = ?
-  `).run(reason, now, id);
+  const payload = safeJSON<Record<string, unknown>>(existing.action_payload, {});
+  const isHire = existing.action_type === 'hire_agent';
+  const templateId = typeof payload.template_id === 'string' ? payload.template_id : null;
+
+  const runReject = db.transaction(() => {
+    const res = db.prepare(`
+      UPDATE tasks SET
+        status = 'rejected',
+        rejection_reason = ?,
+        updated_at = ?
+      WHERE id = ? AND status IN ('proposed', 'approved')
+    `).run(reason, now, id);
+    if (!res.changes) {
+      const current = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus };
+      throw new Error(`Cannot reject task in status '${current.status}'.`);
+    }
+
+    if (isHire && templateId) {
+      recordHiringDecision({
+        businessId: existing.business_id as string,
+        templateId,
+        decision: 'rejected',
+        actor: rejectedBy,
+        reason: reason || null,
+        taskId: id,
+        analysisId: typeof payload.analysis_id === 'string' ? payload.analysis_id : null,
+        // The evidence snapshot the proposal was built from. A later analysis
+        // must produce a DIFFERENT fingerprint before this role is eligible
+        // again — that is what "new evidence" means concretely (#50).
+        evidenceFingerprint: typeof payload.evidence_fingerprint === 'string' ? payload.evidence_fingerprint : null,
+        disposition: opts.disposition ?? 'changed_circumstances',
+        reconsiderPolicy: opts.reconsiderPolicy ?? 'new_evidence',
+        expiresAt: opts.expiresAt ?? null,
+        metadata: { task_title: existing.title ?? null },
+      });
+      // Any trial planned for this hire never happened.
+      abandonTrialForTask(existing.business_id as string, id, reason || 'Hire proposal rejected.');
+      // Free the concurrency slot this proposal held. Whether the role can be
+      // proposed again is now governed by the suppression record above, not by
+      // a leftover idempotency key.
+      releaseProposalSlotForTask(existing.business_id as string, id);
+    }
+  });
+  runReject();
 
   const before = parseRow(existing);
   const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);

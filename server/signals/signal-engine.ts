@@ -273,11 +273,19 @@ export async function runSignalEngine(
   // (a) propose hires for any specialist that would help with the new
   // signal type, and (b) re-evaluate its strategic plan. Fire-and-forget
   // — the sync caller doesn't wait for this.
+  // The nudge carries its trigger provenance; the hiring service decides
+  // whether it is actually due (cooldown / material change) and coalesces it
+  // with any connector-sync or scheduled analysis already running for this
+  // business (#46). It never proposes a hire on its own authority.
   if (newSignalIds.length > 0) {
     (async () => {
       try {
         const { analyseAndProposeHires } = await import('../agents/conductor-hiring.js');
-        await analyseAndProposeHires(businessId);
+        await analyseAndProposeHires(businessId, {
+          trigger: 'signal',
+          triggerRef: newSignalIds[0] ?? null,
+          triggerReason: `${newSignalIds.length} new signal${newSignalIds.length === 1 ? '' : 's'} detected`,
+        });
       } catch (err) {
         console.warn('[signal-engine] Conductor hiring nudge failed:', (err as Error).message);
       }

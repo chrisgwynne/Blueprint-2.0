@@ -20,6 +20,7 @@ import db from '../db/db.js';
 import { checkAgentReadiness } from './readiness.js';
 import { setLifecycleState, type AgentLifecycleState } from './agentLifecycle.js';
 import { ROLE_SPECS } from './agentActivationRules.js';
+import { recordInstallation, recordUninstallation } from './hiring/store.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENTS_DIR = resolve(__dirname);
@@ -156,6 +157,20 @@ export function installAgent(
     metadata: { readiness_status: readiness.status },
   });
 
+  // 4b. Record the PER-BUSINESS installation (issue #49). The `agents` table
+  // is an instance-wide roster keyed by template id, so it cannot answer
+  // "has THIS business hired this agent?" — conductor-hiring read it anyway
+  // and treated one business's hire as everyone's. agent_installations is the
+  // authoritative business-scoped record the hiring engine now reads.
+  try {
+    recordInstallation(businessId, templateId, {
+      installedBy, lifecycleState: startState,
+      metadata: { readiness_status: readiness.status },
+    });
+  } catch (err) {
+    console.warn('[installer] installation record failed (non-fatal):', (err as Error).message);
+  }
+
   // 5. Audit.
   try {
     db.prepare(`
@@ -190,6 +205,7 @@ export function installAgent(
 export function uninstallAgent(
   agentId: string,
   uninstalledBy = 'human',
+  businessId?: string,
 ): { success: boolean; agentId: string } {
   const liveDir = join(AGENTS_DIR, agentId);
   const profilePath = join(liveDir, 'profile.yaml');
@@ -212,11 +228,28 @@ export function uninstallAgent(
     db.prepare("UPDATE agents SET status = 'retired' WHERE id = ?").run(agentId);
   }
 
+  // Mirror the retirement into the per-business installation record so a
+  // retired agent stops counting as installed for that business (#49). Scoped
+  // to one business when the caller knows which; otherwise every business's
+  // record for this agent, since the on-disk agent is gone for all of them.
+  try {
+    if (businessId) {
+      recordUninstallation(businessId, agentId);
+    } else {
+      db.prepare(`
+        UPDATE agent_installations SET status = 'uninstalled', uninstalled_at = CURRENT_TIMESTAMP
+         WHERE agent_id = ? AND status = 'installed'
+      `).run(agentId);
+    }
+  } catch (err) {
+    console.warn('[installer] uninstall record failed (non-fatal):', (err as Error).message);
+  }
+
   try {
     db.prepare(`
       INSERT INTO audit_log (id, business_id, entity_type, entity_id, action, actor, metadata, created_at)
-      VALUES (lower(hex(randomblob(16))), NULL, 'agent', ?, 'retire', ?, ?, CURRENT_TIMESTAMP)
-    `).run(agentId, uninstalledBy, JSON.stringify({}));
+      VALUES (lower(hex(randomblob(16))), ?, 'agent', ?, 'retire', ?, ?, CURRENT_TIMESTAMP)
+    `).run(businessId ?? null, agentId, uninstalledBy, JSON.stringify({}));
   } catch {}
 
   return { success: true, agentId };
