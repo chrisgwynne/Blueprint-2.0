@@ -464,6 +464,18 @@ export const getRetrospectives = (businessId: string) => get(`/retrospectives/${
 export const getRetrospective = (businessId: string, id: string) => get(`/retrospectives/${businessId}/${id}`)
 export const runRetrospective = (businessId: string) => post(`/retrospectives/${businessId}/run`)
 
+// Retrospective operating-change proposals (#73). Approve/reject routes
+// through the decision queue server-side; there is no "activate" endpoint.
+export const getRetrospectiveProposals = (businessId: string, status?: string) =>
+  get(`/retrospectives/${businessId}/proposals`, status ? { status } : undefined)
+export const reviewRetrospectiveProposal = (
+  businessId: string, proposalId: string,
+  body: { outcome: 'approve' | 'reject'; reason?: string; override_reason?: string },
+) => post(`/retrospectives/${businessId}/proposals/${proposalId}/review`, body)
+export const rollbackRetrospectiveProposal = (
+  businessId: string, proposalId: string, reason?: string,
+) => post(`/retrospectives/${businessId}/proposals/${proposalId}/rollback`, { reason })
+
 // ============================================
 // Goal suggestions (Feature 6)
 // ============================================

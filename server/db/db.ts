@@ -1974,6 +1974,88 @@ for (const sql of PLAYBOOK_MIGRATIONS) {
   }
 }
 
+// ─── Retrospective operating-change proposals (issue #73) ────────────────────
+//
+// A retrospective's findings used to end as free text in
+// retrospectives.recommendations / .operating_changes: readable, but not
+// something a human could approve, diff or roll back. This table is the
+// bounded, typed proposal that sits between "we noticed something" and "we
+// changed how Blueprint operates".
+//
+// It deliberately stores NO operating state of its own. A proposal points at
+// the draft its own subsystem created (#68 operating policy, #74 playbook
+// versions, #69 agent retention) and at the #61 decision-queue task a human
+// reviews. Approving one activates the underlying draft through that
+// subsystem's own activation function; nothing here can change behaviour.
+const RETROSPECTIVE_PROPOSAL_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS retrospective_proposals (
+    id TEXT PRIMARY KEY,
+    retrospective_id TEXT,
+    business_id TEXT NOT NULL,
+    -- Exactly one subsystem per proposal. A proposal that wanted to change
+    -- two things at once could not be approved or rolled back as a unit.
+    target TEXT NOT NULL CHECK (target IN ('policy','workflow','agent_lifecycle')),
+    title TEXT NOT NULL,
+    statement TEXT NOT NULL,
+    -- The honesty field. 'evidence_backed' means measured outcome records
+    -- support it; 'hypothesis' means it is worth TRYING and says so;
+    -- 'conflicting_evidence' means the records disagree and were not averaged.
+    basis TEXT NOT NULL CHECK (basis IN ('evidence_backed','hypothesis','conflicting_evidence')),
+    basis_reason TEXT NOT NULL,
+    period_start DATETIME NOT NULL,
+    period_end DATETIME NOT NULL,
+    -- The specific task/outcome/decision/trial rows analysed, by id.
+    cited_records JSON NOT NULL DEFAULT '[]',
+    -- ComparableField (#66): known + citation, or unknown + a real reason.
+    measured_effect JSON,
+    conflicts JSON NOT NULL DEFAULT '[]',
+    expected_benefit TEXT NOT NULL,
+    risk TEXT NOT NULL,
+    rollback_plan TEXT NOT NULL,
+    -- An unreviewed proposal is not a standing offer; it lapses.
+    expires_at DATETIME,
+    -- Pointer to the real draft this proposal created in its own subsystem.
+    draft_ref JSON,
+    decision_task_id TEXT,
+    status TEXT NOT NULL DEFAULT 'proposed'
+      CHECK (status IN ('proposed','approved','rejected','expired','abandoned')),
+    activation_result JSON,
+    reviewed_by TEXT,
+    reviewed_at DATETIME,
+    review_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_retrospective_proposals_business ON retrospective_proposals(business_id, status, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_retrospective_proposals_retro ON retrospective_proposals(retrospective_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_retrospective_proposals_task ON retrospective_proposals(decision_task_id) WHERE decision_task_id IS NOT NULL`,
+
+  // Where a retrospective did NOT have enough evidence to propose anything.
+  // Recorded as a first-class result rather than omitted, so "we looked and
+  // could not tell" is visible instead of looking like "we found nothing".
+  `ALTER TABLE retrospectives ADD COLUMN evidence_gaps JSON DEFAULT '[]'`,
+  // LLM narrative suggestions that no measured record supports. Kept as
+  // narrative, explicitly NOT promoted to proposals.
+  `ALTER TABLE retrospectives ADD COLUMN unstructured_suggestions JSON DEFAULT '[]'`,
+
+  // The single action type a retrospective proposal is reviewed as. It is
+  // dispatched by executor.ts, whose handler calls the OWNING subsystem's
+  // activation function — the retrospective engine never activates anything.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval)
+   VALUES ('retrospective_operating_change', 'Activate an operating change a retrospective proposed (policy version, playbook version, or agent lifecycle action).', '[]', '[]', 'internal_idempotent', 'high', 1, 1)`,
+  `UPDATE action_registry SET dispatched_by_executor = 1, supports_rollback = 1, requires_approval = 1
+    WHERE action_type = 'retrospective_operating_change'`,
+];
+for (const sql of RETROSPECTIVE_PROPOSAL_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] retrospective proposal migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {

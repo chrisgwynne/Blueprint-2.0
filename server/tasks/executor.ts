@@ -134,6 +134,10 @@ const EXECUTABLE_ACTION_TYPES = new Set<string>([
   // Connector lifecycle — surfaced by agents, reviewed by human
   'connect_connector',
   'research_connector',
+  // Operating change a retrospective proposed and a human approved (#73).
+  // The handler activates nothing itself — it calls the owning subsystem's
+  // activation function (#68 policy, #74 playbook, #69 agent lifecycle).
+  'retrospective_operating_change',
 ]);
 
 export function isExecutable(actionType: string): boolean {
@@ -1589,6 +1593,7 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
       case 'meta_ads_update':           result = await executeMetaAdsUpdate(task); break;
       case 'connect_connector':         result = await executeConnectConnector(task); break;
       case 'research_connector':        result = await executeResearchConnector(task); break;
+      case 'retrospective_operating_change': result = await executeRetrospectiveOperatingChange(task); break;
       default:
         throw new Error(`Unhandled executable action_type: ${task.action_type}`);
     }
@@ -2022,6 +2027,42 @@ Produce a connector proposal as JSON:
   return {
     outcome: `Connector spec for "${spec.connector_name as string}" produced. Recommendation: ${spec.recommendation as string}.${issueUrl ? ` GitHub issue created.` : ''}`,
     outcome_data: { connector_name: spec.connector_name, recommendation: spec.recommendation, kb_path: kbPath, issue_url: issueUrl },
+  };
+}
+
+/**
+ * Activate an operating change a retrospective proposed (#73).
+ *
+ * This handler is the ONLY path from a retrospective finding to a real
+ * behaviour change, and it is reached only after approveTask() has taken the
+ * task through every policy, registry and applicability gate. It performs no
+ * activation of its own: applyApprovedProposal() dispatches to #68's
+ * savePolicyVersion(), #74's activatePlaybookVersion() or #69's existing
+ * retire/standby controls, whichever the approved proposal targets.
+ *
+ * The retrospective engine itself has no route here — it can only create the
+ * proposal and the review item a human must approve first.
+ */
+async function executeRetrospectiveOperatingChange(task: Task): Promise<ExecuteResult> {
+  const proposalId = task.action_payload?.proposal_id;
+  if (typeof proposalId !== 'string' || proposalId === '') {
+    throw new Error('retrospective_operating_change requires action_payload.proposal_id');
+  }
+
+  const { applyApprovedProposal } = await import('../brain/retrospective-proposals.js');
+  // The approver is the authority for the change, not the executor. Falling
+  // back to the executor identity would attribute a human's operating
+  // decision to the system.
+  const actor = String(task.approved_by ?? '').trim() || 'system:executor';
+  const result = applyApprovedProposal(proposalId, task.business_id, actor);
+
+  return {
+    outcome: result.outcome,
+    outcome_data: {
+      proposal_id: result.proposal_id,
+      target: result.target,
+      ...result.detail,
+    },
   };
 }
 
