@@ -18,6 +18,7 @@ import { detectAnomalousOutput } from '../lib/security-monitor.js';
 import { SecurityError } from '../lib/outbound-allowlist.js';
 import { checkRunCancellation, markRunCancelled, recordProviderPreflight, recordRunEvent, updateRunHeartbeat } from '../trust/trust-engine.js';
 import { classifyProviderError, isProviderErrorLike, safeErrorMessage } from '../lib/provider-errors.js';
+import { createSystemIssue, listSystemIssues } from '../system/system-issues.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -1099,6 +1100,44 @@ async function processConnectorWishlist(wishlist: ParsedAgentOutput['connector_w
   }
 }
 
+function monthStart(): Date {
+  const d = new Date();
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+/**
+ * Raise a system_issues row once per period (day/month) instead of on every
+ * run that's over a budget threshold — dedup is by issue_type + business_id
+ * (+ agent_id in metadata, for the per-agent variant) with no open issue of
+ * that kind created since `since`. Used for both the 80% soft warning
+ * (severity 'warning', run still proceeds) and the 100% hard stop
+ * (severity 'error', run gets skipped) — previously the hard stop was only
+ * ever a server console.warn, invisible on the dashboard and over BAP.
+ */
+function raiseBudgetIssueOnce(
+  issueType: string,
+  severity: 'warning' | 'error',
+  businessId: string | null,
+  since: Date,
+  params: { title: string; description: string; metadata: Record<string, unknown> },
+  dedupAgentId?: string,
+): void {
+  const alreadyRaised = listSystemIssues({ business_id: businessId ?? undefined, status: 'open', issue_type: issueType })
+    .filter((issue) => new Date(issue.created_at) >= since)
+    .some((issue) => !dedupAgentId || issue.metadata?.agent_id === dedupAgentId);
+  if (alreadyRaised) return;
+  createSystemIssue({
+    business_id: businessId,
+    issue_type: issueType,
+    severity,
+    title: params.title,
+    description: params.description,
+    metadata: params.metadata,
+  });
+}
+
 // ─── Main runAgent function ───────────────────────────────────────────────────
 
 /**
@@ -1216,7 +1255,22 @@ export async function runAgent(
     ).get() as CostRow | null)?.total ?? 0;
     if (monthSpent >= monthlyBudget) {
       console.warn(`[agent-runner] Monthly budget exhausted ($${monthSpent.toFixed(2)}/$${monthlyBudget}). Skipping '${agentId}'.`);
+      raiseBudgetIssueOnce('monthly_budget_exhausted', 'error', null, monthStart(), {
+        title: `Monthly LLM budget exhausted`,
+        description: `Spent $${monthSpent.toFixed(2)} of the $${monthlyBudget} monthly cap — every agent run is being skipped until the cap resets or is raised.`,
+        metadata: { month_spent_usd: monthSpent, monthly_budget_usd: monthlyBudget },
+      });
       return { runId: null, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'monthly_budget' };
+    }
+    // Soft warning before the hard stop above silently skips every run — a
+    // system_issues row surfaces on the dashboard and over BAP
+    // (system_issues:read) instead of only ever reaching a server log.
+    if (monthSpent >= monthlyBudget * 0.8) {
+      raiseBudgetIssueOnce('monthly_budget_warning', 'warning', null, monthStart(), {
+        title: `Monthly LLM budget at ${Math.round((monthSpent / monthlyBudget) * 100)}%`,
+        description: `Spent $${monthSpent.toFixed(2)} of the $${monthlyBudget} monthly cap. Agent runs stop entirely once the cap is reached.`,
+        metadata: { month_spent_usd: monthSpent, monthly_budget_usd: monthlyBudget },
+      });
     }
   }
 
@@ -1231,7 +1285,19 @@ export async function runAgent(
   const costCap = (llmConfig.cost_cap_daily_usd as number | undefined) ?? 2.0;
   if (costCap > 0 && todayCost >= costCap) {
     console.warn(`[agent-runner] Agent '${agentId}' has hit daily cost cap ($${costCap}). Skipping.`);
+    raiseBudgetIssueOnce('agent_daily_budget_exhausted', 'error', businessId, todayStart, {
+      title: `${agentId} has hit its daily cost cap`,
+      description: `Spent $${todayCost.toFixed(2)} of the $${costCap} daily cap — this agent is being skipped for the rest of the day.`,
+      metadata: { agent_id: agentId, today_cost_usd: todayCost, cost_cap_daily_usd: costCap },
+    }, agentId);
     return { runId: null, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'cost_cap' };
+  }
+  if (costCap > 0 && todayCost >= costCap * 0.8) {
+    raiseBudgetIssueOnce('agent_daily_budget_warning', 'warning', businessId, todayStart, {
+      title: `${agentId} at ${Math.round((todayCost / costCap) * 100)}% of its daily cost cap`,
+      description: `Spent $${todayCost.toFixed(2)} of the $${costCap} daily cap. The agent stops running entirely once the cap is reached.`,
+      metadata: { agent_id: agentId, today_cost_usd: todayCost, cost_cap_daily_usd: costCap },
+    }, agentId);
   }
 
   // Create the run record

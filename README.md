@@ -63,6 +63,7 @@
 - [Troubleshooting](#-troubleshooting)
 - [Requirements](#-requirements)
 - [Environment Variables](#-environment-variables)
+- [Security & Data Handling](#-security--data-handling)
 - [Contributing](#-contributing)
 - [License](#-license)
 
@@ -531,6 +532,10 @@ Windows Defender real-time scanning inspects every file Bun writes. Exclude the 
 ## ⚙️ Environment Variables
 
 See [.env.example](.env.example) for full documentation of every variable Blueprint reads.
+
+## 🔒 Security & Data Handling
+
+Self-hosted, no cloud tier, no telemetry, AES-256-GCM credential encryption, and outbound network access restricted to an explicit allowlist enforced in code — see [SECURITY.md](SECURITY.md) for exactly what leaves your machine and what doesn't.
 
 ## 🤝 Contributing
 

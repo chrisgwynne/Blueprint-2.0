@@ -611,6 +611,49 @@ with the same key resolves to the same run rather than a duplicate one —
 `reused: true` in the response body distinguishes an idempotent replay
 from a fresh run (`202`) at the HTTP layer too (`200` vs `202`).
 
+### System Issues (2026-08)
+```
+GET   /api/bap/v1/businesses/:id/system-issues  — list (filterable by status, issue_type)
+PATCH /api/bap/v1/system-issues/:issueId        — acknowledge, resolve, or dismiss
+```
+The audit trail for **"why didn't Blueprint act"** — raised whenever
+Blueprint decides not to do something a human might expect, instead of
+silently dropping the work or (worse) doing it anyway: a task couldn't
+be validated for execution, a connector's confidence is too low to
+trust, an outcome measurement showed no improvement. Severity is one of
+`info` / `warning` / `error` / `critical`; status is
+`open` / `acknowledged` / `resolved` / `dismissed`.
+
+A `business_id: null` issue is a **global** one — not scoped to any
+single business, e.g. the shared monthly LLM budget below — and it
+always appears alongside a business's own scoped issues when you list
+with `?business_id=` filtering, rather than requiring a second query to
+ever see it.
+
+**Budget visibility (2026-08):** hitting a cost cap used to be a server
+console log only, invisible on the dashboard and over BAP. Both cap
+types now raise a system issue twice — once as an early warning, once
+at the actual stop — so an agent polling `system_issues:read` sees this
+without watching server logs:
+
+| `issue_type` | severity | when |
+|---|---|---|
+| `agent_daily_budget_warning` | `warning` | a specific agent has used ≥80% of its daily cost cap; the run still proceeds |
+| `agent_daily_budget_exhausted` | `error` | that agent's daily cap is fully spent; every run for it is skipped for the rest of the day |
+| `monthly_budget_warning` | `warning` | the shared monthly budget (all agents, all businesses) has crossed 80%; runs still proceed |
+| `monthly_budget_exhausted` | `error` | the monthly budget is fully spent; every agent run everywhere is skipped until it resets |
+
+Each is deduped per period (once per agent per day; once globally per
+month) rather than re-raised on every check, and each carries the real
+spend and cap in `metadata` so you can see exactly how close to the
+edge you are, not just that you're near it.
+
+There is no BAP path to create a system issue directly — only Blueprint
+itself raises them. `PATCH .../system-issues/:issueId` (acknowledge,
+resolve, or dismiss) is the one write path here, gated by a separate
+`system_issues:update` grant so an agent can be given visibility without
+being able to silently dismiss what it's shown.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB

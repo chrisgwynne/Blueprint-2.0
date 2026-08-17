@@ -87,7 +87,11 @@ export interface ListSystemIssuesFilter {
 export function listSystemIssues(filter: ListSystemIssuesFilter = {}): SystemIssue[] {
   const clauses: string[] = [];
   const values: any[] = [];
-  if (filter.business_id) { clauses.push('business_id = ?'); values.push(filter.business_id); }
+  // Global issues (business_id IS NULL — e.g. the shared monthly LLM budget)
+  // are relevant context regardless of which business you're looking at, so
+  // they're always included alongside a business's own scoped issues rather
+  // than requiring a second, separate query to ever see them.
+  if (filter.business_id) { clauses.push('(business_id = ? OR business_id IS NULL)'); values.push(filter.business_id); }
   if (filter.status) { clauses.push('status = ?'); values.push(filter.status); }
   if (filter.issue_type) { clauses.push('issue_type = ?'); values.push(filter.issue_type); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
