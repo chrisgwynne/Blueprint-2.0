@@ -442,6 +442,29 @@ export function listPendingDecisions(
 }
 
 /**
+ * One pending decision, scoped to a business.
+ *
+ * Returns null — never a bare task view — for anything not currently in the
+ * queue, because a pending decision has no existence apart from a task a
+ * human still owes an answer on. Once reviewed, the record of WHAT was
+ * decided lives in brain/decision-memory.ts, not here.
+ *
+ * (id, business_id) is the isolation boundary, exactly as in
+ * requireTaskInBusiness(): a task belonging to another business is simply
+ * absent, never a 403 that would confirm the id is real.
+ */
+export function getPendingDecision(businessId: string, taskId: string): PendingDecision | null {
+  const statuses = [...PENDING_STATUSES, 'deferred'];
+  const placeholders = statuses.map(() => '?').join(', ');
+  const row = db.prepare(`
+    SELECT * FROM tasks
+    WHERE id = ? AND business_id = ? AND status IN (${placeholders})
+  `).get(taskId, businessId, ...statuses) as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return describePendingDecision(row, resolveOperatingPolicy(businessId));
+}
+
+/**
  * Recurring decision classes for one business: what kinds of decision keep
  * coming back, and is there already a standing rule for them?
  *

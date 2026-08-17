@@ -106,6 +106,44 @@ export interface CandidateRef {
   kind?: ComparisonCandidateKind | null;
 }
 
+/**
+ * Parse a caller-supplied candidate list into `CandidateRef`s. Accepts
+ * either `["id1","id2"]` or `[{"id":"id1","kind":"task"}, ...]`.
+ *
+ * An unrecognised `kind` is rejected rather than silently dropped, so a typo
+ * can never quietly change which record was compared. Lives on the engine
+ * rather than in a route because both the dashboard router
+ * (routes/comparisons.ts) and the BAP router (routes/bap-comparisons.ts)
+ * must accept exactly the same shapes — two copies would eventually drift,
+ * and a comparison that means different things to a human and to an agent
+ * is worse than no comparison at all.
+ *
+ * Throws a plain Error (routes map it to 400) — this is malformed input, not
+ * an honestly-uncomparable set, which is what ComparisonRejectedError means.
+ */
+export function parseCandidateRefs(raw: unknown): CandidateRef[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('`candidates` must be an array of ids or { id, kind } objects.');
+  }
+  return raw.map((entry, i) => {
+    if (typeof entry === 'string') return { id: entry };
+    if (entry && typeof entry === 'object') {
+      const obj = entry as Record<string, unknown>;
+      const id = obj.id;
+      if (typeof id !== 'string' || !id.trim()) {
+        throw new Error(`candidates[${i}] is missing a string \`id\`.`);
+      }
+      const kind = obj.kind;
+      if (kind == null) return { id };
+      if (typeof kind !== 'string' || !COMPARISON_CANDIDATE_KINDS.includes(kind as ComparisonCandidateKind)) {
+        throw new Error(`candidates[${i}].kind must be one of ${COMPARISON_CANDIDATE_KINDS.join(' | ')}.`);
+      }
+      return { id, kind: kind as ComparisonCandidateKind };
+    }
+    throw new Error(`candidates[${i}] must be an id string or an { id, kind } object.`);
+  });
+}
+
 // ─── Rejections and flags ────────────────────────────────────────────────────
 
 export type ComparisonRejectionCode =

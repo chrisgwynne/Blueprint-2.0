@@ -266,6 +266,17 @@ const DEFAULT_LOOKBACK_DAYS = 7;
 
 // ─── Window resolution ───────────────────────────────────────────────────────
 
+/**
+ * The minimal shape buildAwayDigest/resolveWindow actually read off a
+ * watermark. A caller with its own watermark dimension (e.g. BAP agents,
+ * see bap-digest-watermark.ts) implements only this, not the full
+ * DigestWatermark row shape from digest-watermark.ts.
+ */
+export interface WatermarkLike {
+  acknowledged_through: string;
+  acknowledged_items: Record<string, string>;
+}
+
 export interface DigestRequest {
   operator_key?: string | null;
   /** Business id, or '*'/empty for all businesses. */
@@ -281,6 +292,16 @@ export interface DigestRequest {
   until?: string | null;
   /** Cap on items per section per business. */
   limit?: number;
+  /**
+   * Injectable watermark reader. Defaults to the dashboard operator
+   * watermark store (digest-watermark.ts, keyed on session username). A BAP
+   * caller passes its own reader backed by a genuinely separate table keyed
+   * on the calling agent's id, so a human operator's catch-up point and
+   * their BAP agent's never share storage — see issue #81 /
+   * bap-digest-watermark.ts. Nothing else in this module changes: dedup,
+   * escalation and section-building are identical for both callers.
+   */
+  getWatermark?: (operatorKey: string, scope: string) => WatermarkLike | null;
 }
 
 export function resolveWindow(
@@ -290,7 +311,8 @@ export function resolveWindow(
   now: Date,
 ): DigestWindow {
   const end = toIso(request.until) ?? now.toISOString();
-  const watermark = getWatermark(operatorKey, scope);
+  const readWatermark = request.getWatermark ?? getWatermark;
+  const watermark = readWatermark(operatorKey, scope);
   const watermarkAt = watermark ? toIso(watermark.acknowledged_through) : null;
 
   const explicitSince = toIso(request.since);
@@ -1012,7 +1034,8 @@ export function buildAwayDigest(request: DigestRequest = {}): AwayDigest {
   const window = resolveWindow(operator, scope, request, now);
   const limit = Math.min(Math.max(request.limit ?? 100, 1), 500);
 
-  const watermark = getWatermark(operator, scope);
+  const readWatermark = request.getWatermark ?? getWatermark;
+  const watermark = readWatermark(operator, scope);
   const acknowledged = window.watermark_applied ? (watermark?.acknowledged_items ?? {}) : {};
 
   const businesses: DigestBusinessGroup[] = [];

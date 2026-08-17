@@ -65,6 +65,7 @@ import bapConnectorsRouter from './bap-connectors.js';
 import bapOutcomesRouter from './bap-outcomes.js';
 import bapRunsRouter from './bap-runs.js';
 import bapAuditRouter from './bap-audit.js';
+import bapAuditSearchRouter from './bap-audit-search.js';
 import bapOpportunitiesRouter from './bap-opportunities.js';
 import bapConflictsRouter from './bap-conflicts.js';
 import bapDecisionsRouter from './bap-decisions.js';
@@ -78,6 +79,14 @@ import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
+import bapDecisionQueueRouter from './bap-decision-queue.js';
+import bapComparisonsRouter from './bap-comparisons.js';
+import bapCommandCentreRouter from './bap-command-centre.js';
+import bapPortfoliosRouter from './bap-portfolios.js';
+import bapDigestRouter from './bap-digest.js';
+import bapExplanationsRouter from './bap-explanations.js';
+import bapSimulationRouter from './bap-simulation.js';
+import bapPlaybooksRouter from './bap-playbooks.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -304,6 +313,7 @@ router.use(bapConnectorsRouter);
 router.use(bapOutcomesRouter);
 router.use(bapRunsRouter);
 router.use(bapAuditRouter);
+router.use(bapAuditSearchRouter);
 router.use(bapOpportunitiesRouter);
 router.use(bapConflictsRouter);
 router.use(bapDecisionsRouter);
@@ -319,6 +329,38 @@ router.use(bapTrustRouter);
 router.use(bapOperatingPoliciesRouter);
 // Issue #70 — verified action receipts (permission-scoped, read-only).
 router.use(bapReceiptsRouter);
+// Issue #77 — the #61 pending-decision queue (read-only). Distinct from
+// bapDecisionsRouter above in both path and permission: that one is the
+// decision-memory recall log, this one is the queue still awaiting a human.
+router.use(bapDecisionQueueRouter);
+// Issue #78 — recommendation comparison mode (#66's engine), read-only.
+router.use(bapComparisonsRouter);
+// Issue #79 — #59's cross-business executive command centre, read-only. One
+// of two sub-routers here whose paths carry no `:businessId`; it spans
+// businesses by design and enforces the agent's business_access grant
+// itself rather than through requirePermission's path check.
+router.use(bapCommandCentreRouter);
+// Issue #80 — #71's saved multi-business portfolios and their comparative
+// view, read-only. The other BAP router whose paths carry no :businessId (a
+// portfolio spans businesses), so it applies the agent's business_access
+// itself. Not #68's policy portfolios — see bap-portfolios.ts.
+router.use(bapPortfoliosRouter);
+// Issue #81 — #62's "while you were away" catch-up digest, read-only. Watermark
+// is a genuinely separate table keyed on the agent's own id, never the
+// dashboard operator's session username — see bap-digest.ts and
+// bap-digest-watermark.ts.
+router.use(bapDigestRouter);
+// Issue #82 — "why did Blueprint do this?" explanation panels (#60), reused
+// verbatim including the #70 redaction pass. Permission-scoped, read-only.
+router.use(bapExplanationsRouter);
+// Issue #86 — safe simulation/preview mode (#67's shared primitive).
+router.use(bapSimulationRouter);
+// Issue #85 — #74's versioned, bounded playbooks: read, #67-style zero-
+// side-effect simulate, AND a trigger endpoint (`playbooks:trigger`,
+// separate grant from `playbooks:read`) — see bap-playbooks.ts's docstring
+// for why triggering a run does not bypass the same approval machinery a
+// directly-proposed task would clear.
+router.use(bapPlaybooksRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
@@ -366,7 +408,7 @@ router.get('/capabilities', (_req: Request, res: Response) => {
       'GET /connectors/:id/syncs', 'POST /connectors/:id/sync',
       'GET /businesses/:id/outcomes', 'GET /tasks/:id/outcome',
       'GET /businesses/:id/runs', 'POST /runs/:id/cancel', 'POST /runs/:id/retry',
-      'GET /businesses/:id/audit',
+      'GET /businesses/:id/audit', 'POST /businesses/:id/audit-search',
       'GET /businesses/:id/kb/file/*', 'GET /businesses/:id/kb/search',
       'POST /businesses/:id/kb/query', 'POST /businesses/:id/kb/write',
       'GET /businesses/:id/metrics', 'GET /businesses/:id/metrics/snapshot',

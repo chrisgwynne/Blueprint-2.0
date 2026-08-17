@@ -686,6 +686,26 @@ export interface CommandCentreOptions {
   sampleSize?: number;
   /** Who is asking — scopes the selection. */
   actor: string;
+  /**
+   * The exact set of business ids this caller may read, overriding
+   * listAccessibleBusinessIds(). Added for #79's BAP surface.
+   *
+   * listAccessibleBusinessIds() is honest for the dashboard — Blueprint's
+   * session model is single-tenant, so an authenticated operator can read
+   * every business (see its docstring). BAP is not: a `bap_agents` row
+   * carries a real `business_access` grant, and that grant is the ACL this
+   * module was always waiting for. Rather than teaching this module how to
+   * read a BAP key, the caller that already knows who is asking passes the
+   * resolved set in.
+   *
+   * This is deliberately an override of the SCOPE, not of the selection:
+   * `businessIds` still means "what was asked for" and is still checked
+   * against this set, so the truncation, `unavailable` and roll-up rules
+   * below behave identically for both callers. Passing `[]` means the
+   * caller may read nothing, and produces an `empty_selection` error rather
+   * than quietly falling back to every business.
+   */
+  accessibleBusinessIds?: string[];
 }
 
 export interface CommandCentreSummary {
@@ -1143,7 +1163,12 @@ export class CommandCentreError extends Error {
   }
 }
 
-const MAX_SELECTION = 25;
+/**
+ * Exported so a caller can advertise the cap before a request is made
+ * (bap-command-centre.ts's `/command-centre/scope` does), rather than
+ * letting an agent discover it by being refused.
+ */
+export const MAX_SELECTION = 25;
 
 /**
  * Assemble the cross-business command centre.
@@ -1159,7 +1184,11 @@ export function assembleCommandCentre(options: CommandCentreOptions): CommandCen
   const windowEnd = nowIso();
   const windowStart = new Date(Date.now() - windowDays * 86_400_000).toISOString();
 
-  const accessible = new Set(listAccessibleBusinessIds(options.actor));
+  // `?? undefined`-free on purpose: an explicitly empty array is a real
+  // answer ("this caller may read nothing"), not a missing option.
+  const accessible = new Set(
+    options.accessibleBusinessIds ?? listAccessibleBusinessIds(options.actor),
+  );
 
   let portfolio: CommandCentreSummary['portfolio'] = null;
   let requested: string[] = [];

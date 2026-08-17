@@ -139,13 +139,34 @@ export function setBusinessScopeResolver(resolver: BusinessScopeResolver | null)
   resolveScope = resolver ?? listAccessibleBusinessIds;
 }
 
-/** The businesses this actor may read. The only scoping call in this subsystem. */
-export function accessibleBusinessIds(actor: string): string[] {
-  return resolveScope(actor);
+/**
+ * An additional, caller-supplied narrowing of the actor's scope.
+ *
+ * Added for #80, which exposes these reads over BAP. A BAP agent's
+ * `business_access` grant is narrower than the ambient resolver (which today
+ * still returns every business), and the route cannot express that by
+ * choosing an actor string.
+ *
+ * It is applied as an INTERSECTION, never a replacement: the result is
+ * always a subset of what resolveScope() already allowed, so passing a scope
+ * can only ever remove businesses, never add one. A caller naming a business
+ * the ambient scope withholds still does not get it. Omitting it leaves
+ * every existing caller's behaviour exactly as it was.
+ */
+export interface ScopeNarrowing {
+  scope?: readonly string[];
 }
 
-function accessibleSet(actor: string): Set<string> {
-  return new Set(accessibleBusinessIds(actor));
+/** The businesses this actor may read. The only scoping call in this subsystem. */
+export function accessibleBusinessIds(actor: string, scope?: readonly string[]): string[] {
+  const ambient = resolveScope(actor);
+  if (!scope) return ambient;
+  const narrow = new Set(scope);
+  return ambient.filter((id) => narrow.has(id));
+}
+
+function accessibleSet(actor: string, scope?: readonly string[]): Set<string> {
+  return new Set(accessibleBusinessIds(actor, scope));
 }
 
 /** Raw membership, unfiltered. Never returned to a caller as-is. */
@@ -172,9 +193,9 @@ function businessNames(ids: string[]): Map<string, string> {
  * across reloads — a table whose columns move between refreshes is one an
  * operator cannot read differences off.
  */
-function projectPortfolio(row: PortfolioRow, actor: string): Portfolio {
+function projectPortfolio(row: PortfolioRow, actor: string, scope?: readonly string[]): Portfolio {
   const members = rawMemberIds(row.id);
-  const accessible = accessibleSet(actor);
+  const accessible = accessibleSet(actor, scope);
   const visible = members.filter((id) => accessible.has(id));
   const names = businessNames(visible);
   visible.sort((a, b) => (names.get(a) ?? a).localeCompare(names.get(b) ?? b));
@@ -237,9 +258,9 @@ function touch(portfolioId: string, at: string): void {
 
 // ─── Reads ───────────────────────────────────────────────────────────────────
 
-export function listPortfolios(actor: string): Portfolio[] {
+export function listPortfolios(actor: string, opts: ScopeNarrowing = {}): Portfolio[] {
   return (db.prepare('SELECT * FROM portfolios ORDER BY name').all() as PortfolioRow[])
-    .map((r) => projectPortfolio(r, actor));
+    .map((r) => projectPortfolio(r, actor, opts.scope));
 }
 
 /**
@@ -251,13 +272,13 @@ export function listPortfolios(actor: string): Portfolio[] {
  * and a 404 here would make "empty" and "not yours" indistinguishable to a
  * legitimate operator debugging their own view.
  */
-export function getPortfolio(id: string, actor: string): Portfolio | null {
+export function getPortfolio(id: string, actor: string, opts: ScopeNarrowing = {}): Portfolio | null {
   const row = fetchRow(id);
-  return row ? projectPortfolio(row, actor) : null;
+  return row ? projectPortfolio(row, actor, opts.scope) : null;
 }
 
-export function requirePortfolio(id: string, actor: string): Portfolio {
-  const p = getPortfolio(id, actor);
+export function requirePortfolio(id: string, actor: string, opts: ScopeNarrowing = {}): Portfolio {
+  const p = getPortfolio(id, actor, opts);
   if (!p) throw new PortfolioError(`Portfolio '${id}' not found.`, 404, 'portfolio_not_found');
   return p;
 }
@@ -269,13 +290,13 @@ export function requirePortfolio(id: string, actor: string): Portfolio {
  * history is as scoped as the membership it describes.
  */
 export function listMembershipHistory(
-  portfolioId: string, actor: string, opts: { limit?: number } = {},
+  portfolioId: string, actor: string, opts: ScopeNarrowing & { limit?: number } = {},
 ): MembershipEvent[] {
   if (!fetchRow(portfolioId)) {
     throw new PortfolioError(`Portfolio '${portfolioId}' not found.`, 404, 'portfolio_not_found');
   }
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
-  const accessible = accessibleSet(actor);
+  const accessible = accessibleSet(actor, opts.scope);
   const rows = db.prepare(`
     SELECT * FROM portfolio_membership_events
      WHERE portfolio_id = ?
@@ -306,8 +327,9 @@ export function listMembershipHistory(
  */
 export function membershipChangesInWindow(
   portfolioId: string, windowStart: string, windowEnd: string, actor: string,
+  opts: ScopeNarrowing = {},
 ): MembershipEvent[] {
-  const accessible = accessibleSet(actor);
+  const accessible = accessibleSet(actor, opts.scope);
   const rows = db.prepare(`
     SELECT * FROM portfolio_membership_events
      WHERE portfolio_id = ?

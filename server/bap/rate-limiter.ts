@@ -18,6 +18,7 @@ const LIMITS: Record<string, RateLimit> = {
   default:           DEFAULT_LIMIT,
   'kb:write':        { calls: 20,  windowMs: 60_000 },
   'kb:query':        { calls: 10,  windowMs: 60_000 },
+  'audit_search:query': { calls: 10, windowMs: 60_000 },
   'agents:trigger':  { calls: 5,   windowMs: 60_000 },
   register:          { calls: 5,   windowMs: 300_000 },
 };

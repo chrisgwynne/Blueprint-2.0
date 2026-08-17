@@ -1829,6 +1829,43 @@ for (const sql of DIGEST_WATERMARK_MIGRATIONS) {
   }
 }
 
+// ─── BAP digest watermarks (issue #81) ───────────────────────────────────────
+//
+// A physically separate table from digest_watermarks above — NOT a shared
+// table with a differently-namespaced operator_key. Keyed on the calling
+// BAP agent's `bap_agents.id` rather than a dashboard session username, so a
+// human operator's "what happened while I was away" progress and their BAP
+// agent's never share storage: advancing one can never advance, or be
+// blocked by, the other's catch-up point. See
+// server/digest/bap-digest-watermark.ts for the full reasoning.
+const BAP_DIGEST_WATERMARK_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS bap_digest_watermarks (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    -- '*' is a real, meaningful value, mirroring digest_watermarks — reserved
+    -- for a future cross-business BAP digest, unused by the current
+    -- per-business-only BAP digest endpoint.
+    business_id TEXT NOT NULL,
+    acknowledged_through DATETIME NOT NULL,
+    acknowledged_at DATETIME NOT NULL,
+    acknowledged_digest_id TEXT,
+    item_count INTEGER NOT NULL DEFAULT 0,
+    acknowledged_items JSON NOT NULL DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_bap_digest_watermarks_scope
+     ON bap_digest_watermarks(agent_id, business_id)`,
+];
+for (const sql of BAP_DIGEST_WATERMARK_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] bap digest watermark migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // ─── Reporting portfolios (#71) ──────────────────────────────────────────────
 //
 // Deliberately NOT the same table as operating_policy_portfolios (#68), and
