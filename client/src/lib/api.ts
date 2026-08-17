@@ -653,6 +653,7 @@ export const getTrustLifecycle = (businessId: string) => get(`/trust/signals/${b
 export const getTrustMeasurementPolicies = (businessId: string) => get(`/trust/measurement-policies/${businessId}`)
 export const getTrustPreflight = () => get('/trust/provider-preflight')
 export const getTrustScorecard = (businessId: string, agentId = 'conductor') => get(`/trust/scorecards/${businessId}`, { agent_id: agentId })
+export const getRunEvents = (runId: string) => get(`/trust/runs/${runId}/events`)
 
 // ============================================
 // Social Publishing
