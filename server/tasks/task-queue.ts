@@ -7,7 +7,7 @@ import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
 import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
-import { abandonTrialForTask, activateTrialForTask, recordHiringDecision } from '../agents/hiring/store.js';
+import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -754,6 +754,10 @@ export function rejectTask(id: string, rejectedBy: string, reason = '', opts: Re
       });
       // Any trial planned for this hire never happened.
       abandonTrialForTask(existing.business_id as string, id, reason || 'Hire proposal rejected.');
+      // Free the concurrency slot this proposal held. Whether the role can be
+      // proposed again is now governed by the suppression record above, not by
+      // a leftover idempotency key.
+      releaseProposalSlotForTask(existing.business_id as string, id);
     }
   });
   runReject();

@@ -400,6 +400,19 @@ export function releaseProposalSlot(businessId: string, templateId: string, wind
   `).run(businessId, templateId, windowKey);
 }
 
+/**
+ * Free the slot held by a proposal that has reached a terminal state.
+ *
+ * The window key exists to stop CONCURRENT analyses duplicating a proposal —
+ * it is not a second, weaker suppression mechanism. Once a proposal has been
+ * rejected or cancelled, whether the role may be proposed again is governed
+ * by hiring_decisions (#44/#50), so the slot is released here.
+ */
+export function releaseProposalSlotForTask(businessId: string, taskId: string): void {
+  db.prepare('DELETE FROM hiring_proposal_keys WHERE business_id = ? AND task_id = ?')
+    .run(businessId, taskId);
+}
+
 // ─── Trials + measured outcomes (#51, #56) ───────────────────────────────────
 
 export function createTrial(

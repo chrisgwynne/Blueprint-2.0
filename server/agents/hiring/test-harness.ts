@@ -205,7 +205,14 @@ export function createTestSignal(
   return id;
 }
 
-/** Remove every row this harness could have created for the given businesses. */
+/**
+ * Remove every row this harness could have created for the given businesses.
+ *
+ * Order matters: `PRAGMA foreign_keys = ON` is set by the DB layer, so every
+ * table that references tasks(id) must be cleared BEFORE tasks — otherwise
+ * the tasks delete fails the FK constraint and leaves stale proposals behind
+ * that silently contaminate the next test.
+ */
 export function cleanupTestBusinesses(...businessIds: string[]): void {
   const tables: Array<[string, string]> = [
     ['hiring_trials', 'business_id'],
@@ -214,6 +221,10 @@ export function cleanupTestBusinesses(...businessIds: string[]): void {
     ['hiring_analysis_runs', 'business_id'],
     ['hiring_coordination', 'business_id'],
     ['agent_installations', 'business_id'],
+    // ── task-referencing tables, cleared first ──
+    ['outcome_measurement_runs', 'business_id'],
+    ['task_outcomes', ''],
+    ['execution_jobs', 'business_id'],
     ['task_events', ''],
     ['tasks', 'business_id'],
     ['signals', 'business_id'],
@@ -227,8 +238,8 @@ export function cleanupTestBusinesses(...businessIds: string[]): void {
   for (const id of businessIds) {
     for (const [table, col] of tables) {
       try {
-        if (table === 'task_events') {
-          db.prepare('DELETE FROM task_events WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)').run(id);
+        if (col === '') {
+          db.prepare(`DELETE FROM ${table} WHERE task_id IN (SELECT id FROM tasks WHERE business_id = ?)`).run(id);
           continue;
         }
         db.prepare(`DELETE FROM ${table} WHERE ${col} = ?`).run(id);
