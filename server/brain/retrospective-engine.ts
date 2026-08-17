@@ -8,6 +8,9 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import {
+  listProposalsForRetrospective, type ProposalGenerationResult,
+} from './retrospective-proposals.js';
 
 const SYSTEM_PROMPT = `You are Blueprint's retrospective analyst.
 
@@ -276,6 +279,34 @@ export async function runRetrospective(
     })
   ).catch(() => {});
 
+  // ── Structured operating-change proposals (#73) ──
+  // The narrative above stays as it was. This turns the parts of it that
+  // measured records actually support into bounded, reviewable proposals —
+  // and records, as first-class output, every place the records did NOT
+  // support one. Nothing here activates anything: at most it writes draft
+  // versions in the owning subsystems plus review items in the decision
+  // queue, both inert until a human approves them.
+  let proposalResult: ProposalGenerationResult | null = null;
+  try {
+    const { generateRetrospectiveProposals } = await import('./retrospective-proposals.js');
+    proposalResult = generateRetrospectiveProposals({
+      businessId,
+      retrospectiveId: id,
+      periodStart,
+      periodEnd,
+      parsedReport: parsed,
+    });
+    db.prepare(
+      'UPDATE retrospectives SET evidence_gaps = ?, unstructured_suggestions = ? WHERE id = ?',
+    ).run(
+      JSON.stringify(proposalResult.gaps),
+      JSON.stringify(proposalResult.unstructured_suggestions),
+      id,
+    );
+  } catch (err) {
+    console.warn('[retrospective] proposal generation failed:', (err as Error).message);
+  }
+
   // Apply calibration to agent_calibration table
   await applyCalibration(businessId, parsed, periodStart, periodEnd).catch(() => {});
 
@@ -289,6 +320,16 @@ export async function runRetrospective(
   }
   await fileTransferableToShared(businessId, parsed).catch(() => {});
 
+  // Lapse anything an earlier retrospective proposed that nobody reviewed.
+  // Done here rather than on a timer so a stale proposal cannot outlive the
+  // period it was reasoning about without somebody looking at it.
+  try {
+    const { expireStaleProposals } = await import('./retrospective-proposals.js');
+    expireStaleProposals(businessId);
+  } catch (err) {
+    console.warn('[retrospective] proposal expiry sweep failed:', (err as Error).message);
+  }
+
   // Phase 3 — cross-business learning: recompute the abstract,
   // non-identifying outcome patterns every business's opportunity engine
   // and historical-learning queries can consult. Global (not scoped to
@@ -301,7 +342,17 @@ export async function runRetrospective(
     console.warn('[retrospective] cross-business pattern update failed:', (err as Error).message);
   }
 
-  return { id, ...parsed, kb_path: kbPath };
+  return {
+    id, ...parsed, kb_path: kbPath,
+    // The structured half. Deliberately alongside the prose rather than
+    // replacing it: a reader should be able to see both what the analyst
+    // said and which of it the records could actually justify acting on.
+    proposals: proposalResult?.proposals ?? [],
+    evidence_gaps: proposalResult?.gaps ?? [],
+    proposal_conflicts: proposalResult?.conflicts ?? [],
+    unstructured_suggestions: proposalResult?.unstructured_suggestions ?? [],
+    evidence_summary: proposalResult?.evidence_summary ?? null,
+  };
 }
 
 /**
@@ -509,10 +560,23 @@ export function getRetrospective(id: string, businessId: string): Record<string,
   const row = db.prepare('SELECT * FROM retrospectives WHERE id = ? AND business_id = ?').get(id, businessId) as Record<string, unknown> | null;
   if (!row) return null;
   const parsed: Record<string, unknown> = {};
-  for (const k of ['what_worked', 'what_didnt', 'learnings', 'agent_assessments', 'open_windows', 'recommendations', 'operating_changes', 'calibration_notes']) {
+  for (const k of [
+    'what_worked', 'what_didnt', 'learnings', 'agent_assessments', 'open_windows',
+    'recommendations', 'operating_changes', 'calibration_notes',
+    // #73: where the records could not support a proposal, and which prose
+    // suggestions deliberately stayed prose.
+    'evidence_gaps', 'unstructured_suggestions',
+  ]) {
     try { parsed[k] = JSON.parse((row[k] as string) || '[]'); } catch { parsed[k] = []; }
   }
   let full: Record<string, unknown> | null = null;
   try { full = row.full_report_json ? JSON.parse(row.full_report_json as string) as Record<string, unknown> : null; } catch {}
-  return { ...row, ...parsed, full };
+
+  // The proposals are read live rather than snapshotted into the report:
+  // their status changes as humans approve, reject or let them lapse, and a
+  // frozen copy would show a stale "awaiting review" long after the decision.
+  let proposals: unknown[] = [];
+  try { proposals = listProposalsForRetrospective(id, businessId); } catch { proposals = []; }
+
+  return { ...row, ...parsed, proposals, full };
 }
