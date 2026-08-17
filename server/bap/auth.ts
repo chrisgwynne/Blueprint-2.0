@@ -152,6 +152,11 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // agent's `business_access` itself rather than relying on requirePermission
   // to resolve one from the path.
   'portfolios:read',
+  // Issue #82 — "why did Blueprint do this?" explanation panels (#60).
+  // Read-only: an explanation is a rendering of records other modules
+  // already authored (signals, decisions, receipts, outcomes), so there is
+  // nothing here for a BAP agent to write — no `explanations:write` exists.
+  'explanations:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {
