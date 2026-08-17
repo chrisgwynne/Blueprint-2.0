@@ -65,6 +65,7 @@ import bapConnectorsRouter from './bap-connectors.js';
 import bapOutcomesRouter from './bap-outcomes.js';
 import bapRunsRouter from './bap-runs.js';
 import bapAuditRouter from './bap-audit.js';
+import bapAuditSearchRouter from './bap-audit-search.js';
 import bapOpportunitiesRouter from './bap-opportunities.js';
 import bapConflictsRouter from './bap-conflicts.js';
 import bapDecisionsRouter from './bap-decisions.js';
@@ -304,6 +305,7 @@ router.use(bapConnectorsRouter);
 router.use(bapOutcomesRouter);
 router.use(bapRunsRouter);
 router.use(bapAuditRouter);
+router.use(bapAuditSearchRouter);
 router.use(bapOpportunitiesRouter);
 router.use(bapConflictsRouter);
 router.use(bapDecisionsRouter);
@@ -366,7 +368,7 @@ router.get('/capabilities', (_req: Request, res: Response) => {
       'GET /connectors/:id/syncs', 'POST /connectors/:id/sync',
       'GET /businesses/:id/outcomes', 'GET /tasks/:id/outcome',
       'GET /businesses/:id/runs', 'POST /runs/:id/cancel', 'POST /runs/:id/retry',
-      'GET /businesses/:id/audit',
+      'GET /businesses/:id/audit', 'POST /businesses/:id/audit-search',
       'GET /businesses/:id/kb/file/*', 'GET /businesses/:id/kb/search',
       'POST /businesses/:id/kb/query', 'POST /businesses/:id/kb/write',
       'GET /businesses/:id/metrics', 'GET /businesses/:id/metrics/snapshot',

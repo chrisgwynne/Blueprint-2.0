@@ -112,6 +112,15 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // by the approval/execution path itself and no BAP route writes one, so
   // there is deliberately no `receipts:write` counterpart to grant.
   'receipts:read',
+  // Issue #83 — natural-language audit/history search (#72's grounded,
+  // cited search over decisions, tasks, receipts, outcomes, policy events,
+  // connector syncs, signals, agent runs and the audit log), distinct from
+  // `audit:read`: `audit:read` lists raw audit_log rows by structured
+  // filter; `audit_search:read` accepts a free-text question and returns
+  // an answer built from records actually retrieved, with any narrative
+  // summary verified against them before it is shown. An agent can be
+  // granted one without the other.
+  'audit_search:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {
