@@ -6,6 +6,7 @@ import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { buildGoalTimeline } from '../goals/goal-timeline.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -349,34 +350,9 @@ router.get('/:businessId/:id/timeline', (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
     const businessId = String(req.params.businessId);
-    const goal = db.prepare('SELECT * FROM goals WHERE id=? AND business_id=?').get(id, businessId) as Record<string, unknown> | undefined;
-    if (!goal) return res.status(404).json({ error: 'Goal not found' });
-
-    const events: Array<{ at: string | null; type: string; summary: string; data: Record<string, unknown> }> = [];
-    events.push({ at: goal.created_at as string, type: 'goal_created', summary: `Goal created: ${goal.title as string}`, data: { created_by: goal.created_by } });
-    for (const c of db.prepare('SELECT * FROM goal_checks WHERE goal_id = ? ORDER BY checked_at ASC').all(id) as Record<string, unknown>[]) {
-      events.push({ at: c.checked_at as string, type: 'progress_check', summary: `Progress check: ${(c.progress_pct as number | null)?.toFixed?.(0) ?? c.progress_pct}% (${c.status_change ?? 'no change'})`, data: c });
-    }
-    for (const a of db.prepare('SELECT id, feasibility_verdict, feasibility_confidence, created_at FROM goal_assessments WHERE goal_id = ? ORDER BY created_at ASC').all(id) as Record<string, unknown>[]) {
-      events.push({ at: a.created_at as string, type: 'strategic_assessment', summary: `Strategic assessment: ${a.feasibility_verdict ?? 'unknown'} (${Math.round(((a.feasibility_confidence as number | null) ?? 0) * 100)}% confidence)`, data: a });
-    }
-    for (const s of db.prepare('SELECT id, name, is_recommended, created_at FROM goal_strategies WHERE goal_id = ? ORDER BY created_at ASC').all(id) as Record<string, unknown>[]) {
-      events.push({ at: s.created_at as string, type: 'strategy_proposed', summary: `Strategy proposed: ${s.name}${s.is_recommended ? ' (recommended)' : ''}`, data: s });
-    }
-    for (const c of db.prepare(
-      "SELECT id, conflict_type, description, detected_at FROM conflicts WHERE business_id = ? AND ((entity_a_type = 'goal' AND entity_a_id = ?) OR (entity_b_type = 'goal' AND entity_b_id = ?)) ORDER BY detected_at ASC"
-    ).all(businessId, id, id) as Record<string, unknown>[]) {
-      events.push({ at: c.detected_at as string, type: 'conflict_detected', summary: `Conflict detected: ${c.description}`, data: c });
-    }
-    for (const d of db.prepare(
-      'SELECT id, decision_type, title, decision, confidence, created_at FROM decisions WHERE related_goal_id = ? ORDER BY created_at ASC'
-    ).all(id) as Record<string, unknown>[]) {
-      events.push({ at: d.created_at as string, type: 'decision', summary: `Decision: ${d.title}`, data: d });
-    }
-    if (goal.achieved_at) events.push({ at: goal.achieved_at as string, type: 'goal_achieved', summary: `Goal achieved: ${goal.title as string}`, data: {} });
-
-    events.sort((a, b) => new Date(a.at ?? 0).getTime() - new Date(b.at ?? 0).getTime());
-    res.json({ goal_id: id, events });
+    const timeline = buildGoalTimeline(id, businessId);
+    if (!timeline) return res.status(404).json({ error: 'Goal not found' });
+    res.json(timeline);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

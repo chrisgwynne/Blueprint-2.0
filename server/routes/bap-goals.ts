@@ -47,6 +47,7 @@ import {
   parsePagination, paginationMeta, toIso, normalizeTimestamps,
   withRequiredIdempotency, sendError,
 } from '../bap/route-helpers.js';
+import { buildGoalTimeline } from '../goals/goal-timeline.js';
 
 // No auth/rate-limit middleware here — this router is mounted as a
 // sub-router *inside* bap.ts, after bap.ts's own `router.use(bapAuth)`.
@@ -538,34 +539,13 @@ router.get('/goals/:goalId/timeline', requirePermission('goals:read'), (req: Req
     if (!row) return;
     const businessId = row.business_id as string;
 
-    const events: Array<{ at: string | null; type: string; summary: string; data: Record<string, unknown> }> = [];
-
-    events.push({ at: toIso(row.created_at as string), type: 'goal_created', summary: `Goal created: ${row.title as string}`, data: { created_by: row.created_by } });
-
-    for (const c of db.prepare('SELECT * FROM goal_checks WHERE goal_id = ? ORDER BY checked_at ASC').all(goalId) as Array<Record<string, unknown>>) {
-      events.push({ at: toIso(c.checked_at as string), type: 'progress_check', summary: `Progress check: ${(c.progress_pct as number | null)?.toFixed?.(0) ?? c.progress_pct}% (${c.status_change ?? 'no change'})`, data: c });
-    }
-    for (const a of db.prepare('SELECT id, feasibility_verdict, feasibility_confidence, created_at FROM goal_assessments WHERE goal_id = ? ORDER BY created_at ASC').all(goalId) as Array<Record<string, unknown>>) {
-      events.push({ at: toIso(a.created_at as string), type: 'strategic_assessment', summary: `Strategic assessment: ${a.feasibility_verdict ?? 'unknown'} (${Math.round(((a.feasibility_confidence as number | null) ?? 0) * 100)}% confidence)`, data: a });
-    }
-    for (const s of db.prepare('SELECT id, name, is_recommended, created_at FROM goal_strategies WHERE goal_id = ? ORDER BY created_at ASC').all(goalId) as Array<Record<string, unknown>>) {
-      events.push({ at: toIso(s.created_at as string), type: 'strategy_proposed', summary: `Strategy proposed: ${s.name}${s.is_recommended ? ' (recommended)' : ''}`, data: s });
-    }
-    for (const c of db.prepare(
-      "SELECT id, conflict_type, description, detected_at FROM conflicts WHERE business_id = ? AND ((entity_a_type = 'goal' AND entity_a_id = ?) OR (entity_b_type = 'goal' AND entity_b_id = ?)) ORDER BY detected_at ASC"
-    ).all(businessId, goalId, goalId) as Array<Record<string, unknown>>) {
-      events.push({ at: toIso(c.detected_at as string), type: 'conflict_detected', summary: `Conflict detected: ${c.description}`, data: c });
-    }
-    for (const d of db.prepare(
-      'SELECT id, decision_type, title, decision, confidence, created_at FROM decisions WHERE related_goal_id = ? ORDER BY created_at ASC'
-    ).all(goalId) as Array<Record<string, unknown>>) {
-      events.push({ at: toIso(d.created_at as string), type: 'decision', summary: `Decision: ${d.title}`, data: d });
-    }
-    if (row.achieved_at) {
-      events.push({ at: toIso(row.achieved_at as string), type: 'goal_achieved', summary: `Goal achieved: ${row.title as string}`, data: {} });
-    }
-
-    events.sort((a, b) => new Date(a.at ?? 0).getTime() - new Date(b.at ?? 0).getTime());
+    // Shared with the session-auth surface (server/routes/goals.ts) so the
+    // gap-detection and correlation/attribution rules can't drift between
+    // the two — only the timestamp normalization differs (BAP always
+    // returns full ISO-8601, session routes pass through raw SQLite text).
+    const timeline = buildGoalTimeline(goalId, businessId);
+    if (!timeline) return sendError(req, res, 404, 'not_found', 'Goal not found');
+    const events = timeline.events.map((e) => ({ ...e, at: toIso(e.at) }));
     return res.json({ goal_id: goalId, events });
   } catch (err) {
     return sendError(req, res, 500, 'internal_error', (err as Error).message);

@@ -255,10 +255,39 @@ function GoalCard({ goal, businessId, onRefresh }: { goal: Goal; businessId: str
   )
 }
 
+interface TimelineEvent {
+  at: string | null
+  type: string
+  source?: string
+  summary: string
+  status?: string | null
+  evidence?: string | null
+  business_scope?: string
+  attribution?: 'correlation' | 'verified_attribution' | null
+  reason?: string
+  gap_type?: string
+}
+
 interface StrategyData {
   assessment: Record<string, any> | null
   strategies: Array<Record<string, any>>
-  timeline: Array<{ at: string | null; type: string; summary: string }>
+  timeline: TimelineEvent[]
+}
+
+const ATTRIBUTION_LABELS: Record<string, string> = {
+  verified_attribution: 'Verified attribution',
+  correlation: 'Correlation only',
+}
+const ATTRIBUTION_COLORS: Record<string, string> = {
+  verified_attribution: 'var(--bp-green)',
+  correlation: 'var(--bp-text-3)',
+}
+
+const GAP_LABELS: Record<string, string> = {
+  no_signal_linked: 'No signal linked',
+  stale_activity: 'Stale — no activity',
+  no_downstream_action: 'No downstream action',
+  no_measured_outcome: 'No measured outcome',
 }
 
 function StrategyPanel({ businessId, goalId }: { businessId: string; goalId: string }) {
@@ -340,10 +369,34 @@ function StrategyPanel({ businessId, goalId }: { businessId: string; goalId: str
             Timeline
           </div>
           {data.timeline.map((e, i) => (
-            <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', padding: '3px 0', display: 'flex', gap: 8 }}>
-              <span style={{ color: 'var(--bp-text-3)', flexShrink: 0 }}>{fmtRel(e.at)}</span>
-              <span>{e.summary}</span>
-            </div>
+            e.type === 'gap' ? (
+              <div key={i} style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 11, padding: '6px 8px', margin: '3px 0',
+                display: 'flex', gap: 8, alignItems: 'flex-start',
+                background: 'rgba(245, 158, 11, 0.08)', border: '1px dashed var(--bp-amber)', borderRadius: 3,
+              }}>
+                <span style={{ color: 'var(--bp-text-3)', flexShrink: 0 }}>{fmtRel(e.at)}</span>
+                <span style={{ flex: 1, color: 'var(--bp-amber)' }}>
+                  <strong>⚠ Gap{e.gap_type ? ` — ${GAP_LABELS[e.gap_type] ?? e.gap_type}` : ''}:</strong>{' '}
+                  <span style={{ color: 'var(--bp-text-2)', fontWeight: 400 }}>{e.reason ?? e.summary}</span>
+                </span>
+              </div>
+            ) : (
+              <div key={i} style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)', padding: '3px 0', display: 'flex', gap: 8, alignItems: 'baseline' }}>
+                <span style={{ color: 'var(--bp-text-3)', flexShrink: 0 }}>{fmtRel(e.at)}</span>
+                <span style={{ flex: 1 }}>{e.summary}</span>
+                {e.attribution && (
+                  <span style={{
+                    fontSize: 9, flexShrink: 0, textTransform: 'uppercase', letterSpacing: '0.08em',
+                    color: ATTRIBUTION_COLORS[e.attribution] ?? 'var(--bp-text-3)',
+                    border: `1px solid ${ATTRIBUTION_COLORS[e.attribution] ?? 'var(--bp-text-3)'}`,
+                    borderRadius: 3, padding: '1px 5px',
+                  }}>
+                    {ATTRIBUTION_LABELS[e.attribution] ?? e.attribution}
+                  </span>
+                )}
+              </div>
+            )
           ))}
         </div>
       )}
