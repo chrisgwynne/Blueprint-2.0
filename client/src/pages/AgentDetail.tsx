@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import ProducedByEvent from '../components/ProducedByEvent.jsx'
+import RunEventTrace from '../components/RunEventTrace.js'
 import {
   getAgents, getAgentProfile, getAgentRuns, runAgent, updateAgent,
   updateAgentFile, getAgentMemory, clearAgentMemory,
@@ -285,6 +286,11 @@ function RunsTab({ agentId, businessId }: RunsTabProps) {
                             </div>
                           </div>
                         )}
+                        {/* Agent run trace visibility: the intermediate
+                            agent_run_events steps behind this run's terminal
+                            status/reasoning above. */}
+                        <RunEventTrace runId={run.id} />
+
                         {/* Mesh: what this specific run produced (signals,
                             tasks, KB entries, agent briefs, connector gaps). */}
                         {businessId && (

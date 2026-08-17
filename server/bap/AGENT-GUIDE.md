@@ -624,7 +624,35 @@ POST  /api/bap/v1/businesses/:id/kb/write   — write file
 GET   /api/bap/v1/businesses/:id/agents          — list agents
 POST  /api/bap/v1/businesses/:id/agents/:id/run  — trigger run
 GET   /api/bap/v1/runs/:runId                    — run status
+GET   /api/bap/v1/runs/:runId/events             — run event trace (2026-08, see below)
 ```
+
+### Run Event Trace (2026-08)
+```
+GET  /api/bap/v1/runs/:runId/events  — the run's agent_run_events, oldest first
+```
+`GET /runs/:runId` gives you a run's terminal status, cost and final
+`reasoning`; this returns what happened *during* the run to get there — the
+same `agent_run_events` trace the dashboard's Agent Detail → Runs tab
+renders when an operator expands a row. Each event carries `event_type`
+(e.g. `preflight`, `task_proposed`, `cancellation_requested`, `cancelled`),
+`status` (e.g. `attempted`, `verified`, `blocked`, `cancelled` —
+provider-preflight checks and cancellation are the two things that
+currently emit these, so don't assume the set is exhaustive), `summary`
+(one line, human-readable), `duration_ms`, `related_resource_type` /
+`related_resource_id` when the event points at something else Blueprint
+created (a task, typically), `error_category`, and `metadata` (JSON, event-
+specific evidence — e.g. the provider-preflight result). Ordered oldest
+first so it reads top-to-bottom as a timeline.
+
+Read-only by design, same as `GET /runs/:runId` next to it — nothing writes
+an `agent_run_events` row over BAP; every row is produced by Blueprint's own
+run machinery (`server/trust/trust-engine.ts`'s `recordRunEvent`) as a
+side effect of the run actually doing something, never authored directly.
+Gated by `agents:read`, scoped to the run's business exactly like
+`GET /runs/:runId` and the cancel/retry routes next to it in
+`bap-runs.ts` — a caller not holding `agents:read` on the run's business
+gets `403`, an unknown run id gets `404`.
 
 ### Webhooks
 ```
@@ -682,7 +710,7 @@ const valid = crypto.timingSafeEqual(
 | `kb:read` | Read KB, search, query |
 | `kb:write` | Write KB files |
 | `metrics:read` | Read connector metrics |
-| `agents:read` | List internal agents |
+| `agents:read` | List internal agents; read run status/detail and a run's event trace |
 | `agents:trigger` | Trigger agent runs |
 | `goals:read` | Read goals, conflicts, assessments, strategies, timeline |
 | `goals:propose` | Propose a goal |

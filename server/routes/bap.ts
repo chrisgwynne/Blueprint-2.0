@@ -407,7 +407,7 @@ router.get('/capabilities', (_req: Request, res: Response) => {
       'GET /businesses/:id/connectors', 'GET /connectors/:id',
       'GET /connectors/:id/syncs', 'POST /connectors/:id/sync',
       'GET /businesses/:id/outcomes', 'GET /tasks/:id/outcome',
-      'GET /businesses/:id/runs', 'POST /runs/:id/cancel', 'POST /runs/:id/retry',
+      'GET /businesses/:id/runs', 'POST /runs/:id/cancel', 'POST /runs/:id/retry', 'GET /runs/:id/events',
       'GET /businesses/:id/audit', 'POST /businesses/:id/audit-search',
       'GET /businesses/:id/kb/file/*', 'GET /businesses/:id/kb/search',
       'POST /businesses/:id/kb/query', 'POST /businesses/:id/kb/write',

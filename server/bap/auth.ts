@@ -63,6 +63,13 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'kb:read', 'kb:write',
   'metrics:read',
   'agents:read', 'agents:trigger',
+  // Agent run trace visibility (2026-08). `GET /runs/:id/events` (the
+  // run's agent_run_events trace — bap-runs.ts) is `agents:read`, not a
+  // new grant: it's the same run resource `agents:read` already exposes
+  // via list and `GET /runs/:id`, just at finer grain (the intermediate
+  // steps behind the terminal status/reasoning those return). An agent
+  // already trusted to read its own runs is already trusted to see how
+  // they got there.
   // Phase 2 — BAP completeness. tasks:approve already covers task cancel
   // and execution-job retry/cancel (Phase 1 precedent: those are the same
   // trust tier as approve/reject, not a separate grant); agents:trigger

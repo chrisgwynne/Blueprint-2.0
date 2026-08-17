@@ -143,6 +143,64 @@ describe('POST /runs/:runId/cancel', () => {
   });
 });
 
+describe('GET /runs/:runId/events', () => {
+  test('returns the run event trace in chronological order', async () => {
+    const runId = insertRun({ status: 'complete', completed_at: new Date().toISOString() });
+    const evt1 = generateId();
+    const evt2 = generateId();
+    db.prepare(`
+      INSERT INTO agent_run_events (id, run_id, business_id, agent_id, event_type, status, summary, created_at)
+      VALUES (?, ?, ?, ?, 'preflight', 'attempted', 'Checking provider.', datetime('now', '-1 minute'))
+    `).run(evt1, runId, BIZ_A, AGENT_ID);
+    db.prepare(`
+      INSERT INTO agent_run_events (id, run_id, business_id, agent_id, event_type, status, summary, created_at)
+      VALUES (?, ?, ?, ?, 'task_proposed', 'attempted', 'Creating task proposal: do the thing.', CURRENT_TIMESTAMP)
+    `).run(evt2, runId, BIZ_A, AGENT_ID);
+
+    const { status, body } = await get(`/api/bap/v1/runs/${runId}/events`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.run_id).toBe(runId);
+    expect(body.events.length).toBe(2);
+    expect(body.events[0].id).toBe(evt1);
+    expect(body.events[1].id).toBe(evt2);
+    expect(body.events[0].event_type).toBe('preflight');
+  });
+
+  test('empty trace returns an empty array, not an error', async () => {
+    const runId = insertRun({ status: 'running' });
+    const { status, body } = await get(`/api/bap/v1/runs/${runId}/events`, { 'BAP-Key': keyRead });
+    expect(status).toBe(200);
+    expect(body.events).toEqual([]);
+  });
+
+  test('403 without agents:read permission', async () => {
+    const runId = insertRun({ status: 'running' });
+    db.prepare(`DELETE FROM bap_audit WHERE agent_id = 'agt_runs_noperm'`).run();
+    db.prepare(`DELETE FROM bap_agents WHERE id = 'agt_runs_noperm'`).run();
+    const keyNoPerm = generateApiKey();
+    db.prepare(`
+      INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
+      VALUES ('agt_runs_noperm', 'No Perm Agent', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
+    `).run(await hashApiKey(keyNoPerm), keyPrefix(keyNoPerm), JSON.stringify(['tasks:read']), JSON.stringify([BIZ_A]));
+
+    const { status } = await get(`/api/bap/v1/runs/${runId}/events`, { 'BAP-Key': keyNoPerm });
+    expect(status).toBe(403);
+    db.prepare(`DELETE FROM bap_audit WHERE agent_id = 'agt_runs_noperm'`).run();
+    db.prepare(`DELETE FROM bap_agents WHERE id = 'agt_runs_noperm'`).run();
+  });
+
+  test('403 for a run belonging to a business outside the caller\'s business_access grant', async () => {
+    const runId = insertRun({ business_id: BIZ_B, status: 'running' });
+    const { status } = await get(`/api/bap/v1/runs/${runId}/events`, { 'BAP-Key': keyRead });
+    expect(status).toBe(403);
+  });
+
+  test('404 for an unknown run id', async () => {
+    const { status } = await get('/api/bap/v1/runs/does-not-exist/events', { 'BAP-Key': keyRead });
+    expect(status).toBe(404);
+  });
+});
+
 describe('POST /runs/:runId/retry', () => {
   test('re-triggers a failed run, creating a new run row', async () => {
     const runId = insertRun({ status: 'failed', completed_at: new Date().toISOString(), error: 'LLM timeout' });

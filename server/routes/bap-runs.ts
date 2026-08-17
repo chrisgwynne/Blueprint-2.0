@@ -26,6 +26,16 @@
  *   GET    /businesses/:bid/runs              — list (filterable, paginated)
  *   POST   /runs/:id/cancel                   — mark cancelled (see above)
  *   POST   /runs/:id/retry                    — re-trigger the same agent/business
+ *   GET    /runs/:id/events                   — the run's agent_run_events trace (read-only)
+ *
+ * `GET /runs/:id/events` is `agents:read`, not a separate grant — it's the
+ * same resource (a run) at finer grain than list/`GET /runs/:id` already
+ * expose under that permission, matching the Phase 2 precedent above. It
+ * mirrors the dashboard-session route of the same shape in trust.ts, which
+ * an operator already sees on the Agent Detail page's Runs tab; this gives
+ * an external agent (e.g. Hermes) the same "why did my run do that"
+ * visibility into its own intermediate steps, not just the terminal
+ * status/reasoning `GET /runs/:id` returns.
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -99,6 +109,19 @@ router.post('/runs/:runId/cancel', requirePermission('agents:trigger'), async (r
       }
       return { status: 202, body: { run_id: runId, status: 'cancellation_requested', note: 'Cancellation is cooperative; Blueprint will stop at the next safe abort point and will not start new side effects after acknowledgement.' } };
     });
+  } catch (err) {
+    return sendError(req, res, 500, 'internal_error', (err as Error).message);
+  }
+});
+
+router.get('/runs/:runId/events', requirePermission('agents:read'), (req: Request, res: Response) => {
+  try {
+    const runId = String(req.params.runId);
+    const row = loadRunOr404(req, res, runId);
+    if (!row) return;
+
+    const events = db.prepare('SELECT * FROM agent_run_events WHERE run_id = ? ORDER BY created_at ASC').all(runId);
+    return res.json({ run_id: runId, events });
   } catch (err) {
     return sendError(req, res, 500, 'internal_error', (err as Error).message);
   }
