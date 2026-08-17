@@ -8,10 +8,10 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
 > Executive Command Centre, multi-business Portfolios, the "While You Were
-> Away" Digest, and Explanation panels now have read-only BAP surfaces too
-> (#77–#82, below). Four more dashboard features (Audit Search,
-> Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet
-> — see issues #83–#86.
+> Away" Digest, Explanation panels, and Audit Search now have read-only BAP
+> surfaces too (#77–#83, below). Three more dashboard features
+> (Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet
+> — see issues #84–#86.
 
 ---
 
@@ -451,6 +451,45 @@ this before re-proposing something Blueprint has already explained away —
 e.g. check whether a candidate is `suppressed` before proposing the same
 role again.
 
+### Audit Search (2026-08)
+```
+POST /api/bap/v1/businesses/:id/audit-search — natural-language, cited history search
+```
+Ask a free-text question — `"what changed on the Shopify store last week"`,
+`"why was the price change rejected"` — instead of knowing which BAP routes
+and IDs to check in advance. A two-layer pipeline turns the question into
+structured filters (a model, and nothing else, does this step), then runs
+those filters as real SQL across decisions, tasks, receipts, outcomes,
+policy events, connector syncs, signals, agent runs and the audit log —
+every result is a row, cited by table and primary key. `audit:read` does
+NOT grant this: this is a distinct `audit_search:read` permission, because
+"list raw audit_log rows" and "answer a question with cited evidence" are
+different capabilities an operator may want to grant separately.
+
+Body: `{ query, filters?: { record_types, statuses, terms, from, to }, limit?, summarise? }`.
+`filters` are hand-set overrides — anything you supply there is honoured
+as-is rather than re-interpreted. `summarise` (default `false`) additionally
+asks a model for a short narrative; it is returned only if every citation
+in it resolves to a retrieved record, and is withheld (with a `deterministic`
+count-only summary in its place) if it fails that check — there is no code
+path that returns unverified prose.
+
+The response's `state` is one of four values, always distinguishable from
+each other and from an error: `results`, `results_stale` (matched, but the
+newest record is old — worth flagging on its own), `no_results` (the search
+ran and matched nothing — not an error, and not proof nothing happened),
+or `ambiguous_query` (the question could not be turned into filters
+confidently, so nothing was searched — `interpretation.clarification` gives
+the specific questions that would resolve it). Never collapse `no_results`
+and `ambiguous_query` into "empty array" — they mean different things and
+call for different follow-ups. Every response also carries `applied_filters`
+(exactly what was searched, re-runnable) and `limitations` (never empty —
+what this search cannot tell you, stated plainly).
+
+Scoped the same way as every other business-scoped route: only the
+business in the path is searched, in both the interpretation step and the
+retrieval step, so a natural-language question can never widen access.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -538,6 +577,7 @@ const valid = crypto.timingSafeEqual(
 | `portfolios:read` | Read saved multi-business portfolios, their membership history and comparative view (not the operating-policy portfolios — see above) |
 | `digest:read` | Read the "while you were away" catch-up digest and advance your own digest watermark (a dimension separate from the dashboard operator's) |
 | `explanations:read` | Read "why did Blueprint do this?" explanations |
+| `audit_search:read` | Run natural-language, cited history search (distinct from `audit:read`'s raw audit-log listing) |
 
 ---
 
@@ -548,6 +588,7 @@ const valid = crypto.timingSafeEqual(
 | Default | 60 / minute |
 | KB write | 20 / minute |
 | KB query | 10 / minute |
+| Audit search | 10 / minute |
 | Agent trigger | 5 / minute |
 
 Headers: `X-RateLimit-Limit` · `X-RateLimit-Remaining` · `X-RateLimit-Reset`
@@ -585,6 +626,7 @@ class BlueprintClient {
   goalTimeline(goalId)              { return this.call(`/goals/${goalId}/timeline`) }
   operatingPolicy(bizId)            { return this.call(`/businesses/${bizId}/operating-policy`) }
   receipts(bizId, p = {})           { return this.call(`/businesses/${bizId}/receipts?${new URLSearchParams(p)}`) }
+  auditSearch(bizId, query, opts = {}) { return this.call(`/businesses/${bizId}/audit-search`, { method: 'POST', body: { query, ...opts } }) }
 }
 ```
 
@@ -610,4 +652,5 @@ class BlueprintClient:
     def connectors(self, biz):    return httpx.get(f"{self.base}/businesses/{biz}/connectors", headers=self.h).json()
     def operating_policy(self, biz): return httpx.get(f"{self.base}/businesses/{biz}/operating-policy", headers=self.h).json()
     def receipts(self, biz, **p): return httpx.get(f"{self.base}/businesses/{biz}/receipts", params=p, headers=self.h).json()
+    def audit_search(self, biz, query, **opts): return httpx.post(f"{self.base}/businesses/{biz}/audit-search", json={"query": query, **opts}, headers=self.h).json()
 ```
