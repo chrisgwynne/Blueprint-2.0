@@ -152,6 +152,13 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // agent's `business_access` itself rather than relying on requirePermission
   // to resolve one from the path.
   'portfolios:read',
+  // Issue #81 — the #62 "while you were away" catch-up digest. Read-only:
+  // the only state change this grant permits is advancing the AGENT'S OWN
+  // digest watermark, which is a genuinely separate storage dimension from
+  // the dashboard operator's watermark (keyed on this agent's id, not a
+  // session username — see server/digest/bap-digest-watermark.ts). It never
+  // touches, and can never be touched by, a human operator's catch-up point.
+  'digest:read',
   // Issue #82 — "why did Blueprint do this?" explanation panels (#60).
   // Read-only: an explanation is a rendering of records other modules
   // already authored (signals, decisions, receipts, outcomes), so there is

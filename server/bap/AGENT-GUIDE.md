@@ -7,10 +7,11 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
-> Executive Command Centre, multi-business Portfolios, and Explanation
-> panels now have read-only BAP surfaces too (#77–#80, #82, below). Five
-> more dashboard features (Digest, Audit Search, Retrospectives, Playbooks,
-> Simulation) exist but have no BAP surface yet — see issues #81, #83–#86.
+> Executive Command Centre, multi-business Portfolios, the "While You Were
+> Away" Digest, and Explanation panels now have read-only BAP surfaces too
+> (#77–#82, below). Four more dashboard features (Audit Search,
+> Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet
+> — see issues #83–#86.
 
 ---
 
@@ -370,6 +371,54 @@ by it.
 > section are reporting groupings, they overlap freely, and they govern
 > nothing.
 
+### Digest (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/digest             — the catch-up digest
+GET  /api/bap/v1/businesses/:id/digest/watermark    — this agent's current catch-up point
+POST /api/bap/v1/businesses/:id/digest/acknowledge  — advance this agent's watermark
+```
+Read-only, permission `digest:read`. The #62 "what happened while I was
+away" digest, unchanged from what the dashboard gets: four sections —
+`verified_outcomes` (a measurement actually landed), `pending_decisions`
+(straight from the Decision Queue), `failures_and_stale_data` (broken
+connectors, open system issues, failed executions), `informational_activity`
+(everything else, deliberately low-signal and last). Every item cites the
+exact table/row it came from — nothing here is a synthesised count.
+
+Repeats collapse into one entry with `occurrence_count` and
+`first_occurrence_at`/`last_occurrence_at`, but a repeat that got WORSE is
+never buried in that collapse: it's promoted to the worse severity and
+stamped with an `escalation` explaining what changed, citing both the first
+and the escalated occurrence. Read `escalation` before treating an
+`occurrence_count > 1` item as "just a duplicate."
+
+**Your watermark is your own — not the dashboard operator's.** The digest's
+catch-up point is stored per caller, and a BAP agent's storage is a
+genuinely separate dimension from the human operator's dashboard-session
+watermark (different table, keyed on your agent id, not a username). Your
+calls can never advance, and are never affected by, what a human operator has
+acknowledged in the dashboard, or vice versa.
+
+**GET never advances your watermark.** Call it as many times as you want —
+polling on a schedule is fine and won't cause you to silently lose track of
+what you've genuinely seen. Advancing is a separate, explicit step:
+`POST .../digest/acknowledge`. If you don't call it, your next `GET` (without
+`since=`) replays the same window. Body is optional — omit it entirely (or
+omit `items`) and the server acknowledges exactly what the digest you'd get
+right now would show; only pass `items`/`acknowledged_through`/`digest_id`
+yourself if you're acknowledging a digest you fetched earlier and want to be
+precise about what you actually consumed.
+
+`?since=<ISO>` overrides your stored watermark for that one read (both the
+window floor and the seen-item suppression) **without mutating it** — a
+one-off look back at a period doesn't cost you your catch-up position. Omit
+it to read "everything since I last acknowledged." `?until=` (default now)
+and `?limit=` (items per section) are also supported.
+
+There is no cross-business digest over BAP — each call is scoped to one
+`:id`. For a ranked cross-business overview, see Command Centre above;
+for the full per-business catch-up, call this once per business you run.
+
 ### Explanations (2026-08)
 ```
 GET  /api/bap/v1/explanations/kinds                         — vocabulary (subject kinds, evidence quality, causal claim, disposition meanings)
@@ -487,6 +536,7 @@ const valid = crypto.timingSafeEqual(
 | `comparisons:read` | List comparable candidates, build a side-by-side comparison |
 | `command_centre:read` | Read the cross-business executive summary and your selectable scope |
 | `portfolios:read` | Read saved multi-business portfolios, their membership history and comparative view (not the operating-policy portfolios — see above) |
+| `digest:read` | Read the "while you were away" catch-up digest and advance your own digest watermark (a dimension separate from the dashboard operator's) |
 | `explanations:read` | Read "why did Blueprint do this?" explanations |
 
 ---
