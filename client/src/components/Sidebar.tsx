@@ -32,7 +32,7 @@ import {
   Store,
   type LucideIcon,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck, ScrollText } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -109,6 +109,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Knowledge Base',to: '/kb',         icon: BookOpen },
   { label: 'System Health', to: '/health',     icon: Activity,        healthDot: true },
   { label: 'Trust Ops',      to: '/trust',      icon: ShieldCheck },
+  { label: 'Operating Policy', to: '/policy',   icon: ScrollText },
   { label: 'Social Publishing', to: '/social-publishing', icon: Share2 },
   { label: 'Settings',      to: '/settings',   icon: Settings },
 ]

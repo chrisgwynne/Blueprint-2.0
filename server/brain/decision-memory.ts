@@ -14,6 +14,7 @@
  */
 import crypto from 'crypto';
 import db from '../db/db.js';
+import { resolveOperatingPolicy } from '../policy/operating-policy.js';
 
 export type DecisionType =
   | 'task_approval' | 'task_rejection' | 'task_cancellation'
@@ -37,17 +38,45 @@ export interface RecordDecisionInput {
   related_signal_id?: string | null;
   related_outcome_id?: string | null;
   related_conflict_id?: string | null;
+  /**
+   * Operating policy in force when the decision was made (#68). Callers
+   * that already resolved the policy pass it so the record cites the exact
+   * version their gating used; everyone else leaves it undefined and it is
+   * resolved here, so EVERY decision row carries a policy citation and a
+   * business scope without every call site having to remember.
+   */
+  effective_policy_id?: string | null;
+  effective_policy_version?: number | null;
+  effective_policy_scope?: string | null;
 }
 
 export function recordDecision(input: RecordDecisionInput): string {
   const id = crypto.randomUUID();
+
+  let policyId = input.effective_policy_id ?? null;
+  let policyVersion = input.effective_policy_version ?? null;
+  let policyScope = input.effective_policy_scope ?? null;
+  if (policyVersion == null) {
+    try {
+      const resolved = resolveOperatingPolicy(input.business_id);
+      policyId = resolved.policy_id;
+      policyVersion = resolved.policy_version;
+      policyScope = resolved.policy_scope;
+    } catch {
+      // A decision must never fail to be recorded because policy
+      // resolution did — the citation degrades, the memory does not.
+      policyVersion = policyVersion ?? null;
+    }
+  }
+
   db.prepare(`
     INSERT INTO decisions (
       id, business_id, decision_type, title, decision, reasoning, evidence,
       confidence, alternatives_rejected, author,
       related_goal_id, related_task_id, related_signal_id, related_outcome_id, related_conflict_id,
+      effective_policy_id, effective_policy_version, effective_policy_scope,
       created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `).run(
     id, input.business_id, input.decision_type, input.title, input.decision,
     input.reasoning ?? null, JSON.stringify(input.evidence ?? []),
@@ -56,6 +85,7 @@ export function recordDecision(input: RecordDecisionInput): string {
     input.related_goal_id ?? null, input.related_task_id ?? null,
     input.related_signal_id ?? null, input.related_outcome_id ?? null,
     input.related_conflict_id ?? null,
+    policyId, policyVersion, policyScope,
   );
   import('../bap/webhook-dispatcher.js').then((m: any) =>
     m.dispatchWebhookEvent('decision.created', {

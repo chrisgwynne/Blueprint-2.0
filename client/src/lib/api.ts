@@ -530,3 +530,22 @@ export const cancelSocialPost = (bizId: string, postId: string) => post(`${socia
 export const publishSocialPost = (bizId: string, postId: string) => post(`${socialBase(bizId)}/posts/${postId}/publish`)
 export const uploadSocialMedia = (bizId: string, body: object) => post(`${socialBase(bizId)}/media/upload`, body)
 export const deleteStagedMedia = (bizId: string, token: string, connectorId: string) => del(`${socialBase(bizId)}/media/${token}`, { connectorId })
+
+// ============================================
+// Operating Policies (#68)
+// ============================================
+export const getOperatingPolicy = (businessId: string) => get(`/operating-policies/${businessId}`)
+export const getOperatingPolicyVersion = (businessId: string, version: number) => get(`/operating-policies/${businessId}/versions/${version}`)
+export const previewOperatingPolicy = (businessId: string, patch: unknown, effectiveAt?: string | null) =>
+  post(`/operating-policies/${businessId}/preview`, { patch, effective_at: effectiveAt ?? null })
+export const saveOperatingPolicy = (
+  businessId: string,
+  body: { patch: unknown; effective_at?: string | null; change_reason?: string | null; base_version?: number | null },
+) => post(`/operating-policies/${businessId}`, body)
+export const rollbackOperatingPolicy = (businessId: string, toVersion: number, changeReason?: string | null) =>
+  post(`/operating-policies/${businessId}/rollback`, { to_version: toVersion, change_reason: changeReason ?? null })
+export const cancelScheduledOperatingPolicy = (businessId: string, version: number, reason?: string | null) =>
+  post(`/operating-policies/${businessId}/versions/${version}/cancel`, { reason: reason ?? null })
+export const getPolicyPortfolios = () => get('/operating-policies/portfolios')
+export const savePolicyPortfolio = (body: { id?: string; name: string; business_ids: string[] }) =>
+  post('/operating-policies/portfolios', body)
