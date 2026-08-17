@@ -12,6 +12,8 @@ import {
 } from './action-receipts.js';
 import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
 import { effectiveDailyTaskCap, evaluateAutonomyGate, resolveOperatingPolicy, tierRank } from '../policy/operating-policy.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
+import { authorizeFromPreview } from '../simulation/simulation-store.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -76,6 +78,17 @@ export interface CreateTaskParams {
   degraded_data?: number;
   parent_task_id?: string | null;
   [key: string]: unknown;  // allow extra fields passed by callers
+}
+
+/** Options for approveTask(). Additive — every existing caller is unaffected. */
+export interface ApproveTaskOptions {
+  /**
+   * A #67 simulation preview this approval is being made on the strength of.
+   * When supplied it is re-validated against live state before anything
+   * changes, and approval is refused if the preview has expired, has already
+   * been used, or no longer matches the data it was computed from.
+   */
+  simulationPreviewId?: string | null;
 }
 
 interface UpdateStatusMetadata {
@@ -187,6 +200,13 @@ function parseRow(row: Record<string, unknown> | null): TaskRow | null {
  * Create a new task.
  */
 export function createTask(taskData: CreateTaskParams): TaskRow | null {
+  // #67: 'Simulation cannot create tasks'. Enforced at the single function
+  // every proposal path in Blueprint funnels through, so a preview cannot
+  // create one however indirectly it got here.
+  guardSimulationSideEffect(
+    'task.create', taskData.action_type ?? null,
+    `creating task '${taskData.title}' for business '${taskData.business_id}'`,
+  );
   const {
     business_id,
     signal_id = null,
@@ -513,7 +533,45 @@ function triggerWorkerTick(): void {
  * picks up any job the immediate wake-up call missed
  * (e.g. because the process crashed right after this function returned).
  */
-export function approveTask(id: string, approvedBy: string): TaskRow | null {
+export function approveTask(
+  id: string,
+  approvedBy: string,
+  options: ApproveTaskOptions = {},
+): TaskRow | null {
+  // #67: approving is the execution step a preview precedes, so it must
+  // never itself run inside a simulation. Guarded before anything is read.
+  guardSimulationSideEffect('task.approve', id, `approving task '${id}' as '${approvedBy}'`);
+
+  // â”€â”€â”€ Separately authorised execution (#67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+  // When this approval is being made ON THE STRENGTH OF a preview, the
+  // preview is re-validated against live state FIRST. Not "was a preview
+  // shown?" but "is what it showed still true?" â€” if the task was edited,
+  // re-tiered, already approved, or the operating policy or connectors
+  // moved since, authorisation is refused with a report naming exactly what
+  // drifted, and the operator has to preview again.
+  //
+  // This is the mechanism behind "cannot reuse stale approval silently":
+  // silence is impossible, because a drifted snapshot throws rather than
+  // proceeding. See server/simulation/simulation-store.ts.
+  if (options.simulationPreviewId) {
+    const authorization = authorizeFromPreview({
+      previewId: options.simulationPreviewId,
+      actor: approvedBy,
+      expectedKind: 'task_approval',
+      expectedTargetId: id,
+    });
+    if (!authorization.ok) {
+      const err = new Error(
+        `Task cannot be approved from this preview: ${authorization.message} ` +
+        'Approval must be authorised against a current preview, never a stale one.',
+      ) as Error & { statusCode: number; code: string; drift: unknown };
+      err.statusCode = 409;
+      err.code = authorization.reason ?? 'preview_not_current';
+      err.drift = authorization.drift;
+      throw err;
+    }
+  }
+
   const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string; trust_tier: string; approval_mode: string; action_type: string | null; action_payload: string } | null;
   if (!existingRaw) throw new Error(`Task '${id}' not found.`);
   const existing = parseRow(existingRaw)!;

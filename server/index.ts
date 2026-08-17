@@ -209,6 +209,14 @@ const mountRoutes = async () => {
   // cited row, and any generated summary is verified against those rows
   // before it is shown.
   const { default: auditSearchRoutes } = await import('./routes/audit-search.js');
+  // Safe simulation / preview mode (#67) — one preview shape for every
+  // supported action and workflow type, and the separately-authorised
+  // execution step that re-validates a preview against live data before
+  // acting on it. The side-effect guarantees are enforced in the shared
+  // execution paths (db.prepare, createTask, approveTask,
+  // enqueueExecutionJob, installAgent, safeFetch and the dispatchers), not
+  // in this route — see server/simulation/simulation-context.ts.
+  const { default: simulationsRoutes } = await import('./routes/simulations.js');
   const { default: chatRoutes } = await import('./routes/chat.js');
   const { default: workflowsRoutes } = await import('./routes/workflows.js');
   const { default: goalsRoutes } = await import('./routes/goals.js');
@@ -278,6 +286,7 @@ const mountRoutes = async () => {
   app.use('/api/digest', digestRoutes);
   app.use('/api/explanations', explanationsRoutes);
   app.use('/api/audit-search', auditSearchRoutes);
+  app.use('/api/simulations', simulationsRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/workflows', workflowsRoutes);
   app.use('/api/goals', goalsRoutes);

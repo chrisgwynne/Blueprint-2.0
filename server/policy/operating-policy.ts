@@ -63,6 +63,7 @@
  */
 
 import db, { audit, generateId } from '../db/db.js';
+import { allowSimulationWrite } from '../simulation/simulation-context.js';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1000,7 +1001,15 @@ export function activateDuePolicies(ref?: PolicyScopeRef): number {
       activated++;
     }
   });
-  run();
+  // #67: a policy READ settles any activation whose effective_at has already
+  // passed. That is housekeeping the clock caused, not work the caller
+  // initiated â€” but it is still a write, and a simulation reading a policy
+  // would otherwise be blocked by the shared side-effect guard. Declaring it
+  // simulation-neutral lets a preview read the real policy while RECORDING
+  // that it settled an already-due activation, so the simulation result
+  // discloses it rather than hiding it. This is the only such declaration in
+  // the codebase; see server/simulation/simulation-context.ts.
+  allowSimulationWrite('settling an operating-policy activation that was already due', run);
   return activated;
 }
 

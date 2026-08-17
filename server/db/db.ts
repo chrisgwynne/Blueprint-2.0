@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { mkdirSync, readFileSync } from 'fs';
 import { resolveDbPath, isMemoryDbPath } from './resolve-db-path.js';
+import { simulationScopesActive, assertSimulationSafeSql } from '../simulation/simulation-context.js';
 
 const __dbdir = dirname(fileURLToPath(import.meta.url));
 // Stable base for resolving a relative DATABASE_PATH — the repo root, NOT
@@ -41,6 +42,25 @@ const db = new Database(DB_PATH);
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA foreign_keys = ON');
 db.exec('PRAGMA busy_timeout = 5000');
+
+// â”€â”€â”€ Simulation side-effect guard (issue #67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// Preview/simulation modes must not write. Before #67 that was guaranteed
+// per-module, by each preview being careful about its imports. This wraps
+// db.prepare() so the guarantee is enforced HERE instead: every write in the
+// server reaches SQLite through prepare(), so a statement issued three
+// frames deep inside shared code is caught just as reliably as one written
+// in the preview module itself. See server/simulation/simulation-context.ts.
+//
+// Cost outside a simulation is a single integer comparison
+// (simulationScopesActive()), so this is safe on a path this hot. db.exec()
+// is used only by the migration block below, at load time, and is left
+// alone deliberately â€” guarding it would mean guarding schema creation.
+const __rawPrepare = db.prepare.bind(db);
+db.prepare = function guardedPrepare(this: unknown, sql: string, ...rest: unknown[]) {
+  if (simulationScopesActive()) assertSimulationSafeSql(String(sql));
+  return (__rawPrepare as (...args: unknown[]) => unknown)(sql, ...rest);
+} as typeof db.prepare;
 
 const needsSchema = !db.prepare(
   "SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'"
@@ -1970,6 +1990,46 @@ for (const sql of PLAYBOOK_MIGRATIONS) {
   catch (err) {
     if (!/duplicate column|already exists/i.test((err as Error).message)) {
       console.warn('[db] playbook migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ Safe simulation / preview mode (issue #67) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// A preview is only trustworthy if acting on it is a SEPARATE, freshly
+// authorised step. That needs the preview to be durable rather than a
+// value the client holds and hands back: the client cannot be the
+// authority on what it was shown, and re-validation has to compare against
+// something the server wrote down itself.
+//
+// snapshot_hash fingerprints the inputs the preview was computed from, so
+// execution can detect that the world moved underneath it. expires_at
+// gives every preview a TTL, and consumed_at makes authorisation
+// single-use â€” an approval token cannot be replayed.
+const SIMULATION_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS simulation_previews (
+     id TEXT PRIMARY KEY,
+     business_id TEXT,
+     kind TEXT NOT NULL,
+     actor TEXT NOT NULL,
+     target_type TEXT,
+     target_id TEXT,
+     snapshot_hash TEXT NOT NULL,
+     snapshot_sources JSON NOT NULL DEFAULT '[]',
+     result JSON NOT NULL DEFAULT '{}',
+     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+     expires_at DATETIME NOT NULL,
+     consumed_at DATETIME,
+     consumed_by TEXT
+   )`,
+  `CREATE INDEX IF NOT EXISTS idx_simulation_previews_business ON simulation_previews(business_id, kind, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_simulation_previews_target ON simulation_previews(target_type, target_id, created_at)`,
+];
+for (const sql of SIMULATION_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] simulation migration warning:', (err as Error).message);
     }
   }
 }

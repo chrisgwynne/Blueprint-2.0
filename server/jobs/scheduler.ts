@@ -1,6 +1,7 @@
 import cron from 'node-cron';
 import db from '../db/db.js';
 import { processTimedApproval } from '../tasks/approval.js';
+import { purgeExpiredPreviews } from '../simulation/simulation-store.js';
 import { runConductorAllBusinesses } from '../agents/conductor.js';
 import crypto from 'crypto';
 import type { Connector } from '../types/db.js';
@@ -465,6 +466,20 @@ export function startScheduler(): void {
       }
     } catch (err) {
       console.error('[scheduler] Metrics retention pruning failed:', err);
+    }
+  });
+
+  // Every day at 04:45: drop simulation previews (#67) long past expiry.
+  // A preview is a short-lived snapshot used to authorise one execution;
+  // once expired it can never authorise anything again, so keeping it
+  // forever would only grow the table. The audit_log record of each
+  // simulation run is NOT touched — that is the durable history.
+  scheduleWithLock('45 4 * * *', () => {
+    try {
+      const removed = purgeExpiredPreviews();
+      if (removed > 0) console.log(`[scheduler] Simulation previews: purged ${removed} long-expired preview(s).`);
+    } catch (err) {
+      console.error('[scheduler] Simulation preview purge failed:', err);
     }
   });
 

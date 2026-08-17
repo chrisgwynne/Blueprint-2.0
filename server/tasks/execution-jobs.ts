@@ -16,6 +16,7 @@
  */
 import db, { generateId } from '../db/db.js';
 import type { TaskRow } from './task-queue.js';
+import { guardSimulationSideEffect } from '../simulation/simulation-context.js';
 
 export type JobStatus =
   | 'queued' | 'leased' | 'executing'
@@ -68,6 +69,11 @@ function parseJSON(v: unknown): Record<string, unknown> | null {
  * live jobs for one task.
  */
 export function enqueueExecutionJob(task: TaskRow): ExecutionJobRow {
+  // #67: a simulation may describe the job this task would get, never queue one.
+  guardSimulationSideEffect(
+    'execution_job.enqueue', task.action_type ?? null,
+    `enqueueing a durable execution job for task '${task.id}'`,
+  );
   const id = generateId();
   db.prepare(`
     INSERT INTO execution_jobs (id, task_id, task_version, business_id, action_type, status, created_at, updated_at)

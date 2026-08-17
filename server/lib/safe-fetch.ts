@@ -8,6 +8,12 @@ import {
   recordBlockedOutbound,
   SecurityError,
 } from './outbound-allowlist.js';
+import { guardSimulationSideEffect, isSimulating } from '../simulation/simulation-context.js';
+
+/** Host only — a blocked-effect record should never carry a URL's query string. */
+function hostOf(url: string): string | null {
+  try { return new URL(url).hostname; } catch { return null; }
+}
 
 export type SafeFetchContext =
   | string
@@ -20,6 +26,23 @@ export async function safeFetch(
 ): Promise<Response> {
   const url = typeof input === 'string' ? input : input?.href ?? String(input);
   const method = options.method ? String(options.method).toUpperCase() : 'GET';
+
+  // #67: the single outbound chokepoint. Every connector mutation, provider
+  // call and third-party write in Blueprint goes through safeFetch, so
+  // blocking here is what makes 'performs no external writes' true in
+  // general rather than true for the paths someone remembered to check.
+  // Reads are blocked too: a preview reasons about the snapshot it declared,
+  // and silently reaching live for more would defeat the freshness reporting.
+  //
+  // Behind an isSimulating() check so the URL is not re-parsed on every
+  // outbound request in normal operation — this is a hot path.
+  if (isSimulating()) {
+    const host = hostOf(url);
+    guardSimulationSideEffect(
+      'http.outbound', host,
+      `an outbound ${method} request to ${host ?? 'an external host'}`,
+    );
+  }
 
   const context = typeof ctx === 'string' ? ctx : (ctx?.context ?? 'unknown');
   const businessId = typeof ctx === 'object' ? (ctx?.businessId ?? null) : null;
