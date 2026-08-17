@@ -43,6 +43,65 @@ function parseRepoList(reposField: string | undefined): string[] | null {
     .map(s => s.toLowerCase());
 }
 
+type RepoInfo = { name: string; full_name: string; html_url: string; default_branch: string };
+
+/**
+ * Fetch each explicitly-configured repo directly through the authenticated
+ * /repos/{owner}/{repo} endpoint. Unlike the public repo-listing endpoints,
+ * this honours PAT access to private repositories the token owner (or an
+ * org they belong to) can see — so a valid private repo named in `repos`
+ * config is never silently dropped (issue #34).
+ */
+async function fetchReposByName(owner: string, repoNames: string[], credentials: Creds): Promise<RepoInfo[]> {
+  const results = await Promise.all(repoNames.map(async (name): Promise<RepoInfo | null> => {
+    try {
+      const repo = await ghFetch(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`, credentials) as RepoInfo & { message?: string };
+      if (repo && typeof repo === 'object' && typeof repo.name === 'string') return repo;
+      return null;
+    } catch {
+      // Repo not found, renamed, or inaccessible to this token — skip it,
+      // same as the previous (pre-fix) filtering behaviour.
+      return null;
+    }
+  }));
+  return results.filter((r): r is RepoInfo => r !== null);
+}
+
+/**
+ * Discover repos accessible to the configured owner without an explicit
+ * `repos` filter. Prefers authenticated endpoints that include private
+ * repos visible to the PAT:
+ *   - /user/repos when `owner` is the token's own login (repos owned by
+ *     the authenticated user, private included).
+ *   - /orgs/{owner}/repos when `owner` is an org the token can see
+ *     (private included with repo/read:org scope).
+ * Falls back to the public /users/{owner}/repos listing (owner-visible
+ * public repos only) when neither authenticated path is available.
+ */
+async function listAccessibleRepos(owner: string, credentials: Creds): Promise<RepoInfo[]> {
+  try {
+    const me = await ghFetch('/user', credentials) as { login?: string };
+    if (me?.login && me.login.toLowerCase() === owner.toLowerCase()) {
+      const mine = await ghFetch(`/user/repos?affiliation=owner&sort=updated&per_page=100`, credentials).catch(() => null);
+      if (Array.isArray(mine)) return mine as RepoInfo[];
+    }
+  } catch {
+    // /user failed (e.g. bad token) — fall through to org/public lookups below.
+  }
+
+  const orgRepos = await ghFetch(
+    `/orgs/${encodeURIComponent(owner)}/repos?type=all&sort=updated&per_page=100`,
+    credentials
+  ).catch(() => null);
+  if (Array.isArray(orgRepos)) return orgRepos as RepoInfo[];
+
+  const publicRepos = await ghFetch(
+    `/users/${encodeURIComponent(owner)}/repos?type=owner&sort=updated&per_page=100`,
+    credentials
+  ).catch(() => []);
+  return Array.isArray(publicRepos) ? publicRepos as RepoInfo[] : [];
+}
+
 const connector = {
   id: 'github' as const,
   name: 'GitHub',
@@ -86,16 +145,14 @@ const connector = {
     const repoFilter = parseRepoList((params?.repos ?? credentials?.repos) as string | undefined);
     if (!owner) throw new Error('GitHub owner is required.');
 
-    // List user/org repos. Use /users since /orgs requires admin scope.
-    let allRepos = await ghFetch(
-      `/users/${encodeURIComponent(owner)}/repos?type=owner&sort=updated&per_page=20`,
-      credentials
-    ).catch(() => []) as Array<{ name: string; full_name: string; html_url: string; default_branch: string }>;
-    if (!Array.isArray(allRepos)) allRepos = [];
-
-    const targetRepos = repoFilter
-      ? allRepos.filter(r => repoFilter.includes(r.name.toLowerCase()))
-      : allRepos.slice(0, 10); // limit to top 10 by recent activity if no filter
+    // When specific repos are configured, fetch each directly through the
+    // authenticated /repos/{owner}/{repo} endpoint so private repos the PAT
+    // can access are never dropped by a public, unauthenticated-equivalent
+    // listing (issue #34). Otherwise, discover accessible repos for the
+    // owner via authenticated listing endpoints (also private-inclusive).
+    const targetRepos: RepoInfo[] = repoFilter
+      ? await fetchReposByName(owner, repoFilter, credentials)
+      : (await listAccessibleRepos(owner, credentials)).slice(0, 10); // limit to top 10 by recent activity if no filter
 
     // Fetch PRs, issues, commits, check runs for each target repo in parallel
     const sinceISO = new Date(Date.now() - 30 * 86400000).toISOString();
