@@ -82,6 +82,7 @@ import bapDecisionQueueRouter from './bap-decision-queue.js';
 import bapComparisonsRouter from './bap-comparisons.js';
 import bapCommandCentreRouter from './bap-command-centre.js';
 import bapPortfoliosRouter from './bap-portfolios.js';
+import bapDigestRouter from './bap-digest.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -339,6 +340,11 @@ router.use(bapCommandCentreRouter);
 // portfolio spans businesses), so it applies the agent's business_access
 // itself. Not #68's policy portfolios — see bap-portfolios.ts.
 router.use(bapPortfoliosRouter);
+// Issue #81 — #62's "while you were away" catch-up digest, read-only. Watermark
+// is a genuinely separate table keyed on the agent's own id, never the
+// dashboard operator's session username — see bap-digest.ts and
+// bap-digest-watermark.ts.
+router.use(bapDigestRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
