@@ -109,7 +109,7 @@ enforced at the DB-write layer (#67).
 - Public repo prep for v1.0
 
 ### Open issues for v1.0
-See [GitHub issues tagged `v1.0`](https://github.com/chrisgwynne/blueprint/issues?q=label%3Av1.0).
+See [GitHub issues tagged `v1.0`](https://github.com/chrisgwynne/Blueprint-2.0/issues?q=label%3Av1.0).
 
 ---
 

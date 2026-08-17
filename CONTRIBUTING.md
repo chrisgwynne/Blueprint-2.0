@@ -13,8 +13,8 @@ Thank you for your interest in contributing.
 ## Development setup
 
 ```bash
-git clone https://github.com/chrisgwynne/blueprint
-cd blueprint
+git clone https://github.com/chrisgwynne/Blueprint-2.0
+cd Blueprint-2.0
 cp .env.example .env
 # Configure your LLM in .env — Ollama is easiest for dev (free, no API key)
 
