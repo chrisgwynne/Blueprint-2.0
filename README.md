@@ -41,7 +41,7 @@ Everything is logged. Every action has a paper trail. You can roll back any chan
 
 ### Trust and autonomous operations
 
-Phase 4 adds a Trust Ops layer for continuous autonomous work: business capabilities, applicability suppression, human corrections, revenue paths, signal lifecycle status, provider preflight, measurement policies, risk-tier evidence, run heartbeat/cancellation and agent scorecards. See `PHASE4.md` and `TRUST-AND-AUTONOMY.md` for the implemented surfaces and known limits.
+Phase 4 adds a Trust Ops layer for continuous autonomous work: business capabilities, applicability suppression, human corrections, revenue paths, signal lifecycle status, provider preflight, measurement policies, risk-tier evidence, run heartbeat/cancellation and agent scorecards. See `TRUST-AND-AUTONOMY.md` for the implemented surfaces and known limits.
 
 ## Quick Start
 

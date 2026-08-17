@@ -3,9 +3,9 @@
 The goal model before Phase 3: a `goals` row with a metric, a deadline, a
 free-form `milestones` JSON array, and — critically — no real relationship
 to the tasks, signals, or outcomes working toward it. Linkage was inferred
-through an optional `project_id` both goals and tasks happened to share
-(documented as a known gap in `PHASE2.md`, section 8: "Goal↔task/signal
-linkage is a proxy, not a real relationship").
+through an optional `project_id` both goals and tasks happened to share —
+a known gap: "Goal↔task/signal linkage is a proxy, not a real
+relationship."
 
 Phase 3 makes goals a first-class relational entity: real foreign keys,
 owner/confidence/priority, milestones and dependencies as queryable tables,
@@ -205,7 +205,8 @@ as a dimension independent of `conflict_type` (which entities collided).
 
 ## 7. API surface
 
-New/changed endpoints — see `PHASE3.md` section 3 for the full list and
+New/changed endpoints — see [server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md)'s
+Goals section for the current, code-verified list and
 `docs/openapi/bap-v1.yaml` for the formal spec:
 
 - `POST`/`PATCH .../goals` accept `owner`, `confidence`, `priority`,
