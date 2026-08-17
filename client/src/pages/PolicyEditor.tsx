@@ -13,6 +13,7 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import useStore from '../lib/store.js'
 import {
+  backtestOperatingPolicy,
   cancelScheduledOperatingPolicy,
   getOperatingPolicy,
   previewOperatingPolicy,
@@ -117,6 +118,8 @@ export default function PolicyEditor() {
   const [reason, setReason] = useState('')
   const [effectiveAt, setEffectiveAt] = useState('')
   const [preview, setPreview] = useState<any>(null)
+  const [backtestDays, setBacktestDays] = useState(30)
+  const [backtest, setBacktest] = useState<any>(null)
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<{ tone: Tone; text: string } | null>(null)
 
@@ -130,6 +133,7 @@ export default function PolicyEditor() {
       // what the operator is actually changing the behaviour of.
       setDraft(JSON.parse(JSON.stringify(data.effective.document)))
       setPreview(null)
+      setBacktest(null)
     } catch (err: any) {
       setState({ loading: false, error: err.message })
     }
@@ -142,11 +146,13 @@ export default function PolicyEditor() {
   function edit(section: string, key: string, value: unknown) {
     setDraft((d: Doc) => ({ ...d, [section]: { ...d[section], [key]: value } }))
     setPreview(null)
+    setBacktest(null)
     setNotice(null)
   }
   function editTop(key: string, value: unknown) {
     setDraft((d: Doc) => ({ ...d, [key]: value }))
     setPreview(null)
+    setBacktest(null)
     setNotice(null)
   }
 
@@ -169,6 +175,19 @@ export default function PolicyEditor() {
       setNotice(res.preview.valid
         ? { tone: 'green', text: `Valid. ${res.preview.changes.length} field(s) would change; nothing has been saved.` }
         : { tone: 'red', text: `${res.preview.violations.length} problem(s) — fix them before saving.` })
+    })
+  }
+
+  async function doBacktest() {
+    if (!business || !draft) return
+    await run('Backtest', async () => {
+      const res: any = await backtestOperatingPolicy(business.id, draft, backtestDays)
+      setBacktest(res.backtest)
+      const b = res.backtest
+      setNotice(b.empty_window
+        ? { tone: 'amber', text: `No history to test against — ${b.tasks_in_window} task(s) in the last ${b.days} day(s). This does not mean the candidate policy is safe, only that nothing was checked.` }
+        : { tone: (b.would_now_require_review.count + b.would_now_auto_approve.count) > 0 ? 'amber' : 'green',
+            text: `Replayed ${b.tasks_in_window} task(s) from the last ${b.days} day(s): ${b.would_now_require_review.count} would now need manual review, ${b.would_now_auto_approve.count} would now auto-approve.` })
     })
   }
 
@@ -346,6 +365,59 @@ export default function PolicyEditor() {
             </button>
             <button className="bp-btn" disabled={busy} onClick={load}>Discard changes</button>
           </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', borderTop: '1px solid var(--bp-border)', paddingTop: 12, marginTop: 4 }}>
+            <span style={{ fontSize: 11, color: 'var(--bp-text-3)' }}>Backtest against the last</span>
+            <input className="bp-input" type="number" min={1} max={90} style={{ width: 64 }}
+              value={backtestDays} onChange={(e) => setBacktestDays(Math.max(1, Math.min(90, Number(e.target.value) || 30)))} />
+            <span style={{ fontSize: 11, color: 'var(--bp-text-3)' }}>day(s) of real tasks</span>
+            <button className="bp-btn" disabled={busy} onClick={doBacktest}>Run backtest</button>
+          </div>
+          {backtest ? (
+            <div style={{ display: 'grid', gap: 8, marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: 'var(--bp-text-3)' }}>
+                {backtest.tasks_in_window} task(s) proposed {backtest.window_start} → {backtest.window_end}
+              </div>
+              {backtest.empty_window ? (
+                <div style={{ fontSize: 12, color: 'var(--bp-text-2)' }}>
+                  No historical tasks to replay — this is not evidence the candidate policy is safe, only that nothing was tested.
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <div style={{ fontSize: 12 }}>
+                      <Pill tone={backtest.would_now_require_review.count > 0 ? 'amber' : 'green'}>
+                        {backtest.would_now_require_review.count} now require manual review
+                      </Pill>{' '}
+                      were auto-approved historically but would be blocked under this candidate.
+                    </div>
+                    <div style={{ fontSize: 12 }}>
+                      <Pill tone="blue">{backtest.would_now_auto_approve.count} now auto-approve</Pill>{' '}
+                      needed a human historically but would pass under this candidate.
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--bp-text-3)' }}>
+                      {backtest.unchanged_auto_approved_count} unchanged auto-approved · {backtest.unchanged_required_human_count} unchanged required-human · {backtest.undetermined_count} undetermined (no resolved outcome yet)
+                    </div>
+                  </div>
+                  {(backtest.would_now_require_review.task_ids.length > 0 || backtest.would_now_auto_approve.task_ids.length > 0) && (
+                    <details>
+                      <summary style={{ fontSize: 11, color: 'var(--bp-text-2)', cursor: 'pointer' }}>Evidence — task ids that would change outcome</summary>
+                      <div style={{ display: 'grid', gap: 4, marginTop: 6 }}>
+                        {backtest.evidence.filter((e: any) => e.transition !== 'unchanged').map((e: any) => (
+                          <div key={e.task_id} style={{ fontSize: 10, color: 'var(--bp-text-3)' }}>
+                            <Pill tone={e.transition === 'now_requires_review' ? 'amber' : 'blue'}>{e.transition}</Pill>{' '}
+                            {e.task_id} · {e.title} · {e.action_type ?? 'manual'} · {e.current_tier} → {e.candidate_tier}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                  <div style={{ fontSize: 10, color: 'var(--bp-text-3)' }}>
+                    {backtest.methodology_notes.map((n: string, i: number) => <div key={i}>{n}</div>)}
+                  </div>
+                </>
+              )}
+            </div>
+          ) : null}
           <ViolationList violations={violations} />
           {preview ? (
             <div style={{ display: 'grid', gap: 8, marginTop: 4 }}>

@@ -15,6 +15,7 @@
  *   GET    /:businessId                    — effective + active + versions + events
  *   GET    /:businessId/versions/:version  — one historical version
  *   POST   /:businessId/preview            — validate + compute impact, no writes
+ *   POST   /:businessId/backtest           — replay recent history against a candidate, no writes
  *   POST   /:businessId                    — save (immediate or scheduled)
  *   POST   /:businessId/rollback           — re-activate a prior version
  *   POST   /:businessId/versions/:version/cancel — cancel a scheduled version
@@ -22,6 +23,7 @@
  *   POST   /portfolios                     — create/update a portfolio
  *   GET    /portfolios/:portfolioId        — one portfolio's policy state
  *   POST   /portfolios/:portfolioId        — save a portfolio-scope policy
+ *   POST   /portfolios/:portfolioId/backtest — replay recent history against a candidate, no writes
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -35,6 +37,7 @@ import {
   upsertPolicyPortfolio, validatePolicyDocument, mergePolicyDocument,
   type OperatingPolicyPatch, type PolicyScopeRef,
 } from '../policy/operating-policy.js';
+import { backtestPolicyChange } from '../policy/policy-backtest.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -128,6 +131,17 @@ router.post('/portfolios/:portfolioId/preview', (req: Request, res: Response) =>
   } catch (err) { return handleError(res, err); }
 });
 
+router.post('/portfolios/:portfolioId/backtest', (req: Request, res: Response) => {
+  try {
+    const portfolioId = String(req.params.portfolioId);
+    if (!getPolicyPortfolio(portfolioId)) return res.status(404).json({ error: `Policy portfolio '${portfolioId}' not found.` });
+    const body = req.body as { patch?: OperatingPolicyPatch; days?: number };
+    return res.json({
+      backtest: backtestPolicyChange({ scope: 'portfolio', key: portfolioId, patch: body.patch ?? {}, days: body.days }),
+    });
+  } catch (err) { return handleError(res, err); }
+});
+
 // ─── Business scope ─────────────────────────────────────────────────────────
 
 router.get('/:businessId', (req: Request, res: Response) => {
@@ -168,6 +182,17 @@ router.post('/:businessId/preview', (req: Request, res: Response) => {
     const body = req.body as { patch?: OperatingPolicyPatch; effective_at?: string | null };
     return res.json({
       preview: previewPolicyChange({ scope: 'business', key: businessId, patch: body.patch ?? {}, effective_at: body.effective_at ?? null }),
+    });
+  } catch (err) { return handleError(res, err); }
+});
+
+router.post('/:businessId/backtest', (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    if (!businessExists(businessId)) return res.status(404).json({ error: `Business '${businessId}' not found.` });
+    const body = req.body as { patch?: OperatingPolicyPatch; days?: number };
+    return res.json({
+      backtest: backtestPolicyChange({ scope: 'business', key: businessId, patch: body.patch ?? {}, days: body.days }),
     });
   } catch (err) { return handleError(res, err); }
 });
