@@ -112,6 +112,14 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // by the approval/execution path itself and no BAP route writes one, so
   // there is deliberately no `receipts:write` counterpart to grant.
   'receipts:read',
+  // Issue #77 — the #61 pending-decision queue. Deliberately NOT the
+  // `decisions:read` grant above: that one is the decision-memory recall log
+  // (bap-decisions.ts), this one is the queue of items still awaiting a
+  // human (bap-decision-queue.ts). Same word, different data model, so an
+  // agent that wants both must be granted both rather than getting the wrong
+  // one silently. Read-only: approve/reject/defer/amend stays a human act on
+  // the dashboard, so there is no `decision_queue:review` counterpart.
+  'decision_queue:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

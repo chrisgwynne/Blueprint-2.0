@@ -6,10 +6,11 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). Ten more dashboard features (Decision
-> Centre, Comparisons, Command Centre, Portfolios, Digest, Explanations,
-> Audit Search, Retrospectives, Playbooks, Simulation) exist but have no
-> BAP surface yet — see issues #77–#86.
+> [CHANGELOG.md](/CHANGELOG.md). The Decision Centre now has a read-only BAP
+> surface too (#77, below). Nine more dashboard features (Comparisons, Command
+> Centre, Portfolios, Digest, Explanations, Audit Search, Retrospectives,
+> Playbooks, Simulation) exist but have no BAP surface yet — see issues
+> #78–#86.
 
 ---
 
@@ -192,6 +193,32 @@ verification evidence where available. Use this instead of polling task
 status if you need to know something genuinely landed on the other end, not
 just that Blueprint attempted it.
 
+### Decision Queue (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/decision-queue          — pending review queue, sorted by lane
+GET  /api/bap/v1/businesses/:id/decision-queue/classes  — recurring decision classes
+GET  /api/bap/v1/decision-queue/:taskId                 — single queue item detail
+```
+Read-only, permission `decision_queue:read`. This is the queue of items still
+awaiting a human, and it tells you **why** yours is sitting there: `lane`
+(`manual_review` | `policy_gated` | `routine`) with a `lane_reason`,
+`risk_tier` and its evidence, `hold_reasons`, `required_action` (including
+`executable: false` when no executor exists, so approving could never make it
+run) and the policy citation in force. Use `?proposed_by=agent:you` to see
+only your own proposals. Far more useful than polling task status: if the lane
+is `policy_gated` you can stop re-proposing and supply better evidence, or cite
+the Operating Policy above to explain why a human is required.
+
+There is no BAP approve/reject/defer/amend path — review is a human act on the
+dashboard by design.
+
+> **Not to be confused with `GET /businesses/:id/decisions` and `GET
+> /decisions/:id` (permission `decisions:read`).** Those are the decision
+> *memory* log — historical decisions already made, for answering "why did we
+> decide this six months ago?". This section is the *pending* queue. An item
+> leaves the queue when reviewed and its outcome appears on that other surface,
+> so an agent that wants the full before-and-after needs both grants.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -273,6 +300,7 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `decision_queue:read` | Read the pending-decision review queue (not the decision-memory log — see above) |
 
 ---
 

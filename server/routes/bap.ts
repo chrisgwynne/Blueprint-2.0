@@ -78,6 +78,7 @@ import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
+import bapDecisionQueueRouter from './bap-decision-queue.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -319,6 +320,10 @@ router.use(bapTrustRouter);
 router.use(bapOperatingPoliciesRouter);
 // Issue #70 — verified action receipts (permission-scoped, read-only).
 router.use(bapReceiptsRouter);
+// Issue #77 — the #61 pending-decision queue (read-only). Distinct from
+// bapDecisionsRouter above in both path and permission: that one is the
+// decision-memory recall log, this one is the queue still awaiting a human.
+router.use(bapDecisionQueueRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
