@@ -1866,6 +1866,114 @@ for (const sql of PORTFOLIO_MIGRATIONS) {
   }
 }
 
+// ─── Reusable bounded playbooks (issue #74) ──────────────────────────────────
+//
+// A playbook is a VERSIONED definition of an existing workflow, not a second
+// workflow system: `playbook_versions.workflow_id` points at the same
+// `workflows` row workflow-engine.ts has always executed, and runs still land
+// in `workflow_runs` / `workflow_step_runs`. What is new is the lifecycle
+// around the definition (draft → validated → scheduled → active →
+// superseded), copied deliberately from operating_policies (#68) rather than
+// invented: immutable versions, one active version per workflow enforced by a
+// partial unique index, rollback written forward as a new version, and a
+// separate append-only event table for the audit trail.
+//
+// The columns added to workflow_runs / workflow_step_runs are what bind a run
+// to ONE version (so a version change cannot alter an in-flight run) and to
+// the real action receipts (#70) each step's task produces.
+const PLAYBOOK_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS playbook_versions (
+    id TEXT PRIMARY KEY,
+    workflow_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('draft','scheduled','active','superseded','archived')),
+    definition JSON NOT NULL,
+    -- Result of the last validation run against this exact definition.
+    -- Stored rather than recomputed so "it was valid when we activated it"
+    -- survives a later registry change that would now fail validation.
+    validation_state TEXT NOT NULL DEFAULT 'unvalidated'
+      CHECK (validation_state IN ('unvalidated','valid','invalid')),
+    validation_violations JSON DEFAULT '[]',
+    validated_at DATETIME,
+    validated_by TEXT,
+    effective_at DATETIME,
+    activated_at DATETIME,
+    superseded_at DATETIME,
+    superseded_by_id TEXT,
+    source TEXT NOT NULL DEFAULT 'edit',
+    rolled_back_from_version INTEGER,
+    change_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(workflow_id, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_versions_lookup ON playbook_versions(workflow_id, state, effective_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_versions_business ON playbook_versions(business_id, state)`,
+  // At most one active version per workflow — enforced by the database, so a
+  // crash between supersede and insert cannot leave two live definitions.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_playbook_versions_one_active ON playbook_versions(workflow_id) WHERE state = 'active'`,
+  `CREATE TABLE IF NOT EXISTS playbook_events (
+    id TEXT PRIMARY KEY,
+    playbook_version_id TEXT,
+    workflow_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    run_id TEXT,
+    step_index INTEGER,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_events_workflow ON playbook_events(workflow_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_playbook_events_run ON playbook_events(run_id, created_at)`,
+
+  // ── Run-level: which version, what inputs, and the idempotency key ──
+  `ALTER TABLE workflow_runs ADD COLUMN playbook_version_id TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN playbook_version INTEGER`,
+  `ALTER TABLE workflow_runs ADD COLUMN inputs JSON DEFAULT '{}'`,
+  // Deterministic from (workflow, version, inputs, caller-supplied key). Two
+  // start calls carrying the same key resolve to the SAME run rather than
+  // duplicating every step's side effects — the run-level analogue of
+  // action-receipts.ts's correlation_key.
+  `ALTER TABLE workflow_runs ADD COLUMN run_key TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN stopped_reason TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN rollback_state TEXT`,
+  `ALTER TABLE workflow_runs ADD COLUMN rollback_report JSON`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_run_key ON workflow_runs(run_key) WHERE run_key IS NOT NULL`,
+
+  // ── Step-level: typed identity, receipt linkage, risk, compensation ──
+  `ALTER TABLE workflow_step_runs ADD COLUMN step_kind TEXT DEFAULT 'manual'`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN action_type TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN resolved_input JSON`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN typed_output JSON`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN task_id TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN receipt_id TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN receipt_state TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN correlation_key TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN risk_tier TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN approval_reason TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN timeout_seconds INTEGER`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN attempt_count INTEGER DEFAULT 0`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN max_attempts INTEGER DEFAULT 1`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN rollback_status TEXT`,
+  `ALTER TABLE workflow_step_runs ADD COLUMN rollback_detail TEXT`,
+  // One row per (run, step) — the DB-level guarantee that a retry can never
+  // fork one step into two independently-executing records.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_step_runs_unique ON workflow_step_runs(run_id, step_index)`,
+];
+for (const sql of PLAYBOOK_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] playbook migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {
