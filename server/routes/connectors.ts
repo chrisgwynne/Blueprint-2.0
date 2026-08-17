@@ -6,6 +6,7 @@ import { isAuthenticated } from '../middleware/auth.js';
 import { encrypt, decrypt } from '../crypto.js';
 import type { Connector } from '../types/db.js';
 import { refreshConnectorConfidence } from '../connectors/confidence.js';
+import { explainConnectorHealth } from '../connectors/health.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 import { readGoogleOAuthConfig } from '../lib/google-oauth-config.js';
 import { isDurableGoogleCredential } from '../connectors/google-auth.js';
@@ -203,6 +204,25 @@ async function refreshGoogleCredentialForRow(row: Connector, credentials: Record
   return refreshGoogleConnectorCredentials(row, credentials, readGoogleOAuthConfig());
 }
 
+// Issue #65: attach the understandable health/freshness explanation
+// (state + last success + impact + safe next step) to a connector already
+// run through safeRow(). Never touches credentials — explainConnectorHealth
+// only reads status/last_sync/last_error/config/type, all already present
+// on the redacted row.
+function withHealth<T extends { id: string; business_id: string; type: string; name: string; status: string; last_sync: string | null; last_error: string | null; config: Record<string, unknown> }>(row: T): T & {
+  health_state: string; health_summary: string; health_impact: string | null; health_next_step: string | null; health_coverage_complete: boolean | null;
+} {
+  const health = explainConnectorHealth(row);
+  return {
+    ...row,
+    health_state: health.state,
+    health_summary: health.summary,
+    health_impact: health.impact,
+    health_next_step: health.next_step,
+    health_coverage_complete: health.coverage_complete,
+  };
+}
+
 /**
  * GET /api/connectors/:businessId
  */
@@ -211,7 +231,7 @@ router.get('/:businessId', (req: Request, res: Response) => {
     const rows = db.prepare(`
       SELECT * FROM connectors WHERE business_id = ? ORDER BY name ASC
     `).all(req.params['businessId'] as string) as Connector[];
-    return res.json(rows.map(safeRow));
+    return res.json(rows.map(safeRow).filter((r): r is NonNullable<typeof r> => r != null).map(withHealth));
   } catch (err) {
     console.error('[connectors] List error:', err);
     return res.status(500).json({ error: 'Failed to list connectors.' });

@@ -10,6 +10,8 @@ import db, { DB_PATH } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { checkAgentReadiness } from '../agents/readiness.js';
 import { STALE_THRESHOLDS_HOURS, getPollingInterval, computeConnectorStatus } from '../connectors/freshness.js';
+import { isConnectorApplicable } from '../connectors/confidence.js';
+import { explainConnectorHealth } from '../connectors/health.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -96,13 +98,33 @@ router.get('/health/full', async (req: Request, res: Response) => {
         "SELECT COUNT(DISTINCT rule_id) as n FROM signals WHERE connector_id = ? AND created_at > datetime('now', '-30 days')"
       ).get(c.id as string) as { n: number } | undefined)?.n ?? 0;
 
+      // Issue #65: understandable health/freshness beyond the raw live/
+      // stale/error/disconnected value above — reuses the exact same
+      // explainer bap-connectors.ts uses so the dashboard and a BAP agent
+      // never disagree about a connector's health. Applicability
+      // (isConnectorApplicable) is folded in here too — previously this
+      // route, unlike bap-connectors.ts, had no not_applicable distinction
+      // at all and showed a never-used ecommerce-only connector's raw
+      // 'disconnected' status as noise.
+      const applicable = isConnectorApplicable(
+        { type: c.type as string, last_sync: c.last_sync as string | null },
+        c.business_id as string,
+      );
+      const label = CONNECTOR_LABELS[c.type as string] ?? (c.name as string) ?? (c.type as string);
+      const health = explainConnectorHealth({
+        id: c.id as string, business_id: c.business_id as string, type: c.type as string,
+        name: c.name as string, status: c.status as string, last_sync: c.last_sync as string | null,
+        last_error: c.last_error as string | null, config: c.config as Record<string, unknown>,
+      }, { label });
+
       return {
         id: c.id,
         type: c.type,
-        name: CONNECTOR_LABELS[c.type as string] ?? c.name ?? c.type,
+        name: label,
         business_name: c.business_name,
         business_id: c.business_id,
-        status,
+        status: applicable ? status : 'not_applicable',
+        raw_status: c.status,
         last_sync: c.last_sync,
         hours_since_sync: hoursSince != null ? Math.round(hoursSince * 10) / 10 : null,
         next_sync_in_minutes: nextSyncInMinutes,
@@ -110,6 +132,11 @@ router.get('/health/full', async (req: Request, res: Response) => {
         last_error: c.last_error,
         metrics_stored: metricsStored,
         signals_enabled: signalsEnabled,
+        health_state: health.state,
+        health_summary: health.summary,
+        health_impact: health.impact,
+        health_next_step: health.next_step,
+        health_coverage_complete: health.coverage_complete,
       };
     });
 

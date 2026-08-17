@@ -43,6 +43,37 @@ function effectiveStatus(connector: Connector): string {
   return connector.status
 }
 
+// Issue #65: understandable health/freshness beyond the raw connection
+// status — see server/connectors/health.ts. health_state is only present
+// once the server has computed it (GET /api/connectors/:businessId); older
+// cached rows fall back to the crude isStale() heuristic above.
+const HEALTH_LABELS: Record<string, string> = {
+  healthy: 'Healthy',
+  stale: 'Stale',
+  partial: 'Partial coverage',
+  failing: 'Failing',
+  permission_required: 'Permission required',
+  not_applicable: 'Not applicable',
+}
+
+const HEALTH_COLORS: Record<string, string> = {
+  healthy: 'text-blueprint-green',
+  stale: 'text-yellow-400',
+  partial: 'text-yellow-400',
+  failing: 'text-blueprint-red',
+  permission_required: 'text-indigo-400',
+  not_applicable: 'text-blueprint-muted',
+}
+
+const HEALTH_DOTS: Record<string, string> = {
+  healthy: 'bg-blueprint-green',
+  stale: 'bg-yellow-400',
+  partial: 'bg-yellow-400',
+  failing: 'bg-blueprint-red',
+  permission_required: 'bg-indigo-400',
+  not_applicable: 'bg-blueprint-muted',
+}
+
 // ─── Score Badge ─────────────────────────────────────────────────────────────
 
 interface ScoreBadgeProps {
@@ -1500,6 +1531,10 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
   const status = effectiveStatus(connector)
+  const healthState = connector.health_state
+  const healthLabel = healthState ? (HEALTH_LABELS[healthState] ?? healthState) : null
+  const healthColor = healthState ? (HEALTH_COLORS[healthState] ?? 'text-blueprint-muted') : null
+  const healthDot = healthState ? (HEALTH_DOTS[healthState] ?? 'bg-blueprint-muted') : null
 
   async function handleHealthCheck() {
     setCheckingHealth(true)
@@ -1577,7 +1612,7 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
               </div>
             </div>
             <div className="bp-card p-3">
-              <p className="text-xs text-blueprint-muted mb-1">Last Sync</p>
+              <p className="text-xs text-blueprint-muted mb-1">Last Successful Sync</p>
               <p className="text-sm mono text-slate-200">
                 {connector.last_sync
                   ? formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })
@@ -1585,6 +1620,30 @@ function ConnectorDrawer({ connector: initialConnector, onClose, onSync, onDelet
               </p>
             </div>
           </div>
+
+          {/* Health (issue #65) — distinguishes healthy / stale / partial
+              coverage / failing / permission required / not applicable,
+              with plain-language impact + a safe next step, rather than
+              just the raw connection status above. */}
+          {healthState && healthState !== 'healthy' && (
+            <div className="bp-card p-3">
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className={clsx('w-2 h-2 rounded-full', healthDot)} />
+                <p className={clsx('text-sm font-medium', healthColor)}>{healthLabel}</p>
+              </div>
+              {connector.health_coverage_complete === false && (
+                <p className="text-xs text-yellow-400/90 mb-1.5">
+                  The most recent sync did not capture the full dataset — figures derived from it are a lower bound, not the complete picture.
+                </p>
+              )}
+              {connector.health_impact && (
+                <p className="text-xs text-blueprint-muted mb-1.5"><span className="text-slate-300 font-medium">Impact: </span>{connector.health_impact}</p>
+              )}
+              {connector.health_next_step && (
+                <p className="text-xs text-blueprint-muted"><span className="text-slate-300 font-medium">Next step: </span>{connector.health_next_step}</p>
+              )}
+            </div>
+          )}
 
           {/* Last error */}
           {connector.last_error && (
@@ -1784,20 +1843,29 @@ function ConnectorCard({ connector, onClick }: ConnectorCardProps) {
   }
   const Icon = ICONS[connector.type] || Zap
   const status = effectiveStatus(connector)
+  // health_state (issue #65) is the more meaningful signal when present —
+  // it distinguishes permission_required/partial from a generic failure.
+  // Falls back to the raw status heuristic for connectors the server
+  // hasn't computed it for yet.
+  const healthState = connector.health_state
+  const degraded = healthState ? (healthState !== 'healthy' && healthState !== 'not_applicable') : (status === 'error' || status === 'stale')
 
-  const borderColor = status === 'connected' ? 'var(--bp-green)'
-    : status === 'error' ? 'var(--bp-red)'
-    : status === 'stale' ? 'var(--bp-amber)'
+  const borderColor = healthState === 'permission_required' ? '#818cf8'
+    : status === 'connected' && !degraded ? 'var(--bp-green)'
+    : status === 'error' || healthState === 'failing' ? 'var(--bp-red)'
+    : status === 'stale' || healthState === 'partial' || healthState === 'stale' ? 'var(--bp-amber)'
     : 'rgba(255,255,255,0.08)'
 
-  const dotColor = status === 'connected' ? 'var(--bp-green)'
-    : status === 'error' ? 'var(--bp-red)'
-    : status === 'stale' ? 'var(--bp-amber)'
+  const dotColor = healthState === 'permission_required' ? '#818cf8'
+    : status === 'connected' && !degraded ? 'var(--bp-green)'
+    : status === 'error' || healthState === 'failing' ? 'var(--bp-red)'
+    : status === 'stale' || healthState === 'partial' || healthState === 'stale' ? 'var(--bp-amber)'
     : 'var(--bp-text-3)'
 
-  const dotClass = status === 'connected' ? 'pulse-dot-green'
-    : status === 'error' ? 'pulse-dot-red'
-    : status === 'stale' ? 'pulse-dot-amber'
+  const dotClass = healthState === 'permission_required' ? 'pulse-dot-amber'
+    : status === 'connected' && !degraded ? 'pulse-dot-green'
+    : status === 'error' || healthState === 'failing' ? 'pulse-dot-red'
+    : status === 'stale' || healthState === 'partial' || healthState === 'stale' ? 'pulse-dot-amber'
     : 'pulse-dot-gray'
 
   return (
@@ -1825,13 +1893,15 @@ function ConnectorCard({ connector, onClick }: ConnectorCardProps) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span className={`pulse-dot ${dotClass}`} />
             <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: dotColor, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-              {status}
+              {healthState === 'permission_required' ? 'Permission required'
+                : healthState === 'partial' ? 'Partial coverage'
+                : status}
             </span>
           </div>
         </div>
         <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
           {connector.last_sync
-            ? `Synced ${formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })}`
+            ? `Last success ${formatDistanceToNow(parseTimestamp(connector.last_sync) || new Date(), { addSuffix: true })}`
             : 'Never synced'}
         </div>
         {connector.last_error && (
