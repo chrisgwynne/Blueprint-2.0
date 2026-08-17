@@ -630,49 +630,6 @@ with the same key resolves to the same run rather than a duplicate one —
 `reused: true` in the response body distinguishes an idempotent replay
 from a fresh run (`202`) at the HTTP layer too (`200` vs `202`).
 
-### System Issues (2026-08)
-```
-GET   /api/bap/v1/businesses/:id/system-issues  — list (filterable by status, issue_type)
-PATCH /api/bap/v1/system-issues/:issueId        — acknowledge, resolve, or dismiss
-```
-The audit trail for **"why didn't Blueprint act"** — raised whenever
-Blueprint decides not to do something a human might expect, instead of
-silently dropping the work or (worse) doing it anyway: a task couldn't
-be validated for execution, a connector's confidence is too low to
-trust, an outcome measurement showed no improvement. Severity is one of
-`info` / `warning` / `error` / `critical`; status is
-`open` / `acknowledged` / `resolved` / `dismissed`.
-
-A `business_id: null` issue is a **global** one — not scoped to any
-single business, e.g. the shared monthly LLM budget below — and it
-always appears alongside a business's own scoped issues when you list
-with `?business_id=` filtering, rather than requiring a second query to
-ever see it.
-
-**Budget visibility (2026-08):** hitting a cost cap used to be a server
-console log only, invisible on the dashboard and over BAP. Both cap
-types now raise a system issue twice — once as an early warning, once
-at the actual stop — so an agent polling `system_issues:read` sees this
-without watching server logs:
-
-| `issue_type` | severity | when |
-|---|---|---|
-| `agent_daily_budget_warning` | `warning` | a specific agent has used ≥80% of its daily cost cap; the run still proceeds |
-| `agent_daily_budget_exhausted` | `error` | that agent's daily cap is fully spent; every run for it is skipped for the rest of the day |
-| `monthly_budget_warning` | `warning` | the shared monthly budget (all agents, all businesses) has crossed 80%; runs still proceed |
-| `monthly_budget_exhausted` | `error` | the monthly budget is fully spent; every agent run everywhere is skipped until it resets |
-
-Each is deduped per period (once per agent per day; once globally per
-month) rather than re-raised on every check, and each carries the real
-spend and cap in `metadata` so you can see exactly how close to the
-edge you are, not just that you're near it.
-
-There is no BAP path to create a system issue directly — only Blueprint
-itself raises them. `PATCH .../system-issues/:issueId` (acknowledge,
-resolve, or dismiss) is the one write path here, gated by a separate
-`system_issues:update` grant so an agent can be given visibility without
-being able to silently dismiss what it's shown.
-
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -715,6 +672,90 @@ Gated by `agents:read`, scoped to the run's business exactly like
 `GET /runs/:runId` and the cancel/retry routes next to it in
 `bap-runs.ts` — a caller not holding `agents:read` on the run's business
 gets `403`, an unknown run id gets `404`.
+
+### System Issues (2026-08)
+```
+GET   /api/bap/v1/businesses/:id/system-issues       — list (filter: status, issue_type)
+PATCH /api/bap/v1/system-issues/:id                  — acknowledge / resolve / dismiss
+```
+The audit trail for "why didn't Blueprint act" — raised whenever Blueprint
+decides *not* to do something a human might expect (a task fails Typed
+Action Registry validation, an operating policy blocks an autonomous
+approval, a daily autonomous-task cap is reached) instead of silently
+dropping the work or doing it anyway. `severity` is one of `info` /
+`warning` / `error` / `critical`; `status` is `open` / `acknowledged` /
+`resolved` / `dismissed`. `related_task_id` and `related_connector_id` are
+soft references — an issue survives deletion of the task or connector it
+points at, because it's a historical record, not a live link.
+
+`PATCH` requires `system_issues:update` and re-checks that the issue's
+`business_id` is one this agent is authorized for before allowing the
+status change — the same per-business authorization shape every other
+write-capable BAP surface in this document uses.
+
+A `business_id: null` issue is a **global** one — not scoped to any
+single business, e.g. the shared monthly LLM budget below — and it
+always appears alongside a business's own scoped issues when you list
+with `?business_id=` filtering, rather than requiring a second query to
+ever see it.
+
+**Budget visibility (2026-08):** hitting a cost cap used to be a server
+console log only, invisible on the dashboard and over BAP. Both cap
+types now raise a system issue twice — once as an early warning, once
+at the actual stop:
+
+| `issue_type` | severity | when |
+|---|---|---|
+| `agent_daily_budget_warning` | `warning` | a specific agent has used ≥80% of its daily cost cap; the run still proceeds |
+| `agent_daily_budget_exhausted` | `error` | that agent's daily cap is fully spent; every run for it is skipped for the rest of the day |
+| `monthly_budget_warning` | `warning` | the shared monthly budget (all agents, all businesses) has crossed 80%; runs still proceed |
+| `monthly_budget_exhausted` | `error` | the monthly budget is fully spent; every agent run everywhere is skipped until it resets |
+
+Each is deduped per period (once per agent per day; once globally per
+month) rather than re-raised on every check, and each carries the real
+spend and cap in `metadata` so you can see exactly how close to the
+edge you are, not just that you're near it.
+
+**Blueprint-health issue types (2026-08):** three more new checks raise issues
+about Blueprint's own operation, not the business it runs for — the
+dashboard's System Health page (`/api/system/health/full`) already showed
+these conditions passively, but nothing acted on them before this pass:
+
+- `agent_consecutive_failures` — an agent has failed 3 non-skipped runs in
+  a row (a bad credential, a provider outage, or a bug, not a transient
+  blip). `metadata.agent_id` / `metadata.consecutive_failures`. Raised
+  once per losing streak, auto-`resolved` the moment the agent completes
+  a run successfully again.
+- `connector_critically_stale` — a connector has gone stale (past its
+  type's expected sync cadence — see `STALE_THRESHOLDS_HOURS` in
+  `server/connectors/freshness.ts`) *and* stayed stale past 2x that
+  threshold, the same escalation point the hourly sweep already uses to
+  raise a connector_stale signal's severity from `warning` to `alert`.
+  `related_connector_id` is set; `metadata.hours_since_sync` /
+  `metadata.stale_threshold_hours` give the numbers behind it.
+- `llm_provider_on_fallback` — an agent's configured primary LLM provider
+  has failed over to the fallback provider for 5 consecutive runs
+  system-wide (not the first fallback — that's normal transient noise: a
+  rate limit, one timeout). `metadata.provider` / `metadata.streak`.
+  Severity `warning`, not `error` — the run still completed via fallback,
+  this is "degraded", not "broken". Auto-resolved the instant the primary
+  provider succeeds again.
+
+**Proactive notification (2026-08):** `createSystemIssue()` — the one
+function every issue in this table goes through, regardless of which
+subsystem raised it — now dispatches a notification (dashboard + Telegram,
+if `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are configured) for any issue at
+or above `settings.system_issue_notify_min_severity`, an operator-tunable
+floor defaulting to `error` (so `error` and `critical` page a human;
+`warning` and `info` stay dashboard/BAP-only unless an operator lowers the
+threshold). There is no BAP write path for that setting today. **This is
+best-effort, not a delivery guarantee**: a Telegram send can fail (network,
+misconfigured token, rate limit) and does not roll back or retry the
+`system_issues` row underneath it — the row this endpoint reads is always
+the durable source of truth for "did Blueprint flag this", regardless of
+whether the notification ever actually arrived. Don't rely on "I didn't
+get a Telegram message" as evidence nothing is wrong — poll
+`GET /businesses/:id/system-issues?status=open` instead.
 
 ### Webhooks
 ```

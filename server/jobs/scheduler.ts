@@ -14,6 +14,7 @@ import { refreshConnectorConfidence } from '../connectors/confidence.js';
 import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-model/world-model.js';
 import { recoverStaleAgentRuns } from '../agents/agent-runner.js';
 import { isDurableGoogleCredential } from '../connectors/google-auth.js';
+import { createSystemIssue } from '../system/system-issues.js';
 
 let schedulerStarted = false;
 
@@ -239,6 +240,74 @@ function isDue(connector: Connector, intervalMinutes: number): boolean {
 }
 
 /**
+ * Hourly staleness sweep. Extracted to a standalone exported function (like
+ * syncConnector above) so it's independently testable rather than only
+ * reachable through the cron registration in startScheduler().
+ */
+export async function checkStaleConnectors(): Promise<void> {
+  try {
+    const thresholds: Record<string, number> = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
+    const connectors = db.prepare(`
+      SELECT c.id, c.type, c.status, c.last_sync, c.business_id, b.name as business_name
+      FROM connectors c JOIN businesses b ON c.business_id = b.id
+      WHERE c.status = 'connected' AND c.last_sync IS NOT NULL
+    `).all() as Array<Connector & { business_name: string }>;
+    for (const c of connectors) {
+      const hours = (Date.now() - new Date(c.last_sync!).getTime()) / 3600000;
+      const threshold = thresholds[c.type] ?? 24;
+      if (hours > threshold) {
+        db.prepare("UPDATE connectors SET status = 'stale' WHERE id = ? AND status = 'connected'").run(c.id);
+        // "Critically stale" reuses the exact 2x-threshold escalation this
+        // block already computes for the signal's severity below, rather
+        // than inventing a second staleness definition — a connector that
+        // hasn't synced in over double its expected cadence has moved from
+        // "worth watching" to "actively degrading whatever depends on it".
+        const criticallyStale = hours > threshold * 2;
+        const exists = db.prepare("SELECT id FROM signals WHERE connector_id = ? AND rule_id = 'connector_stale' AND status = 'open'").get(c.id);
+        if (!exists) {
+          const { generateId: gid } = await import('../db/db.js') as unknown as { generateId: () => string };
+          db.prepare(`
+            INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
+            VALUES (?, ?, ?, 'connector_stale', 'risk', ?, ?, ?, '{}', 'open', 1.0, CURRENT_TIMESTAMP)
+          `).run(
+            gid(), c.business_id, c.id,
+            criticallyStale ? 'alert' : 'warning',
+            `${c.type.toUpperCase()} connector is stale`,
+            `No sync in ${Math.round(hours)} hours for ${c.business_name}. Last synced: ${c.last_sync}`
+          );
+        }
+
+        // Blueprint-health system_issue, distinct from the business-risk
+        // signal above — only raised once a connector crosses into
+        // critically-stale, and only once per crossing: a still-open
+        // 'connector_critically_stale' issue for this connector means a
+        // human already has the durable record, so this tick is a no-op
+        // until it's resolved (or the connector recovers, which clears it
+        // below).
+        if (criticallyStale) {
+          const openIssue = db.prepare(
+            "SELECT id FROM system_issues WHERE issue_type = 'connector_critically_stale' AND related_connector_id = ? AND status = 'open'"
+          ).get(c.id);
+          if (!openIssue) {
+            createSystemIssue({
+              business_id: c.business_id,
+              issue_type: 'connector_critically_stale',
+              severity: 'error',
+              title: `${c.type.toUpperCase()} connector critically stale (${c.business_name})`,
+              description: `No successful sync in ${Math.round(hours)} hours — over 2x its ${threshold}h expected cadence. Last synced: ${c.last_sync}.`,
+              related_connector_id: c.id,
+              metadata: { hours_since_sync: Math.round(hours), stale_threshold_hours: threshold },
+            });
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.error('[scheduler] Stale connector check failed:', err.message);
+  }
+}
+
+/**
  * Start all scheduled jobs.
  */
 export function startScheduler(): void {
@@ -308,38 +377,7 @@ export function startScheduler(): void {
   });
 
   // Every hour: check for stale connectors
-  scheduleWithLock('30 * * * *', async () => {
-    try {
-      const thresholds: Record<string, number> = { pagespeed: 48, gsc: 24, ga4: 12, shopify: 12, uptimerobot: 2 };
-      const connectors = db.prepare(`
-        SELECT c.id, c.type, c.status, c.last_sync, c.business_id, b.name as business_name
-        FROM connectors c JOIN businesses b ON c.business_id = b.id
-        WHERE c.status = 'connected' AND c.last_sync IS NOT NULL
-      `).all() as Array<Connector & { business_name: string }>;
-      for (const c of connectors) {
-        const hours = (Date.now() - new Date(c.last_sync!).getTime()) / 3600000;
-        const threshold = thresholds[c.type] ?? 24;
-        if (hours > threshold) {
-          db.prepare("UPDATE connectors SET status = 'stale' WHERE id = ? AND status = 'connected'").run(c.id);
-          const exists = db.prepare("SELECT id FROM signals WHERE connector_id = ? AND rule_id = 'connector_stale' AND status = 'open'").get(c.id);
-          if (!exists) {
-            const { generateId: gid } = await import('../db/db.js') as unknown as { generateId: () => string };
-            db.prepare(`
-              INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
-              VALUES (?, ?, ?, 'connector_stale', 'risk', ?, ?, ?, '{}', 'open', 1.0, CURRENT_TIMESTAMP)
-            `).run(
-              gid(), c.business_id, c.id,
-              hours > threshold * 2 ? 'alert' : 'warning',
-              `${c.type.toUpperCase()} connector is stale`,
-              `No sync in ${Math.round(hours)} hours for ${c.business_name}. Last synced: ${c.last_sync}`
-            );
-          }
-        }
-      }
-    } catch (err: any) {
-      console.error('[scheduler] Stale connector check failed:', err.message);
-    }
-  });
+  scheduleWithLock('30 * * * *', checkStaleConnectors);
 
   // Conductor safety-net — every 15 minutes, work-gated.
   scheduleWithLock('*/15 * * * *', async () => {
