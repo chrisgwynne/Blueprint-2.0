@@ -25,6 +25,19 @@ export interface SignalRule {
   evaluate(current: unknown, previous?: unknown): RuleResult;
 }
 
+// Mirrors TRACKED_DESTINATIONS/DESTINATION_LABELS in
+// server/connectors/google-merchant/index.ts — kept as a plain local
+// constant (rather than imported) so this rules file doesn't take on a
+// connector-module dependency; the two must be kept in sync (see issue #42).
+const DESTINATION_LABELS: Record<string, string> = {
+  shoppingAds: 'Shopping Ads',
+  freeListings: 'Free Listings',
+  display: 'Display',
+  demandGen: 'Demand Gen',
+  videoYoutube: 'Video/YouTube',
+  discover: 'Discover',
+};
+
 export const rules: SignalRule[] = [
   {
     id: 'traffic_drop_7day',
@@ -2449,6 +2462,15 @@ export const rules: SignalRule[] = [
     severity: 'warning',
     name: 'Products Newly Disapproved',
 
+    // Issue #42: previously any destination-specific disapproval (Shopping
+    // Ads, Free Listings, Display, Demand Gen, Video/YouTube, Discover) was
+    // folded into one generic "disapproved product" count. That produced
+    // false Shopping-blocking alarms for products that were only restricted
+    // on unrelated surfaces (e.g. Demand Gen/Discover), and buried real
+    // Shopping/Free Listings blockers in the noise. This now breaks the
+    // count down per destination, names the item-level issue types behind
+    // it, and carries the connector's scan coverage so a truncated/partial
+    // sync can never be read as "the whole account is fine".
     evaluate(current: any, previous: any): RuleResult {
       const currProducts = Array.isArray(current?.products) ? current.products : [];
       const prevProducts = Array.isArray(previous?.products) ? previous.products : [];
@@ -2457,23 +2479,59 @@ export const rules: SignalRule[] = [
       }
 
       const prevMap = new Map(prevProducts.map((p: any) => [p.id, p]));
-      const newlyDisapproved = currProducts.filter((p: any) => {
-        if (!p.disapproved) return false;
-        const prev = prevMap.get(p.id) as any;
-        return !prev || !prev.disapproved;
-      });
+      const byDestination: Record<string, { count: number; products: Array<{ id: string; title: string | null }> }> = {};
+      for (const key of Object.keys(DESTINATION_LABELS)) byDestination[key] = { count: 0, products: [] };
 
-      const triggered = newlyDisapproved.length > 0;
+      const issueCodes = new Set<string>();
+
+      for (const p of currProducts) {
+        const currDest: string[] = Array.isArray(p.disapprovedDestinations) ? p.disapprovedDestinations : [];
+        if (currDest.length === 0) continue;
+        const prev = prevMap.get(p.id) as any;
+        const prevDest: string[] = Array.isArray(prev?.disapprovedDestinations) ? prev.disapprovedDestinations : [];
+
+        let newlyDisapprovedHere = false;
+        for (const dest of currDest) {
+          if (prevDest.includes(dest)) continue; // already disapproved for this destination last sync
+          newlyDisapprovedHere = true;
+          const bucket = byDestination[dest];
+          if (!bucket) continue; // unrecognised/untracked destination key — ignore rather than mis-bucket
+          bucket.count++;
+          bucket.products.push({ id: p.id, title: p.title ?? null });
+        }
+        if (newlyDisapprovedHere) {
+          for (const issue of Array.isArray(p.issues) ? p.issues : []) {
+            if (issue?.code) issueCodes.add(issue.code);
+          }
+        }
+      }
+
+      const affected = Object.entries(byDestination).filter(([, v]) => v.count > 0);
+      const triggered = affected.length > 0;
+      const totalCount = affected.reduce((sum, [, v]) => sum + v.count, 0);
+      const summary = affected.map(([key, v]) => `${v.count} for ${DESTINATION_LABELS[key]}`).join(', ');
+
+      const coverageComplete = current?.coverageComplete !== false;
+      const coverageNote = coverageComplete
+        ? ''
+        : ` Scan coverage is INCOMPLETE (only ${current?.offersScanned ?? currProducts.length} offer(s) scanned this sync) — treat this as a lower bound, not the full account.`;
+
       return {
         triggered,
-        confidence: triggered ? Math.min(0.95, 0.6 + newlyDisapproved.length * 0.05) : 0,
+        confidence: triggered ? Math.min(0.95, 0.6 + totalCount * 0.05) : 0,
         data: {
-          count: newlyDisapproved.length,
-          products: newlyDisapproved.slice(0, 20).map((p: any) => ({ id: p.id, title: p.title })),
+          totalCount,
+          byDestination: Object.fromEntries(affected.map(([k, v]) => [k, { count: v.count, products: v.products.slice(0, 20) }])),
+          issueCodes: [...issueCodes],
+          offersScanned: current?.offersScanned ?? currProducts.length,
+          coverageComplete,
+          coveragePercent: current?.coveragePercent ?? (coverageComplete ? 100 : null),
         },
-        title: triggered ? `${newlyDisapproved.length} product(s) newly disapproved` : '',
+        title: triggered ? `${totalCount} product(s) newly disapproved — ${summary}` : '',
         description: triggered
-          ? `Google Merchant Center disapproved ${newlyDisapproved.length} product(s) that were previously approved (or new this sync). Disapproved products don't show in Shopping ads or free listings.`
+          ? `Google Merchant Center disapproved products by destination: ${summary}.` +
+            (issueCodes.size > 0 ? ` Issue type(s): ${[...issueCodes].join(', ')}.` : '') +
+            ` Only Shopping Ads and Free Listings disapprovals stop a product appearing as a shopping result — Display, Demand Gen, Video/YouTube, and Discover disapprovals restrict those surfaces only.${coverageNote}`
           : '',
       };
     },
@@ -2521,6 +2579,14 @@ export const rules: SignalRule[] = [
       const curr = current?.totalProductCount ?? 0;
       const prev = previous?.totalProductCount ?? 0;
       if (prev === 0) return { triggered: false, confidence: 0, data: {}, title: '', description: '' };
+
+      // Issue #42: a pagination safety-ceiling cutoff can look exactly like
+      // a shrinking catalogue even though nothing actually changed — never
+      // claim a "product count drop" when either snapshot's scan was
+      // incomplete (degraded coverage blocks "full account" comparisons).
+      if (current?.coverageComplete === false || previous?.coverageComplete === false) {
+        return { triggered: false, confidence: 0, data: { coverageComplete: false }, title: '', description: '' };
+      }
 
       const dropPct = ((prev - curr) / prev) * 100;
       const triggered = dropPct >= 20;
