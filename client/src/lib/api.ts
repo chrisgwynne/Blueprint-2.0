@@ -683,6 +683,8 @@ export const getOperatingPolicy = (businessId: string) => get(`/operating-polici
 export const getOperatingPolicyVersion = (businessId: string, version: number) => get(`/operating-policies/${businessId}/versions/${version}`)
 export const previewOperatingPolicy = (businessId: string, patch: unknown, effectiveAt?: string | null) =>
   post(`/operating-policies/${businessId}/preview`, { patch, effective_at: effectiveAt ?? null })
+export const backtestOperatingPolicy = (businessId: string, patch: unknown, days?: number) =>
+  post(`/operating-policies/${businessId}/backtest`, { patch, days })
 export const saveOperatingPolicy = (
   businessId: string,
   body: { patch: unknown; effective_at?: string | null; change_reason?: string | null; base_version?: number | null },

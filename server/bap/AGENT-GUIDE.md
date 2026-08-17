@@ -179,6 +179,7 @@ GET  /api/bap/v1/provider-preflight                          - provider/model pr
 GET  /api/bap/v1/businesses/:id/operating-policy                    — effective policy + version history
 GET  /api/bap/v1/businesses/:id/operating-policy/versions/:version  — one historical version
 GET  /api/bap/v1/businesses/:id/operating-policy/history             — audit trail of policy changes
+POST /api/bap/v1/businesses/:id/operating-policy/backtest            — replay recent history against a candidate patch
 ```
 Read-only by design — there is no BAP write path to a policy version.
 This is the actual rule set your proposals are judged against: auto-approve
@@ -186,6 +187,24 @@ confidence ceiling, thresholds, `always_require_human_action_types`,
 autonomy caps and dry-run state. Worth checking before proposing something
 you expect to auto-execute, and worth citing if you need to explain why
 something needed a human.
+
+**Backtest** answers a different question than the effective document does:
+"if this candidate patch had been the rule for the last N days, which of the
+tasks that actually got auto-approved would now need a human, and which of
+the ones that actually needed a human would now sail through?" POST
+`{"patch": {...same shape as the policy document...}, "days": 30}` (days
+defaults to 30, capped at 90) and you get back `would_now_require_review` and
+`would_now_auto_approve` — each with a count, a breakdown by `action_type`
+and `risk_tier`, and the actual `task_ids` as evidence, never a bare number.
+`evidence` carries every replayed task with its actual outcome and both
+policies' verdicts, so you can cite the specific record, not just the total.
+An empty window (`empty_window: true`) means nothing was tested, not that the
+candidate is safe — the response says so explicitly rather than implying
+confidence it hasn't earned. It requires **both** `operating_policies:read`
+and `tasks:read` — the evidence is built from real task records (ids,
+titles, action types), which is `tasks:read`'s data, not just the policy
+document. Fully read-only: no task, no policy version and no decision is
+ever touched by running one.
 
 ### Receipts (2026-08)
 ```

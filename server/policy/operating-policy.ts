@@ -833,7 +833,7 @@ export interface PolicyScopeRef {
   key: string;
 }
 
-function assertScopeExists(ref: PolicyScopeRef): void {
+export function assertScopeExists(ref: PolicyScopeRef): void {
   if (ref.scope === 'business') {
     const row = db.prepare('SELECT id FROM businesses WHERE id = ?').get(ref.key);
     if (!row) throw new Error(`Business '${ref.key}' not found.`);
@@ -1499,55 +1499,57 @@ export interface AutonomyDecision {
   policy: ResolvedOperatingPolicy;
 }
 
-/**
- * May `approvedBy` approve this task autonomously right now? Human
- * dashboard approvals are never gated here — the policy governs what
- * Blueprint does on its own, not what a person chooses to do.
- */
-export function evaluateAutonomyGate(input: {
-  businessId: string;
-  approvedBy: string;
+export interface AutonomyGateInput {
   actionType?: string | null;
   tier?: ApprovalTier | null;
   /** Connector types the action needs, from the Typed Action Registry. */
   requiredConnectorTypes?: string[];
-}): AutonomyDecision {
-  const policy = resolveOperatingPolicy(input.businessId);
-  const doc = policy.document;
-  const isHuman = input.approvedBy.startsWith('dashboard:');
-  const cite = `(effective ${policy.citation})`;
+}
 
-  if (isHuman) return { allowed: true, code: null, reason: null, policy };
-
+/**
+ * The autonomy-gate branches, over an explicit document rather than a
+ * resolved business scope. Factored out of evaluateAutonomyGate() so a
+ * hypothetical document — a policy backtest replaying history against a
+ * draft patch (see policy-backtest.ts) — is evaluated through EXACTLY these
+ * branches, never a parallel reimplementation that could silently drift
+ * from what approveTask() actually enforces. evaluateAutonomyGate() below
+ * is now a thin wrapper: resolve the real policy, handle the human bypass,
+ * delegate here.
+ */
+export function autonomyDecisionForDocument(
+  doc: OperatingPolicyDocument,
+  cite: string,
+  input: AutonomyGateInput,
+): { allowed: boolean; code: string | null; reason: string | null } {
   if (doc.autonomy.allow_autonomous_execution === false) {
     return {
-      allowed: false, code: 'autonomy_disabled', policy,
+      allowed: false, code: 'autonomy_disabled',
       reason: `This business's operating policy has autonomy.allow_autonomous_execution set to false, so nothing may be approved without a human. A human can still approve this task via the dashboard. ${cite}`,
     };
   }
   if (doc.autonomy.dry_run === true) {
     return {
-      allowed: false, code: 'autonomy_dry_run', policy,
+      allowed: false, code: 'autonomy_dry_run',
       reason: `This business's operating policy is in dry-run mode (autonomy.dry_run = true): proposals are evaluated and recorded but nothing is approved autonomously. A human can still approve this task via the dashboard. ${cite}`,
     };
   }
   if (input.actionType && doc.approvals.always_require_human_action_types.includes(input.actionType)) {
     return {
-      allowed: false, code: 'action_type_requires_human', policy,
+      allowed: false, code: 'action_type_requires_human',
       reason: `Action type '${input.actionType}' is listed in approvals.always_require_human_action_types, so it always needs an explicit human approval. ${cite}`,
     };
   }
   if (input.tier && doc.approvals.auto_approve_max_tier !== null
       && tierRank(input.tier) > tierRank(doc.approvals.auto_approve_max_tier)) {
     return {
-      allowed: false, code: 'tier_above_auto_approve_ceiling', policy,
+      allowed: false, code: 'tier_above_auto_approve_ceiling',
       reason: `This task's approval tier is '${input.tier}', above this business's approvals.auto_approve_max_tier of '${doc.approvals.auto_approve_max_tier}'. A human must approve it. ${cite}`,
     };
   }
   const blocked = (input.requiredConnectorTypes ?? []).filter((t) => doc.connectors.blocked_connector_types.includes(t));
   if (blocked.length > 0) {
     return {
-      allowed: false, code: 'connector_blocked_by_policy', policy,
+      allowed: false, code: 'connector_blocked_by_policy',
       reason: `This action needs connector type(s) ${blocked.map((t) => `'${t}'`).join(', ')}, which this business's operating policy lists in connectors.blocked_connector_types. ${cite}`,
     };
   }
@@ -1556,12 +1558,30 @@ export function evaluateAutonomyGate(input: {
     const notAllowed = (input.requiredConnectorTypes ?? []).filter((t) => !allowList.includes(t));
     if (notAllowed.length > 0) {
       return {
-        allowed: false, code: 'connector_not_in_allow_list', policy,
+        allowed: false, code: 'connector_not_in_allow_list',
         reason: `This action needs connector type(s) ${notAllowed.map((t) => `'${t}'`).join(', ')}, which are outside this business's connectors.allowed_connector_types (${allowList.join(', ')}). ${cite}`,
       };
     }
   }
-  return { allowed: true, code: null, reason: null, policy };
+  return { allowed: true, code: null, reason: null };
+}
+
+/**
+ * May `approvedBy` approve this task autonomously right now? Human
+ * dashboard approvals are never gated here — the policy governs what
+ * Blueprint does on its own, not what a person chooses to do.
+ */
+export function evaluateAutonomyGate(input: AutonomyGateInput & {
+  businessId: string;
+  approvedBy: string;
+}): AutonomyDecision {
+  const policy = resolveOperatingPolicy(input.businessId);
+  const isHuman = input.approvedBy.startsWith('dashboard:');
+  if (isHuman) return { allowed: true, code: null, reason: null, policy };
+
+  const cite = `(effective ${policy.citation})`;
+  const decision = autonomyDecisionForDocument(policy.document, cite, input);
+  return { ...decision, policy };
 }
 
 /**
