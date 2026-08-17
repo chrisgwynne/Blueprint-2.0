@@ -30,6 +30,7 @@ const Opportunities  = lazy(() => import('./pages/Opportunities.tsx'))
 const Decisions      = lazy(() => import('./pages/Decisions.tsx'))
 const DecisionCentre = lazy(() => import('./pages/DecisionCentre.tsx'))
 const ExecutiveCommandCentre = lazy(() => import('./pages/ExecutiveCommandCentre.tsx'))
+const PortfolioView  = lazy(() => import('./pages/PortfolioView.tsx'))
 const Recommendations = lazy(() => import('./pages/Recommendations.tsx'))
 const Comparison     = lazy(() => import('./pages/Comparison.tsx'))
 const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
@@ -183,6 +184,7 @@ function App() {
           <Route path="timeline" element={<Timeline />} />
           <Route path="opportunities" element={<Opportunities />} />
           <Route path="command-centre" element={<ExecutiveCommandCentre />} />
+          <Route path="portfolio" element={<PortfolioView />} />
           <Route path="decision-centre" element={<DecisionCentre />} />
           <Route path="decisions" element={<Decisions />} />
           <Route path="recommendations" element={<Recommendations />} />

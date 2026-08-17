@@ -1809,6 +1809,63 @@ for (const sql of DIGEST_WATERMARK_MIGRATIONS) {
   }
 }
 
+// ─── Reporting portfolios (#71) ──────────────────────────────────────────────
+//
+// Deliberately NOT the same table as operating_policy_portfolios (#68), and
+// the reason is a constraint, not a preference. A policy portfolio must
+// PARTITION businesses — upsertPolicyPortfolio() rejects overlap, because a
+// business inheriting thresholds from two portfolios has no defined answer
+// to "which threshold wins". A reporting portfolio has the opposite
+// requirement: the same shop belongs in "UK", in "Ecommerce" and in "Q3
+// turnaround" at once, and forcing those to partition would make the view
+// useless. One table cannot hold both rules, so there are two, and #68's
+// remains the only one policy inheritance ever reads.
+//
+// Membership lives in its own row rather than a JSON array (as #68 uses)
+// because membership CHANGES are first-class here: an aggregate over a
+// 90-day window whose portfolio gained a business on day 80 is not a clean
+// comparison, and portfolio_membership_events is what lets the view say so
+// instead of quietly presenting it as one.
+const PORTFOLIO_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS portfolios (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS portfolio_members (
+    portfolio_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (portfolio_id, business_id)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_portfolio_members_business ON portfolio_members(business_id)`,
+  // Append-only. A removal is a row, never a delete, so "which businesses
+  // were in this portfolio when that comparison was run" stays answerable.
+  `CREATE TABLE IF NOT EXISTS portfolio_membership_events (
+    id TEXT PRIMARY KEY,
+    portfolio_id TEXT NOT NULL,
+    business_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('added','removed')),
+    actor TEXT NOT NULL,
+    reason TEXT,
+    occurred_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_portfolio_membership_events_portfolio
+     ON portfolio_membership_events(portfolio_id, occurred_at)`,
+];
+for (const sql of PORTFOLIO_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] portfolio migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {

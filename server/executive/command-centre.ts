@@ -192,7 +192,12 @@ export function section<T>(
 
 // ─── Evidence links ──────────────────────────────────────────────────────────
 
-export type EvidenceKind = 'decision' | 'task' | 'receipt' | 'connector' | 'roi_report' | 'outcome';
+export type EvidenceKind =
+  | 'decision' | 'task' | 'receipt' | 'connector' | 'roi_report' | 'outcome'
+  // Added by #71's portfolio comparison, which drills into the same
+  // business-scoped surfaces from a different framing. Kept in this one
+  // builder so there is a single opinion about which route owns which record.
+  | 'goal';
 
 /**
  * A pointer back to the record a summary line was derived from. `id` is
@@ -222,7 +227,8 @@ export function evidenceLink(
         : kind === 'connector' ? `/connectors?business=${b}&connector=${i}`
           : kind === 'roi_report' ? `/roi?business=${b}`
             : kind === 'outcome' ? `/outcomes?business=${b}&task=${i}`
-              : `/tasks?business=${b}&task=${i}`;
+              : kind === 'goal' ? `/goals?business=${b}&goal=${i}`
+                : `/tasks?business=${b}&task=${i}`;
   return { kind, id, business_id: businessId, href, label };
 }
 

@@ -42,6 +42,30 @@ const DIRECT_REVENUE_METRICS = new Set([
   'klaviyo.attributed_revenue_30d',
 ]);
 
+/**
+ * How a currency figure for a metric was arrived at.
+ *
+ *   measured_revenue  the metric IS money that was actually observed
+ *                     (DIRECT_REVENUE_METRICS above) — one dollar of change
+ *                     is one dollar of value, HIGH confidence.
+ *   estimated_proxy   the metric is not money, and a dollar figure was
+ *                     derived from it via AOV/traffic baselines or industry
+ *                     benchmark coefficients — MEDIUM/LOW confidence.
+ *
+ * Exported because a currency total is only additive or rankable against
+ * another one derived the SAME way. A shop's measured revenue delta and a
+ * service business's benchmark-derived lead value are both "$/month" and
+ * are not the same kind of number; anything comparing businesses (see
+ * server/portfolio/portfolio-comparison.ts, #71) must be able to tell them
+ * apart rather than summing them. Kept here because this module owns the
+ * knowledge of which metrics are money.
+ */
+export type ValuationBasis = 'measured_revenue' | 'estimated_proxy';
+
+export function valuationBasisForMetric(metricName: string | null | undefined): ValuationBasis {
+  return metricName && DIRECT_REVENUE_METRICS.has(metricName) ? 'measured_revenue' : 'estimated_proxy';
+}
+
 export interface ValueEstimate {
   estimated_usd_per_month: number | null;
   confidence: 'high' | 'medium' | 'low' | 'unknown';

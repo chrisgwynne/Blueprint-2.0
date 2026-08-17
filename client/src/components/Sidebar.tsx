@@ -33,7 +33,7 @@ import {
   Store,
   type LucideIcon,
 } from 'lucide-react'
-import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck, ScrollText, ReceiptText, Gavel, Inbox, Compass } from 'lucide-react'
+import { MessageSquare, Target, Workflow, FolderOpen, Clock, Sparkles, BookMarked, AlertTriangle, PiggyBank, Lightbulb, History, ListChecks, Gauge, Share2, ShieldCheck, ScrollText, ReceiptText, Gavel, Inbox, Compass, Scale } from 'lucide-react'
 import clsx from 'clsx'
 import useStore from '../lib/store.js'
 import { logout, createBusiness, getBusinesses, getConnectors, getSystemHealth, getProjects } from '../lib/api.js'
@@ -90,6 +90,7 @@ interface NavItemConfig {
 const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Dashboard',     to: '/',           icon: LayoutDashboard, end: true },
   { label: 'Command Centre', to: '/command-centre', icon: Compass },
+  { label: 'Portfolio',     to: '/portfolio',  icon: Scale },
   { label: 'While You Were Away', to: '/digest', icon: Inbox },
   { label: 'Signals',       to: '/signals',    icon: Radio,           badge: 'openSignalCount' },
   { label: 'Tasks',         to: '/tasks',      icon: CheckSquare,     badge: 'pendingTaskCount' },

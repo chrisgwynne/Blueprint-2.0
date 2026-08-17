@@ -640,3 +640,30 @@ export const savePolicyPortfolio = (body: { id?: string; name: string; business_
 // re-derives the item's policy standing at the moment of the decision.
 export const getCommandCentre = (params?: Params) => get('/command-centre', params)
 export const getCommandCentreScope = () => get('/command-centre/scope')
+
+// ============================================
+// Portfolios and portfolio comparison (#71)
+// ============================================
+// A saved, named grouping of businesses, compared metric-by-metric. Distinct
+// from the command centre above (which triages decisions per business) and
+// from #68's policy portfolios (which must partition businesses, where these
+// may overlap freely). The writes here record membership only — grouping a
+// business grants no access to it and takes no action on it.
+export const getPortfolios = () => get('/portfolios')
+export const getPortfolio = (id: string) => get(`/portfolios/${id}`)
+export const createPortfolio = (body: { name: string; description?: string | null; business_ids: string[] }) =>
+  post('/portfolios', body)
+export const updatePortfolio = (id: string, body: { name?: string; description?: string | null }) =>
+  patch(`/portfolios/${id}`, body)
+export const deletePortfolio = (id: string) => del(`/portfolios/${id}`)
+export const addPortfolioMembers = (id: string, businessIds: string[], reason?: string) =>
+  post(`/portfolios/${id}/members`, { business_ids: businessIds, reason: reason ?? null })
+// DELETE carries no body through the shared helper, so ids travel as a query
+// param — the route accepts both forms.
+export const removePortfolioMembers = (id: string, businessIds: string[]) =>
+  del(`/portfolios/${id}/members`, { business_ids: businessIds.join(',') })
+export const getPortfolioHistory = (id: string, params?: Params) => get(`/portfolios/${id}/history`, params)
+export const getPortfolioComparison = (id: string, params?: Params) =>
+  get(`/portfolios/${id}/comparison`, params)
+export const importPolicyPortfolio = (policyPortfolioId: string, name?: string) =>
+  post('/portfolios/import-policy-portfolio', { policy_portfolio_id: policyPortfolioId, name })

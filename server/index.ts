@@ -229,6 +229,11 @@ const mountRoutes = async () => {
   // decision queue, receipts, ROI and connector health that the per-business
   // surfaces above already own, and computes nothing of its own.
   const { default: commandCentreRoutes } = await import('./routes/command-centre.js');
+  // #71 — saved portfolios and the comparative cross-business view over
+  // them. Distinct from the command centre above: that one triages
+  // decisions per business, this one compares businesses per metric and
+  // refuses to rank figures that were derived differently.
+  const { default: portfolioRoutes } = await import('./routes/portfolios.js');
   const { default: graphRoutes } = await import('./routes/graph.js');
   const { default: reviewRoutes } = await import('./routes/review.js');
   // Phase 2-INT — Autonomous Intelligence Foundation: Business Profile,
@@ -280,6 +285,7 @@ const mountRoutes = async () => {
   app.use('/api/decisions', decisionsRoutes);
   app.use('/api/decision-queue', decisionQueueRoutes);
   app.use('/api/command-centre', commandCentreRoutes);
+  app.use('/api/portfolios', portfolioRoutes);
   app.use('/api/graph', graphRoutes);
   app.use('/api/review', reviewRoutes);
   app.use('/api/intelligence', intelligenceRoutes);
