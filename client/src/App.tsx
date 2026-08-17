@@ -28,6 +28,7 @@ const Settings       = lazy(() => import('./pages/Settings.tsx'))
 const Opportunities  = lazy(() => import('./pages/Opportunities.tsx'))
 const Decisions      = lazy(() => import('./pages/Decisions.tsx'))
 const Recommendations = lazy(() => import('./pages/Recommendations.tsx'))
+const Comparison     = lazy(() => import('./pages/Comparison.tsx'))
 const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
 const RelationshipGraph = lazy(() => import('./pages/RelationshipGraph.tsx'))
 const LoginPage      = lazy(() => import('./pages/LoginPage.tsx'))
@@ -179,6 +180,7 @@ function App() {
           <Route path="opportunities" element={<Opportunities />} />
           <Route path="decisions" element={<Decisions />} />
           <Route path="recommendations" element={<Recommendations />} />
+          <Route path="comparison" element={<Comparison />} />
           <Route path="calibration" element={<Calibration />} />
           <Route path="graph" element={<RelationshipGraph />} />
           <Route path="trust" element={<TrustOps />} />

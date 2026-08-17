@@ -208,6 +208,7 @@ const mountRoutes = async () => {
   const { default: roiRoutes } = await import('./routes/roi.js');
   const { default: brainRoutes } = await import('./routes/brain.js');
   const { default: scenariosRoutes } = await import('./routes/scenarios.js');
+  const { default: comparisonsRoutes } = await import('./routes/comparisons.js');
   const { default: conflictsRoutes } = await import('./routes/conflicts.js');
   const { default: retrospectivesRoutes } = await import('./routes/retrospectives.js');
   const { default: investigationsRoutes } = await import('./routes/investigations.js');
@@ -259,6 +260,7 @@ const mountRoutes = async () => {
   app.use('/api/roi', roiRoutes);
   app.use('/api/brain', brainRoutes);
   app.use('/api/scenarios', scenariosRoutes);
+  app.use('/api/comparisons', comparisonsRoutes);
   app.use('/api/conflicts', conflictsRoutes);
   app.use('/api/retrospectives', retrospectivesRoutes);
   app.use('/api/investigations', investigationsRoutes);

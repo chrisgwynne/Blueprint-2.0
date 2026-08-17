@@ -1,5 +1,6 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import { ListChecks, AlertTriangle } from 'lucide-react'
+import React, { useEffect, useState, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { ListChecks, AlertTriangle, Columns3 } from 'lucide-react'
 import useStore from '../lib/store.js'
 import { getRecommendations } from '../lib/api.js'
 
@@ -38,12 +39,23 @@ interface Excluded {
 const SOURCE_LABELS: Record<string, string> = { task: 'Task', opportunity: 'Opportunity', strategy: 'Strategy' }
 const SOURCE_COLORS: Record<string, string> = { task: 'var(--bp-blue)', opportunity: 'var(--bp-purple)', strategy: 'var(--bp-green)' }
 
-function RecommendationCard({ rec }: { rec: Recommendation }) {
+function RecommendationCard({ rec, selected, onToggleSelect }: {
+  rec: Recommendation
+  selected: boolean
+  onToggleSelect: (rec: Recommendation) => void
+}) {
   const [expanded, setExpanded] = useState(false)
   const color = SOURCE_COLORS[rec.source_type] ?? 'var(--bp-blue)'
   return (
     <div className="bp-card" style={{ padding: 16, marginBottom: 10, borderLeft: `3px solid ${color}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+        {/* Selecting for comparison takes no action — it only builds a set. */}
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(rec)}
+          title="Select for side-by-side comparison. Selecting takes no action."
+        />
         <span className="bp-pill" style={{ background: `${color}20`, color, fontSize: 9 }}>{SOURCE_LABELS[rec.source_type] ?? rec.source_type}</span>
         {rec.has_open_conflict && (
           <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-amber)' }}>
@@ -101,9 +113,13 @@ function RecommendationCard({ rec }: { rec: Recommendation }) {
 
 export default function Recommendations() {
   const currentBusiness = useStore((s) => s.currentBusiness)
+  const navigate = useNavigate()
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [excluded, setExcluded] = useState<Excluded[]>([])
   const [depth, setDepth] = useState('')
+  // Comparison selection (issue #66). Held as `kind:id` refs so the
+  // comparison page can resolve each candidate against the right table.
+  const [compareRefs, setCompareRefs] = useState<string[]>([])
 
   const load = useCallback(async () => {
     if (!currentBusiness) return
@@ -116,6 +132,16 @@ export default function Recommendations() {
   }, [currentBusiness])
 
   useEffect(() => { load() }, [load])
+
+  // A comparison is only valid within one business scope, so switching
+  // business clears the selection rather than carrying it across.
+  useEffect(() => { setCompareRefs([]) }, [currentBusiness?.id])
+
+  const selectedSet = useMemo(() => new Set(compareRefs), [compareRefs])
+  const toggleCompare = useCallback((rec: Recommendation) => {
+    const ref = `${rec.source_type}:${rec.id}`
+    setCompareRefs((prev) => (prev.includes(ref) ? prev.filter((r) => r !== ref) : [...prev, ref]))
+  }, [])
 
   if (!currentBusiness) {
     return <div style={{ padding: 40, color: 'var(--bp-text-3)' }}>Select a business.</div>
@@ -134,12 +160,38 @@ export default function Recommendations() {
         {depth && <p style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)', marginTop: 4 }}>{depth}</p>}
       </div>
 
+      {/* ─── Comparison mode entry point (issue #66) ─────────────────────
+          Tick two or more and open them side by side. Nothing is
+          approved or executed by comparing. */}
+      <div className="bp-card" style={{ padding: 12, marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <Columns3 size={14} style={{ color: 'var(--bp-blue)' }} />
+        <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text-2)' }}>
+          Tick two or more recommendations to compare them side by side against the same policy and evidence.
+          Comparing takes no action.
+        </span>
+        <button
+          className="bp-btn bp-btn-primary"
+          style={{ fontSize: 10, marginLeft: 'auto' }}
+          disabled={compareRefs.length < 2}
+          onClick={() => navigate(`/comparison?ids=${encodeURIComponent(compareRefs.join(','))}`)}
+        >
+          Compare {compareRefs.length} selected
+        </button>
+      </div>
+
       {recommendations.length === 0 ? (
         <div style={{ padding: 40, textAlign: 'center', color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 12 }}>
           Nothing actionable right now — no proposed tasks, pending opportunities, or candidate strategies.
         </div>
       ) : (
-        recommendations.map((r) => <RecommendationCard key={r.id} rec={r} />)
+        recommendations.map((r) => (
+          <RecommendationCard
+            key={r.id}
+            rec={r}
+            selected={selectedSet.has(`${r.source_type}:${r.id}`)}
+            onToggleSelect={toggleCompare}
+          />
+        ))
       )}
 
       {excluded.length > 0 && (
