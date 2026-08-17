@@ -223,6 +223,11 @@ const mountRoutes = async () => {
   // the read-only "why did we decide this" history; this is what still needs
   // a human, derived from tasks and classified by the #68 operating policy.
   const { default: decisionQueueRoutes } = await import('./routes/decision-queue.js');
+  // Executive command centre (#59) — the cross-business decision view. The
+  // one deliberately multi-business read in the dashboard API; it joins the
+  // decision queue, receipts, ROI and connector health that the per-business
+  // surfaces above already own, and computes nothing of its own.
+  const { default: commandCentreRoutes } = await import('./routes/command-centre.js');
   const { default: graphRoutes } = await import('./routes/graph.js');
   const { default: reviewRoutes } = await import('./routes/review.js');
   // Phase 2-INT — Autonomous Intelligence Foundation: Business Profile,
@@ -272,6 +277,7 @@ const mountRoutes = async () => {
   app.use('/api/security', securityRoutes);
   app.use('/api/decisions', decisionsRoutes);
   app.use('/api/decision-queue', decisionQueueRoutes);
+  app.use('/api/command-centre', commandCentreRoutes);
   app.use('/api/graph', graphRoutes);
   app.use('/api/review', reviewRoutes);
   app.use('/api/intelligence', intelligenceRoutes);
