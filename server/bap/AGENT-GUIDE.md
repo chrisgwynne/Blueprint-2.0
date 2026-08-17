@@ -8,7 +8,7 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). Ten more dashboard features (Decision
 > Centre, Comparisons, Command Centre, Portfolios, Digest, Explanations,
-> Audit Search, Retrospectives, Playbooks, Simulation) exist but have no
+> Audit Search, Retrospectives, Playbooks) exist but have no
 > BAP surface yet — see issues #77–#86.
 
 ---
@@ -192,6 +192,30 @@ verification evidence where available. Use this instead of polling task
 status if you need to know something genuinely landed on the other end, not
 just that Blueprint attempted it.
 
+### Simulation (2026-08)
+```
+POST /api/bap/v1/businesses/:id/simulate/task-approval  — preview approving a task, with zero side effects
+GET  /api/bap/v1/simulations/:id                        — read back a preview + live currency check
+```
+Genuinely zero side effects, not merely read-only by convention: the
+preview runs inside #67's simulation guard, which makes every real DB
+write throw and makes the actual approve function refuse to run at all
+beneath it. It returns the same envelope the dashboard's preview mode
+shows a human — planned changes, skipped work with reasons, data
+freshness, assumptions, and anything the preview genuinely can't tell you
+(it can show what Blueprint would attempt, never whether an external call
+would succeed) — evaluated as if THIS agent's own key had called
+`PATCH /tasks/:id`, so the answer reflects the autonomy limits and daily
+cap that call would actually face, never a human's exemption from them.
+Requires `tasks:approve` in addition to `simulations:read` — a preview
+cannot be used to probe an approval this agent isn't otherwise permitted
+to make. A preview expires (default 15 minutes); `GET /simulations/:id`
+always tells you whether it's still current, expired, drifted, or already
+consumed, rather than letting a stale result look current. There is no
+execute-from-preview route here — `PATCH /tasks/:id` already re-validates
+every gate against live state on every call, so it was never built to run
+off a stale snapshot in the first place.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -273,6 +297,7 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `simulations:read` | Preview a task approval (zero side effects) and read back previews |
 
 ---
 
