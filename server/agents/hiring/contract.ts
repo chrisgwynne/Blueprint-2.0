@@ -17,6 +17,7 @@
 
 import { CONTRACT_VERSION, getAnalysisRun, getCoordination, listAnalysisRuns } from './store.js';
 import { resolveHiringPolicy } from './policy.js';
+import { evaluateRetention, type RetentionAssessment } from './retention.js';
 import type { HiringAnalysisRunRecord } from './types.js';
 
 export { CONTRACT_VERSION };
@@ -212,6 +213,8 @@ export interface HiringStatusContract {
   };
   latest: HiringAnalysisContract | null;
   recent: HiringAnalysisContract[];
+  /** Advisory retain/monitor/downgrade/retire verdicts per installed agent (#56). */
+  retention: RetentionAssessment[];
 }
 
 /** The business-scoped status/diagnostics read-back (#53 read, #54 dashboard). */
@@ -244,5 +247,6 @@ export function getHiringStatus(businessId: string, recentLimit = 10): HiringSta
     },
     latest: recent[0] ?? null,
     recent,
+    retention: evaluateRetention(businessId),
   };
 }
