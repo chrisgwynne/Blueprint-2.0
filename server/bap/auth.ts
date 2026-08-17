@@ -128,18 +128,30 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // `decisions`, and no BAP route writes decision memory (see
   // bap-comparisons.ts's docstring for the full reasoning).
   'comparisons:read',
-  // Issue #79 — #59's cross-business executive summary over BAP. The only
-  // BAP grant that is not resolved against a `:businessId` in the path: the
-  // route spans businesses, so bap-command-centre.ts checks every id the
-  // caller names against `business_access` itself and scopes the engine to
-  // that grant. Deliberately separate from the four grants covering the
-  // surfaces it summarises (decision_queue:read, receipts:read,
+  // Issue #79 — #59's cross-business executive summary over BAP. One of two
+  // BAP grants not resolved against a `:businessId` in the path (see #80
+  // below): the route spans businesses, so bap-command-centre.ts checks
+  // every id the caller names against `business_access` itself and scopes
+  // the engine to that grant. Deliberately separate from the four grants
+  // covering the surfaces it summarises (decision_queue:read, receipts:read,
   // outcomes:read, connectors:read) — this is a bounded, ranked overview,
   // not the full records, so an operator can hand out the triage view
   // without handing out every receipt body. Read-only: #59 has no write
   // path, and approving from a summary card would skip the policy re-check
   // the decision queue performs at the moment of decision.
   'command_centre:read',
+  // Issue #80 — #71's saved multi-business portfolios and their comparative
+  // view. NOT #68's `operating_policy_portfolios`, which are a policy
+  // grouping that must partition businesses and are read through
+  // `operating_policies:read` as part of the resolved policy; these are
+  // general-purpose reporting groupings with deliberately overlapping
+  // membership (see bap-portfolios.ts's docstring). Read-only: curating
+  // which businesses get compared together is an operator's editorial act,
+  // so there is no `portfolios:write` counterpart. The paths carry no
+  // :businessId — a portfolio spans businesses — so the route applies the
+  // agent's `business_access` itself rather than relying on requirePermission
+  // to resolve one from the path.
+  'portfolios:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

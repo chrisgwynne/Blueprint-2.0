@@ -81,6 +81,7 @@ import bapReceiptsRouter from './bap-receipts.js';
 import bapDecisionQueueRouter from './bap-decision-queue.js';
 import bapComparisonsRouter from './bap-comparisons.js';
 import bapCommandCentreRouter from './bap-command-centre.js';
+import bapPortfoliosRouter from './bap-portfolios.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -328,11 +329,16 @@ router.use(bapReceiptsRouter);
 router.use(bapDecisionQueueRouter);
 // Issue #78 — recommendation comparison mode (#66's engine), read-only.
 router.use(bapComparisonsRouter);
-// Issue #79 — #59's cross-business executive command centre, read-only. The
-// only sub-router here whose paths carry no `:businessId`; it spans
+// Issue #79 — #59's cross-business executive command centre, read-only. One
+// of two sub-routers here whose paths carry no `:businessId`; it spans
 // businesses by design and enforces the agent's business_access grant
 // itself rather than through requirePermission's path check.
 router.use(bapCommandCentreRouter);
+// Issue #80 — #71's saved multi-business portfolios and their comparative
+// view, read-only. The other BAP router whose paths carry no :businessId (a
+// portfolio spans businesses), so it applies the agent's business_access
+// itself. Not #68's policy portfolios — see bap-portfolios.ts.
+router.use(bapPortfoliosRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

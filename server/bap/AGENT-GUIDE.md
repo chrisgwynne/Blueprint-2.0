@@ -6,11 +6,11 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode and the
-> Executive Command Centre now have read-only BAP surfaces too (#77, #78,
-> #79, below). Seven more dashboard features (Portfolios, Digest,
-> Explanations, Audit Search, Retrospectives, Playbooks, Simulation) exist
-> but have no BAP surface yet — see issues #80–#86.
+> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
+> Executive Command Centre, and multi-business Portfolios now have
+> read-only BAP surfaces too (#77–#80, below). Six more dashboard features
+> (Digest, Explanations, Audit Search, Retrospectives, Playbooks,
+> Simulation) exist but have no BAP surface yet — see issues #81–#86.
 
 ---
 
@@ -309,6 +309,67 @@ There is no write path. Approving from a summary card would skip the policy
 re-check the Decision Queue performs at the moment of decision, so it does
 not exist here for an agent any more than it does for a human.
 
+### Portfolios (2026-08)
+```
+GET /api/bap/v1/portfolios                  — portfolios containing a business you can read
+GET /api/bap/v1/portfolios/:id              — membership + membership-change history
+GET /api/bap/v1/portfolios/:id/comparison   — the per-metric comparative view
+```
+Read-only, permission `portfolios:read`. A portfolio is a saved, named
+grouping of businesses — "UK shops", "Q3 turnaround" — and membership
+**overlaps** on purpose: the same shop is in both of those at once. The
+comparison lays it out one row per **metric**, one cell per business, ranked,
+across goals, Blueprint spend, outcomes, risk and connector health. Use
+`?window_days=` (1–365, default 30) on the comparison and `?history_limit=`
+(0 omits it) on the detail.
+
+Note these paths carry no `:businessId` — a portfolio spans businesses by
+definition. Scoping comes from your `business_access` grant instead.
+
+**Read the honesty markings before you quote a number.** Every cell has a
+`state` of `known` / `unknown` / `not_comparable` with a citation or a reason:
+
+- `unknown` is **not zero.** It means Blueprint could not measure that, and it
+  is excluded from the row's aggregate with the omission named in
+  `aggregate.excluded`. A total that quietly skipped two businesses would read
+  as complete.
+- `not_comparable` means the figure genuinely cannot be ranked across *these*
+  businesses, because it is derived differently for each — one business's
+  "$/month" is directly observed revenue, another's is a benchmark
+  coefficient applied to a proxy metric. Both are currency; they are not the
+  same kind of number. Such a row comes back with `ranking: null` and an
+  aggregate whose own field is `not_comparable`, so **there is no ranked
+  figure to read off** — the per-business cells are still there, and putting
+  them in an order yourself is exactly the fabrication this marking exists to
+  prevent. `coverage.not_comparable_metrics` lists every such row up front,
+  and `comparability_reason` explains each one.
+- `caveats` is a list of plain sentences meant to be read before acting, and
+  `membership_changes_in_window` is why: a business that joined the portfolio
+  partway through the window has been observed for less time than the others,
+  so its column is not like-for-like.
+
+If part of a portfolio is outside your `business_access`, you get the part you
+can read, never the rest — the inaccessible members' ids, names and every
+figure derived from them are withheld, and they contribute to no cell, rank,
+total or caveat. What you do get is an `access` block with
+`complete: false` and an `excluded_member_count`, so you can tell a partial
+portfolio from a whole one. Report it as partial. A portfolio in which you can
+read nothing at all is a `403`.
+
+There is no BAP path to create, rename, delete or change the membership of a
+portfolio. Which businesses get compared together is an operator's editorial
+choice about their own view, not something to reshape while being measured
+by it.
+
+> **Not to be confused with the operating-policy portfolios behind `GET
+> /businesses/:id/operating-policy` (`operating_policies:read`).** Those are a
+> different table with the opposite rule: they *partition* businesses — a
+> business can be in only one — because they exist to apply one operating
+> policy across several businesses, and policy inheritance has no answer to
+> "which of my two portfolios' thresholds wins". The portfolios in this
+> section are reporting groupings, they overlap freely, and they govern
+> nothing.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -393,6 +454,7 @@ const valid = crypto.timingSafeEqual(
 | `decision_queue:read` | Read the pending-decision review queue (not the decision-memory log — see above) |
 | `comparisons:read` | List comparable candidates, build a side-by-side comparison |
 | `command_centre:read` | Read the cross-business executive summary and your selectable scope |
+| `portfolios:read` | Read saved multi-business portfolios, their membership history and comparative view (not the operating-policy portfolios — see above) |
 
 ---
 
