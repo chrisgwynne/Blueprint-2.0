@@ -8,6 +8,9 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "bin": {
+    "blueprint": "./bin/blueprint.js"
+  },
   "workspaces": ["server", "client"],
   "scripts": {
     "setup": "bun scripts/setup.js",
