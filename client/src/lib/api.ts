@@ -684,3 +684,35 @@ export const getPortfolioComparison = (id: string, params?: Params) =>
   get(`/portfolios/${id}/comparison`, params)
 export const importPolicyPortfolio = (policyPortfolioId: string, name?: string) =>
   post('/portfolios/import-policy-portfolio', { policy_portfolio_id: policyPortfolioId, name })
+
+// ============================================
+// Natural-language audit/history search (issue #72)
+// ============================================
+//
+// Two layers on the server, and the response makes both visible:
+// `interpretation` says how the question became filters (and whether the
+// language model was even reachable), and `results` are real rows, each
+// carrying the table and primary key it came from. A `summary` of kind
+// 'grounded_narrative' is INFERRED and labelled as such; one of kind
+// 'withheld' means a narrative was produced and discarded because it could
+// not be traced back to the retrieved records.
+
+export interface AuditSearchFilters {
+  record_types?: string[]
+  statuses?: string[]
+  terms?: string[]
+  from?: string | null
+  to?: string | null
+}
+
+export const getAuditSearchVocabulary = (businessId: string) =>
+  get(`/audit-search/${businessId}/vocabulary`)
+
+export const runAuditSearch = (
+  businessId: string,
+  body: { query: string; filters?: AuditSearchFilters; limit?: number; summarise?: boolean },
+) => post(`/audit-search/${businessId}`, body)
+
+/** Resolve one citation ref (`decision#dec_1`) back to its record. */
+export const getAuditSearchRecord = (businessId: string, ref: string) =>
+  get(`/audit-search/${businessId}/record/${encodeURIComponent(ref)}`)
