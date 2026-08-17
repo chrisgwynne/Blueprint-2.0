@@ -17,6 +17,23 @@ const VERDICT_CONFIG: Record<string, { label: string; icon: string; color: strin
   pending:      { label: 'PENDING',     icon: '○',  color: 'var(--bp-blue)'  },
 }
 
+// Issue #63 — the four-state honesty taxonomy: activity (still in flight),
+// verified_action (confirmed done, nothing to measure), outcome_measured
+// (a real measurement exists, whatever its direction) and roi_not_measurable
+// (measurement window still open). Distinct from VERDICT_CONFIG above,
+// which only applies once an outcome has actually been measured.
+const TAXONOMY_CONFIG: Record<string, { label: string; color: string }> = {
+  activity:           { label: 'Activity',            color: 'var(--bp-text-3)' },
+  verified_action:    { label: 'Verified action',     color: 'var(--bp-cyan)'   },
+  outcome_measured:    { label: 'Outcome measured',    color: 'var(--bp-green)'  },
+  roi_not_measurable: { label: 'ROI not yet measurable', color: 'var(--bp-amber)' },
+}
+
+function fmtDate(iso: string | null | undefined) {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleDateString() } catch { return '—' }
+}
+
 const METRIC_OPTIONS = [
   { value: 'gsc.total_clicks', label: 'GSC Clicks' },
   { value: 'ga4.sessions', label: 'GA4 Sessions' },
@@ -39,6 +56,14 @@ interface OutcomeCheck {
   change_pct?: number
 }
 
+interface OutcomeCitation {
+  task_id: string
+  outcome_id: string | null
+  window_start: string | null
+  window_end: string | null
+  window_end_is_expected: boolean
+}
+
 interface OutcomeItem {
   task_id: string
   task_title: string
@@ -49,6 +74,9 @@ interface OutcomeItem {
   check_4w?: OutcomeCheck
   final_verdict?: string
   completed_at?: string
+  taxonomy_state?: string
+  taxonomy_reason?: string
+  citation?: OutcomeCitation
 }
 
 interface OutcomesResponse {
@@ -336,14 +364,27 @@ function OutcomesList({ outcomes }: OutcomesListProps) {
         const verdict = o.final_verdict ?? 'pending'
         const cfg = VERDICT_CONFIG[verdict] ?? VERDICT_CONFIG.pending
         const check = o.check_4w ?? o.check_2w
+        const taxCfg = o.taxonomy_state ? TAXONOMY_CONFIG[o.taxonomy_state] : null
+        const citation = o.citation
         return (
           <div key={o.task_id} className="bp-card" style={{ borderLeft: `3px solid ${cfg.color}` }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{
-                fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em',
-                color: cfg.color, textTransform: 'uppercase', fontWeight: 600,
-              }}>
-                {cfg.icon} {cfg.label}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{
+                  fontFamily: 'var(--bp-font-mono)', fontSize: 10, letterSpacing: '0.12em',
+                  color: cfg.color, textTransform: 'uppercase', fontWeight: 600,
+                }}>
+                  {cfg.icon} {cfg.label}
+                </div>
+                {taxCfg && (
+                  <span style={{
+                    fontFamily: 'var(--bp-font-mono)', fontSize: 9, letterSpacing: '0.06em',
+                    color: taxCfg.color, border: `1px solid ${taxCfg.color}`,
+                    borderRadius: 3, padding: '2px 6px', textTransform: 'uppercase',
+                  }} title={o.taxonomy_reason}>
+                    {taxCfg.label}
+                  </span>
+                )}
               </div>
               <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-3)' }}>
                 {fmtRel(o.completed_at)}
@@ -371,6 +412,18 @@ function OutcomesList({ outcomes }: OutcomesListProps) {
                     </span>
                   </div>
                 )}
+              </div>
+            )}
+            {citation && (
+              <div style={{
+                fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)',
+                marginTop: 8, paddingTop: 8, borderTop: '1px dashed var(--bp-border)',
+              }}>
+                Based on: task {citation.task_id.slice(0, 8)}
+                {citation.outcome_id ? ` · outcome ${citation.outcome_id.slice(0, 8)}` : ''}
+                {' · window '}
+                {fmtDate(citation.window_start)} → {fmtDate(citation.window_end)}
+                {citation.window_end_is_expected ? ' (expected)' : ''}
               </div>
             )}
           </div>

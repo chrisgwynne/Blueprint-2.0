@@ -17,6 +17,7 @@
 
 import db from '../db/db.js';
 import { estimateMonthlyValue } from './value-estimator.js';
+import { classifyOutcomeTaxonomy, emptyTaxonomyCounts, type TaxonomyResult } from '../tasks/outcome-taxonomy.js';
 
 const DEFAULT_WINDOW_DAYS = 90;
 
@@ -42,6 +43,9 @@ export interface AgentROIRow {
   top_win: any | null;
   biggest_miss: any | null;
   status: string;
+  /** Issue #63: honest activity/verified_action/outcome_measured/roi_not_measurable
+   *  breakdown across every task this agent proposed in the window. */
+  taxonomy_counts: Record<'activity' | 'verified_action' | 'outcome_measured' | 'roi_not_measurable', number>;
 }
 
 /**
@@ -114,6 +118,43 @@ export function computeAgentROI(agentId: string, businessId: string, opts: { win
     ? Math.round((improved / tasksWithOutcomes) * 1000) / 10
     : null;
 
+  // ─── Outcome taxonomy (issue #63) ─────────────────────────────────────────
+  // Every task this agent proposed in the window, labelled honestly —
+  // reused as the citation source for top_win / biggest_miss below.
+  const taxonomyTaskRows = db.prepare(`
+    SELECT id, status, action_type, target_metric, completed_at
+      FROM tasks WHERE business_id = ? AND proposed_by IN (?, ?) AND created_at >= ${sinceClause}
+  `).all(businessId, agentId, prefixedAgent) as Array<{ id: string; status: string; action_type: string | null; target_metric: string | null; completed_at: string | null }>;
+
+  const taxonomyCheckRows = db.prepare(`
+    SELECT o.id, o.task_id, o.weeks_after, o.verdict, o.check_date
+      FROM task_outcomes o JOIN tasks t ON t.id = o.task_id
+     WHERE t.business_id = ? AND t.proposed_by IN (?, ?) AND t.created_at >= ${sinceClause}
+     ORDER BY o.weeks_after ASC
+  `).all(businessId, agentId, prefixedAgent) as Array<{ id: string; task_id: string; weeks_after: number; verdict: string | null; check_date: string }>;
+
+  const taxonomyChecksByTask = new Map<string, typeof taxonomyCheckRows>();
+  for (const c of taxonomyCheckRows) {
+    const list = taxonomyChecksByTask.get(c.task_id) ?? [];
+    list.push(c);
+    taxonomyChecksByTask.set(c.task_id, list);
+  }
+
+  const taxonomyByTaskId = new Map<string, TaxonomyResult>();
+  const taxonomyCounts = emptyTaxonomyCounts();
+  for (const t of taxonomyTaskRows) {
+    const result = classifyOutcomeTaxonomy({
+      task_id: t.id,
+      task_status: t.status,
+      action_type: t.action_type,
+      target_metric: t.target_metric,
+      completed_at: t.completed_at,
+      checks: taxonomyChecksByTask.get(t.id) ?? [],
+    });
+    taxonomyCounts[result.state]++;
+    taxonomyByTaskId.set(t.id, result);
+  }
+
   // ─── Estimated monthly value ─────────────────────────────────────────────
   // Sum the estimator output for each improved outcome. Worsened outcomes
   // subtract (they genuinely reduce the agent's net value). Flat outcomes
@@ -141,6 +182,8 @@ export function computeAgentROI(agentId: string, businessId: string, opts: { win
           metric: o.target_metric,
           change_pct: o.change_pct,
           estimated_monthly_usd: Math.round(usd * 100) / 100,
+          taxonomy_state: taxonomyByTaskId.get(o.task_id)?.state ?? 'outcome_measured',
+          citation: taxonomyByTaskId.get(o.task_id)?.citation ?? null,
         };
       }
     } else if (o.verdict === 'worsened') {
@@ -153,6 +196,8 @@ export function computeAgentROI(agentId: string, businessId: string, opts: { win
           metric: o.target_metric,
           change_pct: o.change_pct,
           estimated_monthly_usd: Math.round(negative * 100) / 100,
+          taxonomy_state: taxonomyByTaskId.get(o.task_id)?.state ?? 'outcome_measured',
+          citation: taxonomyByTaskId.get(o.task_id)?.citation ?? null,
         };
       }
     }
@@ -217,6 +262,7 @@ export function computeAgentROI(agentId: string, businessId: string, opts: { win
     top_win: topWin,
     biggest_miss: biggestMiss,
     status,
+    taxonomy_counts: taxonomyCounts,
   };
 }
 

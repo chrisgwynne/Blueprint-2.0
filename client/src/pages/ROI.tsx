@@ -43,6 +43,31 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: string
   unknown:         { label: 'Unknown',    color: 'var(--bp-text-3)', icon: '?' },
 }
 
+interface Citation {
+  task_id: string
+  outcome_id: string | null
+  window_start: string | null
+  window_end: string | null
+  window_end_is_expected: boolean
+}
+
+interface AttributedItem {
+  task_id: string
+  task_title: string
+  metric_name: string
+  change_pct?: number | null
+  estimated_monthly_usd?: number | null
+  taxonomy_state?: string
+  citation?: Citation
+}
+
+interface TaxonomyCounts {
+  activity: number
+  verified_action: number
+  outcome_measured: number
+  roi_not_measurable: number
+}
+
 interface ROIReport {
   confidence_level: string
   days_since_install: number
@@ -51,8 +76,24 @@ interface ROIReport {
   attributed_value_usd_per_month: number
   attributed_decline_usd_per_month: number
   total_cost_usd: number
-  attributed_improvements?: unknown[]
-  attributed_declines?: unknown[]
+  attributed_improvements?: AttributedItem[]
+  attributed_declines?: AttributedItem[]
+  taxonomy?: {
+    counts: TaxonomyCounts
+    pending_measurement?: Array<{ task_id: string; state: string; reason: string; citation: Citation }>
+  }
+}
+
+const TAXONOMY_CONFIG: Record<string, { label: string; color: string }> = {
+  activity:            { label: 'Activity',              color: 'var(--bp-text-3)' },
+  verified_action:     { label: 'Verified action',       color: 'var(--bp-cyan)'   },
+  outcome_measured:    { label: 'Outcome measured',      color: 'var(--bp-green)'  },
+  roi_not_measurable:  { label: 'ROI not yet measurable', color: 'var(--bp-amber)' },
+}
+
+function fmtDate(iso: string | null | undefined) {
+  if (!iso) return '—'
+  try { return new Date(iso).toLocaleDateString() } catch { return '—' }
 }
 
 interface ROIAgent {
@@ -180,6 +221,20 @@ export default function ROIPage() {
       <Section title="Headline">
         <HeadlineCards report={report} />
       </Section>
+
+      {/* Section 1b — outcome taxonomy (issue #63): distinguishes activity,
+          verified action, measured outcome and ROI not yet measurable so
+          the headline numbers above can't be mistaken for more certainty
+          than the data supports. */}
+      {report.taxonomy && (
+        <Section title="Outcome taxonomy">
+          <TaxonomyStrip counts={report.taxonomy.counts} />
+          <AttributedOutcomesList
+            improvements={report.attributed_improvements ?? []}
+            declines={report.attributed_declines ?? []}
+          />
+        </Section>
+      )}
 
       {/* Section 2 — trajectory */}
       {trajectory && trajectory.length > 0 && (
@@ -344,6 +399,90 @@ function MetricCard({ label, value, color, hint }: MetricCardProps) {
           {hint}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Outcome taxonomy (issue #63) ──────────────────────────────────────────
+
+interface TaxonomyStripProps {
+  counts: TaxonomyCounts
+}
+
+function TaxonomyStrip({ counts }: TaxonomyStripProps) {
+  const order: Array<keyof TaxonomyCounts> = ['activity', 'verified_action', 'outcome_measured', 'roi_not_measurable']
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 10, marginBottom: 14 }}>
+      {order.map((key) => {
+        const cfg = TAXONOMY_CONFIG[key] ?? { label: key, color: 'var(--bp-text-3)' }
+        return (
+          <div key={key} style={{
+            padding: 10, background: 'var(--bp-bg)',
+            border: `1px solid ${cfg.color}`, borderRadius: 4,
+          }}>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 18, fontWeight: 700, color: cfg.color }}>
+              {counts[key] ?? 0}
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: 2 }}>
+              {cfg.label}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+interface AttributedOutcomesListProps {
+  improvements: AttributedItem[]
+  declines: AttributedItem[]
+}
+
+function AttributedOutcomesList({ improvements, declines }: AttributedOutcomesListProps) {
+  const items = [...improvements, ...declines]
+  if (items.length === 0) {
+    return (
+      <div style={{ padding: 12, color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 11 }}>
+        No outcome-measured tasks are attributed to Blueprint yet.
+      </div>
+    )
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {items.map((it) => {
+        const cfg = (it.taxonomy_state ? TAXONOMY_CONFIG[it.taxonomy_state] : null) ?? TAXONOMY_CONFIG.outcome_measured!
+        const positive = (it.estimated_monthly_usd ?? 0) >= 0
+        return (
+          <div key={it.task_id} style={{
+            padding: 10, background: 'var(--bp-bg)',
+            border: '1px solid var(--bp-border)', borderRadius: 4,
+            display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, flexWrap: 'wrap',
+          }}>
+            <div>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 11, color: 'var(--bp-text)' }}>
+                {it.task_title} <span style={{ color: 'var(--bp-text-3)' }}>({it.metric_name})</span>
+              </div>
+              <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, marginTop: 4 }}>
+                <span style={{ color: cfg.color, border: `1px solid ${cfg.color}`, borderRadius: 3, padding: '1px 5px', textTransform: 'uppercase' }}>
+                  {cfg.label}
+                </span>
+              </div>
+              {it.citation && (
+                <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)', marginTop: 4 }}>
+                  Based on: task {it.citation.task_id.slice(0, 8)}
+                  {it.citation.outcome_id ? ` · outcome ${it.citation.outcome_id.slice(0, 8)}` : ''}
+                  {' · window '}
+                  {fmtDate(it.citation.window_start)} → {fmtDate(it.citation.window_end)}
+                  {it.citation.window_end_is_expected ? ' (expected)' : ''}
+                </div>
+              )}
+            </div>
+            <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 13, fontWeight: 600, color: positive ? 'var(--bp-green)' : 'var(--bp-red)' }}>
+              {fmtMoney(it.estimated_monthly_usd)}/mo
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }
