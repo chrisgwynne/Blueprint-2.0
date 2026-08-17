@@ -9,6 +9,62 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — develop branch
 
+### 2026-08-17 — 38-issue backlog clearance: bug fixes, autonomous hiring redesign, and 16 new dashboard features
+
+Two PRs (#75, #76) closed every open issue in the repository. Summary for
+agents/integrators — full technical detail in
+[server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md).
+
+**BAP-facing changes (see AGENT-GUIDE.md for details):**
+- New `scheduled_workflow` action type for recurring, externally-executed
+  automation (#37) — Blueprint tracks these, it doesn't run them.
+- Task approval now routes registered-but-unimplemented action types
+  straight to `manual_review` instead of retrying to dead-letter (#39).
+- Unsafe (SSRF-failing) agent webhooks are now auto-quarantined instead of
+  generating endless failed deliveries; clears on your next valid
+  `PUT /me/webhook` (#40).
+- `GET /businesses/:id/connectors` now carries `health_state` (including a
+  distinct `permission_required` state) and never claims fresh data from a
+  partial sync (#65).
+- `GET /goals/:id/timeline` now surfaces explicit gaps instead of omitting
+  them, and labels each event `correlation` vs. `verified_attribution` (#64).
+- New read-only BAP surfaces: **Operating Policy**
+  (`/businesses/:id/operating-policy`, #68) and **Action Receipts**
+  (`/businesses/:id/receipts`, #70).
+- Goals, Outcomes, and Connectors endpoints (pre-existing but undocumented)
+  are now documented in AGENT-GUIDE.md.
+
+**Not yet BAP-facing** (dashboard-session only — tracked in issues #77–#86
+for anyone who wants to expose them): Decision Centre, Recommendation
+Comparison, Executive Command Centre, Multi-Business Portfolio View,
+"While You Were Away" Digest, Explanation Panels, Natural-Language Audit
+Search, Automated Retrospectives, Reusable Playbooks, Safe
+Simulation/Preview Mode.
+
+**Autonomous hiring engine — full redesign (#44-58):** business-scoped
+installed-agent lookup, durable rejection suppression, per-business
+coordination/dedup, safe LLM-failure fallback (no more confident-looking
+proposal bursts), freshness/evidence/goal/WIP/ROI gates before hiring,
+outcome-gated retention/retirement, terminal/recoverable provider failures,
+a versioned BAP lifecycle contract (#53), business-scoped observability,
+a kill switch + enforced dry-run mode, and hiring-test isolation from
+production state.
+
+**Other fixes:** GitHub connector private-repo discovery (#34); Google
+Merchant connector 5,000-offer cap removed, destination-scoped disapproval
+reporting (#42); investigation tasks can no longer complete at unsupported
+confidence without gathered evidence (#43); `DATABASE_PATH` no longer
+resolves against invocation CWD (#41).
+
+**New dashboard-only features:** Outcome/ROI taxonomy (#63), Agent Lifecycle
+Cockpit (#69), Decision Centre (#61), Recommendation Comparison (#66),
+Executive Command Centre (#59), "While You Were Away" Digest (#62),
+Multi-Business Portfolio View (#71), Explainable "why did Blueprint do
+this?" Panels (#60), Reusable Bounded Playbooks (#74), Natural-Language
+Audit Search (#72), Automated Retrospectives that produce reviewable
+operating changes (#73), Safe Simulation/Preview Mode as a shared primitive
+enforced at the DB-write layer (#67).
+
 ### In Progress
 - Agent lifecycle hardening — final gaps (output validation, heartbeats, KB pollution flag)
 - Onboarding inline hire recommendations polishing
