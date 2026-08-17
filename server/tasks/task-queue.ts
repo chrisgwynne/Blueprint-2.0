@@ -607,8 +607,21 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       // an incremented attempt_count until it dead-letters for no reason.
       // Route straight to manual_review instead -- no job, no retry budget
       // spent on something that can never succeed on its own.
+      //
+      // One exception: `side_effect_classification === 'external_verifiable'`
+      // action types with no dispatch case (currently only `scheduled_workflow`,
+      // issue #37) aren't orphaned -- they're deliberately never executed by
+      // Blueprint at all. An external system (e.g. Hermes) performs and
+      // verifies the work itself; Blueprint's job is only to record that a
+      // human approved it. Routing those to manual_review would misrepresent
+      // already-complete external tracking as something still needing
+      // operator attention, so they stay 'approved' with no job, same as a
+      // plain manual (action_type-less) task.
       if (actionValidation.entry?.dispatched_by_executor) {
         enqueueExecutionJob(after);
+      } else if (actionValidation.entry?.side_effect_classification === 'external_verifiable') {
+        // No-op: task remains 'approved', tracked but not queued for
+        // Blueprint execution or manual review.
       } else {
         return updateTaskStatus(id, 'manual_review', 'system:action-registry', {
           outcome: `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
