@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import yaml from 'js-yaml';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import db from '../db/db.js';
+import db, { DB_PATH } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { checkAgentReadiness } from '../agents/readiness.js';
 import { STALE_THRESHOLDS_HOURS, getPollingInterval, computeConnectorStatus } from '../connectors/freshness.js';
@@ -248,7 +248,12 @@ router.get('/health/full', async (req: Request, res: Response) => {
     const primaryProvider = primaryProviderRow?.provider || providersConfigured[0] || 'anthropic';
 
     // ─── Database ───────────────────────────────────────────────────────────
-    const dbPath = process.env.DATABASE_PATH || resolve(process.cwd(), '../data/blueprint.db');
+    // Reuse the DB module's own resolved path (see server/db/db.ts /
+    // resolve-db-path.ts) rather than independently re-resolving
+    // DATABASE_PATH here — an independent resolution against process.cwd()
+    // previously could report a different path than the one actually opened
+    // (issue #41).
+    const dbPath = DB_PATH;
     let dbSizeMB = 0;
     let walSizeMB = 0;
     try { dbSizeMB = Math.round(statSync(dbPath).size / 1048576 * 10) / 10; } catch {}

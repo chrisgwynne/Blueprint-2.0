@@ -3,9 +3,17 @@ import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
 import { mkdirSync, readFileSync } from 'fs';
+import { resolveDbPath, isMemoryDbPath } from './resolve-db-path.js';
 
 const __dbdir = dirname(fileURLToPath(import.meta.url));
-const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
+// Stable base for resolving a relative DATABASE_PATH — the repo root, NOT
+// process.cwd(). Using process.cwd() meant the same inherited env value
+// (e.g. DATABASE_PATH=./data/blueprint.db) silently opened a different
+// "shadow" database depending on where a standalone Bun command was
+// launched from (repo root vs. server/). See resolve-db-path.ts and
+// https://github.com/chrisgwynne/Blueprint-2.0/issues/41. Matches the
+// PROJECT_ROOT convention already used by server/db/init.ts.
+const __repoRoot = resolve(__dbdir, '../..');
 
 // ':memory:' (and bun:sqlite's other in-memory sentinels, e.g.
 // 'file::memory:?cache=shared') must be passed through to Database()
@@ -15,13 +23,13 @@ const _defaultPath = resolve(__dbdir, '../../data/blueprint.db');
 // leaving a real, ever-growing file that persists across every process
 // invocation instead of the intended fresh-per-process database.
 const _envPath = process.env['DATABASE_PATH'];
-const _isMemory = _envPath === ':memory:' || _envPath?.startsWith('file::memory:') || _envPath?.startsWith(':memory:?');
+const _isMemory = isMemoryDbPath(_envPath);
 
-const DB_PATH = !_envPath
-  ? _defaultPath
-  : _isMemory
-    ? _envPath
-    : resolve(_envPath);
+// Exported so any other module that needs to report/inspect the database's
+// on-disk location (e.g. health endpoints) reads the SAME resolved path the
+// DB module actually opened, rather than independently re-resolving
+// DATABASE_PATH (and risking drift, including the process.cwd() bug above).
+export const DB_PATH = resolveDbPath(_envPath, __repoRoot);
 
 if (!_isMemory) {
   try {
