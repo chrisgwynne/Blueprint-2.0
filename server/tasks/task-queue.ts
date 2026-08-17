@@ -458,10 +458,16 @@ function triggerWorkerTick(): void {
  *      transaction is bound to this exact version/snapshot, so nothing
  *      that happens to the live task row afterwards can change what gets
  *      executed.
- *   3. For typed actions, enqueues exactly one execution_jobs row (enforced
- *      by a unique partial index, not just this function's own logic).
- *      Manual tasks with no action_type remain approved for an operator and
- *      deliberately do not enter the automated worker queue.
+ *   3. For typed actions with a real executor.ts dispatch case, enqueues
+ *      exactly one execution_jobs row (enforced by a unique partial index,
+ *      not just this function's own logic). Manual tasks with no
+ *      action_type remain approved for an operator and deliberately do not
+ *      enter the automated worker queue. A typed action registered in the
+ *      Typed Action Registry but with no executor.ts dispatch case (see
+ *      `dispatched_by_executor`) is routed straight to 'manual_review'
+ *      instead of being enqueued -- there is no executor to run it, so a
+ *      job would only ever be retried and dead-lettered for no reason
+ *      (issue #39).
  * Trust-tier/approval-mode no longer branches into a separate immediate-
  * execution path (green+auto used to call updateTaskStatus(...,'executing',...)
  * directly here) â€” every approved typed action goes through the same queued
@@ -586,8 +592,29 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     }
 
     const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
-    if (String(after.action_type ?? '').trim() !== '') {
-      enqueueExecutionJob(after);
+    const actionType = String(after.action_type ?? '').trim();
+    if (actionType !== '') {
+      // Issue #39: `actionValidation.entry.dispatched_by_executor` mirrors
+      // executor.ts's EXECUTABLE_ACTION_TYPES set 1:1 (see db.ts migration
+      // notes) -- it's the executable check available here without a
+      // task-queue.ts -> executor.ts -> task-queue.ts import cycle. An
+      // action_type can pass every other validateAction() gate (registered,
+      // right business type, connectors present, payload valid) yet still
+      // have no real executor.ts dispatch case (e.g. `product_suggestion`,
+      // `page_optimisation`) -- enqueueing a job for those would only ever
+      // produce pointless retry churn: the worker claims it, executeTask()
+      // rejects it as not executable, and it cycles back to 'queued' with
+      // an incremented attempt_count until it dead-letters for no reason.
+      // Route straight to manual_review instead -- no job, no retry budget
+      // spent on something that can never succeed on its own.
+      if (actionValidation.entry?.dispatched_by_executor) {
+        enqueueExecutionJob(after);
+      } else {
+        return updateTaskStatus(id, 'manual_review', 'system:action-registry', {
+          outcome: `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
+            'implementation -- routed directly to manual review instead of being queued for automated execution.',
+        })!;
+      }
     }
     return after;
   });

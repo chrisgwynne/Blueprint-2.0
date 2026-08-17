@@ -16,7 +16,7 @@
  * loop itself (jobs/scheduler.ts).
  */
 import { getTask, updateTaskStatus } from './task-queue.js';
-import { executeTask } from './executor.js';
+import { executeTask, isExecutable } from './executor.js';
 import { classifyAction } from './execution-safety.js';
 import {
   claimNextJob, markExecuting, completeJob, failJob, markManualReview,
@@ -105,6 +105,24 @@ async function runOneJob(job: ExecutionJobRow, owner: string): Promise<void> {
       });
     } catch {}
     markManualReview(job.id, integrity.reason ?? 'Approved task changed before execution; reapproval is required.');
+    return;
+  }
+
+  // Issue #39 belt-and-braces: approveTask() no longer enqueues a job for a
+  // non-executable action_type (see task-queue.ts), but a job can still
+  // reach here for one already queued before that fix deployed, or if the
+  // registry's `dispatched_by_executor` mirror ever drifts from
+  // executor.ts's real EXECUTABLE_ACTION_TYPES set. Either way, this is a
+  // permanent condition, not a transient execution failure -- route to
+  // manual_review directly, without leasing/executing the job or spending
+  // any retry attempts on something that can never succeed.
+  if (!job.action_type || !isExecutable(job.action_type)) {
+    const reason = `action_type '${job.action_type}' has no executor.ts dispatch case -- permanently non-executable, ` +
+      'routed to manual review without consuming retry budget.';
+    try {
+      updateTaskStatus(task.id, 'manual_review', 'system:execution-worker', { outcome: reason });
+    } catch {}
+    markManualReview(job.id, reason);
     return;
   }
 
