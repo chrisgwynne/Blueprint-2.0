@@ -284,6 +284,23 @@ export const getActionReceipt = (businessId: string, receiptId: string) => get(`
 export const getTaskActionReceipts = (businessId: string, taskId: string) => get(`/receipts/${businessId}/task/${taskId}`)
 
 // ============================================
+// "Why did Blueprint do this?" explanations (issue #60)
+// ============================================
+
+/** Subjects the explanation panel can render. Mirrors the server's registry. */
+export type ExplanationKind = 'task' | 'decision' | 'hiring_analysis' | 'hiring_candidate'
+
+/**
+ * One explanation for one decision. Read-only: everything in the payload is
+ * a rendering of records other modules authored, already redacted server-side.
+ */
+export const getExplanation = (businessId: string, kind: ExplanationKind, id: string) =>
+  get(`/explanations/${businessId}/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`)
+
+/** The vocabulary (quality/causal-claim/disposition meanings) the panel renders. */
+export const getExplanationVocabulary = () => get('/explanations/kinds')
+
+// ============================================
 // "What happened while I was away?" digest (issue #62)
 // ============================================
 
