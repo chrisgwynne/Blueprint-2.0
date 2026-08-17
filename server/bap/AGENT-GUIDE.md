@@ -8,10 +8,13 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
 > Executive Command Centre, multi-business Portfolios, the "While You Were
-> Away" Digest, Explanation panels, and Audit Search now have read-only BAP
-> surfaces too (#77–#83, below). Three more dashboard features
-> (Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet
-> — see issues #84–#86.
+> Away" Digest, Explanation panels, Audit Search, and Retrospective
+> Proposals now have read-only BAP surfaces too (#77–#84, below — the
+> underlying retrospective engine and its narrative findings were already
+> exposed via `retrospectives:read`/`:trigger`; #84 added the typed,
+> reviewable operating-policy-change proposals it can produce). Two more
+> dashboard features (Playbooks, Simulation) exist but have no BAP surface
+> yet — see issues #85–#86.
 
 ---
 
@@ -490,6 +493,33 @@ Scoped the same way as every other business-scoped route: only the
 business in the path is searched, in both the interpretation step and the
 retrieval step, so a natural-language question can never widen access.
 
+### Retrospective Proposals (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/retrospective-proposals               — list, all retrospectives (filter: status, limit)
+GET  /api/bap/v1/businesses/:id/retrospectives/:retroId/proposals     — list, one retrospective
+```
+Read-only. A retrospective doesn't just narrate what worked — it can raise
+a typed, bounded proposal to change how Blueprint operates: `target` is
+`policy` (add an action type to `always_require_human_action_types`),
+`workflow` (gate a playbook step behind approval), or `agent_lifecycle`
+(retire/pause an agent). `basis` tells you how seriously to take it —
+`evidence_backed` means measured outcome records support it, `hypothesis`
+never reaches this endpoint at all (no proposal is raised on a hunch), and
+`conflicting_evidence` means the records disagree and were surfaced
+un-averaged rather than smoothed into a false consensus. `draft_ref`
+points at the real (unapplied) artifact the proposal would activate —
+e.g. a `policy_patch` carries `base_version`/`next_version`/`changes`, the
+same diff a human reviewer sees.
+
+There is no BAP write path to review, approve, reject, or activate a
+proposal. Reviewing one is a human act on the dashboard
+(`POST /:businessId/proposals/:id/review`), which only ever reaches
+activation through the existing #61 decision-queue approval flow — the
+same "no operating change is activated without the required approval"
+guarantee #73 itself was built to enforce. Read a proposal here to know
+one is pending (and what it would do) before proposing more of the pattern
+it targets; approve/reject it on the dashboard.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -578,6 +608,7 @@ const valid = crypto.timingSafeEqual(
 | `digest:read` | Read the "while you were away" catch-up digest and advance your own digest watermark (a dimension separate from the dashboard operator's) |
 | `explanations:read` | Read "why did Blueprint do this?" explanations |
 | `audit_search:read` | Run natural-language, cited history search (distinct from `audit:read`'s raw audit-log listing) |
+| `retrospective_proposals:read` | Read retrospective operating-policy-change proposals |
 
 ---
 

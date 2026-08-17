@@ -13,6 +13,8 @@
  *   GET    /businesses/:bid/retrospectives    — list
  *   GET    /retrospectives/:id                — detail
  *   POST   /businesses/:bid/retrospectives/run — trigger one now
+ *   GET    /businesses/:bid/retrospective-proposals            — list proposals, all retrospectives
+ *   GET    /businesses/:bid/retrospectives/:id/proposals       — list proposals for one retrospective
  *   GET    /businesses/:bid/calibration       — latest + history per agent
  *   GET    /businesses/:bid/patterns          — cross-business learning (abstract only)
  */
@@ -23,6 +25,7 @@ import { requirePermission, hasPermission } from '../bap/auth.js';
 import { parsePagination, paginationMeta, normalizeTimestamps, withRequiredIdempotency, sendError } from '../bap/route-helpers.js';
 import { getRankedRecommendations, type RankedRecommendation } from '../brain/recommendation-engine.js';
 import { listCrossBusinessPatterns } from '../brain/cross-business-patterns.js';
+import { listProposalsForBusiness, listProposalsForRetrospective } from '../brain/retrospective-proposals.js';
 
 const router = Router();
 
@@ -171,6 +174,53 @@ router.post('/businesses/:businessId/retrospectives/run', requirePermission('ret
         .catch((err) => console.warn(`[bap-review] retrospective trigger failed for ${businessId}:`, (err as Error).message));
       return { status: 202, body: { business_id: businessId, status: 'running', message: 'Retrospective triggered. Poll GET /businesses/:id/retrospectives for the result.' } };
     });
+  } catch (err) {
+    return sendError(req, res, 500, 'internal_error', (err as Error).message);
+  }
+});
+
+// ─── Retrospective Proposals (#84) ──────────────────────────────────────────
+//
+// #73's typed, reviewable operating-policy-change proposals — what a
+// retrospective can concretely propose, as opposed to the narrative
+// findings above. Read-only, same as operating_policies:read and #61's
+// decision-centre precedent: reviewing/approving/rejecting a proposal is a
+// human act through the dashboard's POST /:businessId/proposals/:id/review
+// route (server/routes/retrospectives.ts), which itself only ever reaches
+// activation via #61's decision queue — see retrospective-proposals.ts's
+// header comment ("A RETROSPECTIVE NEVER ACTIVATES ANYTHING"). There is
+// deliberately no BAP write path here.
+
+router.get('/businesses/:businessId/retrospective-proposals', requirePermission('retrospective_proposals:read'), (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    const biz = db.prepare('SELECT id FROM businesses WHERE id = ?').get(businessId);
+    if (!biz) return sendError(req, res, 404, 'not_found', 'Business not found.');
+
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit), 10) : undefined;
+    const proposals = listProposalsForBusiness(businessId, { status: status as never, limit })
+      .map((p) => normalizeTimestamps(p as unknown as Record<string, unknown>,
+        ['period_start', 'period_end', 'expires_at', 'reviewed_at', 'created_at', 'updated_at']));
+
+    return res.json({ proposals, total: proposals.length });
+  } catch (err) {
+    return sendError(req, res, 500, 'internal_error', (err as Error).message);
+  }
+});
+
+router.get('/businesses/:businessId/retrospectives/:retrospectiveId/proposals', requirePermission('retrospective_proposals:read'), (req: Request, res: Response) => {
+  try {
+    const businessId = String(req.params.businessId);
+    const retrospectiveId = String(req.params.retrospectiveId);
+    const retro = db.prepare('SELECT id FROM retrospectives WHERE id = ? AND business_id = ?').get(retrospectiveId, businessId);
+    if (!retro) return sendError(req, res, 404, 'not_found', `Retrospective '${retrospectiveId}' not found.`);
+
+    const proposals = listProposalsForRetrospective(retrospectiveId, businessId)
+      .map((p) => normalizeTimestamps(p as unknown as Record<string, unknown>,
+        ['period_start', 'period_end', 'expires_at', 'reviewed_at', 'created_at', 'updated_at']));
+
+    return res.json({ retrospective_id: retrospectiveId, proposals, total: proposals.length });
   } catch (err) {
     return sendError(req, res, 500, 'internal_error', (err as Error).message);
   }

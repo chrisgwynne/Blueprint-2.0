@@ -81,6 +81,15 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   'graph:read', 'graph:trigger',
   'recommendations:read',
   'retrospectives:read', 'retrospectives:trigger',
+  // Issue #84 — #73's typed operating-policy-change proposals a
+  // retrospective produces. Distinct from retrospectives:read/:trigger
+  // above, which only cover the narrative retrospective itself: an agent
+  // can hold one grant without the other (e.g. read findings but not the
+  // proposals pending review, or vice versa). Read-only, same as
+  // operating_policies:read below — reviewing/activating a proposal is a
+  // human act through the dashboard's #61 decision-queue flow, and no BAP
+  // route accepts a review outcome for one.
+  'retrospective_proposals:read',
   'calibration:read',
   // Phase 2-INT — Autonomous Intelligence Foundation. business_profile:read
   // covers GET on the profile; :update covers PATCH. action_registry:read
