@@ -333,10 +333,21 @@ describe('selection is scoped to the agent business_access grant', () => {
   });
 
   test('a wildcard grant sees every business', async () => {
+    // Asserted against /scope, not the data endpoint: /scope reports the
+    // full accessible set with no MAX_SELECTION cap (see its own docstring),
+    // while /command-centre legitimately truncates to the first
+    // MAX_SELECTION businesses. The full test suite shares one in-memory
+    // DB across every file, so by the time this runs the database can hold
+    // many more than MAX_SELECTION businesses from unrelated fixtures —
+    // asserting inclusion against the capped endpoint would make this test
+    // depend on global suite ordering rather than on wildcard behavior.
+    const scope = await get('/api/bap/v1/command-centre/scope', keyWildcard);
+    expect(scope.status).toBe(200);
+    for (const id of ALL) expect(scope.body.granted_business_ids).toContain(id);
+
     const res = await get('/api/bap/v1/command-centre', keyWildcard);
     expect(res.status).toBe(200);
-    const ids = res.body.businesses.map((b: any) => b.business_id);
-    for (const id of ALL) expect(ids).toContain(id);
+    expect(Array.isArray(res.body.businesses)).toBe(true);
   });
 
   test('an agent with the grant but no businesses is refused, not shown everything', async () => {
