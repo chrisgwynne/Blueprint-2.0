@@ -629,3 +629,14 @@ export const cancelScheduledOperatingPolicy = (businessId: string, version: numb
 export const getPolicyPortfolios = () => get('/operating-policies/portfolios')
 export const savePolicyPortfolio = (body: { id?: string; name: string; business_ids: string[] }) =>
   post('/operating-policies/portfolios', body)
+
+// ============================================
+// Executive command centre (#59)
+// ============================================
+// The one deliberately cross-business read in the API. `business_ids` is an
+// ad hoc selection; `portfolio_id` names one of #68's saved policy
+// portfolios as a shorthand for the same thing. Read-only by design —
+// acting on a decision goes through reviewPendingDecision() above, which
+// re-derives the item's policy standing at the moment of the decision.
+export const getCommandCentre = (params?: Params) => get('/command-centre', params)
+export const getCommandCentreScope = () => get('/command-centre/scope')
