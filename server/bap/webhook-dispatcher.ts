@@ -12,6 +12,7 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { assertSafeWebhookUrl } from '../lib/ssrf-guard.js';
+import { quarantineAgentWebhook } from './webhook-reconciliation.js';
 
 interface BapAgent {
   id: string;
@@ -49,6 +50,7 @@ export function dispatchWebhookEvent(eventType: string, payload: unknown): void 
     agents = db.prepare(`
       SELECT * FROM bap_agents
       WHERE status = 'active' AND webhook_url IS NOT NULL AND webhook_url != ''
+        AND webhook_disabled_at IS NULL
     `).all() as BapAgent[];
   } catch {
     return;
@@ -116,6 +118,11 @@ async function attemptDelivery(
       WHERE id = ?
     `).run(maxAttempts, `Blocked: ${(err as Error).message}`.slice(0, 500), deliveryId);
     console.warn(`[BAP Webhook] Delivery ${deliveryId} blocked — unsafe URL:`, (err as Error).message);
+    // Quarantine the destination itself (#40), not just this one delivery
+    // — without this, every future event this agent is subscribed to
+    // would queue and then fail an identical, guaranteed-to-fail check.
+    // No-ops if reconcileUnsafeWebhooks() already quarantined it first.
+    quarantineAgentWebhook(agent.id, (err as Error).message);
     return;
   }
 
@@ -215,6 +222,7 @@ export async function retryPendingDeliveries(): Promise<number> {
       AND (d.last_attempt IS NULL OR d.last_attempt < ?)
       AND a.status = 'active'
       AND a.webhook_url IS NOT NULL
+      AND a.webhook_disabled_at IS NULL
     ORDER BY d.created_at ASC
     LIMIT 50
   `).all(fiveMinAgo) as (BapAgent & {

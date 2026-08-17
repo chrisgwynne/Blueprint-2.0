@@ -32,6 +32,10 @@
  *   PUT    /me/webhook                        — update webhook config
  *   GET    /me/webhook/deliveries             — list deliveries
  *   POST   /me/webhook/deliveries/:id/retry   — retry failed delivery
+ *
+ * Admin-only (session auth, see "Admin routes" below):
+ *   POST   /agents-admin/:id/webhook/disable  — quarantine an agent's webhook (#40)
+ *   POST   /agents-admin/:id/webhook/enable   — lift quarantine (re-validates first)
  */
 import { Router } from 'express';
 import type { Request, Response } from 'express';
@@ -45,6 +49,7 @@ import {
 import { bapRateLimit } from '../bap/rate-limiter.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { assertSafeWebhookUrl, UnsafeWebhookUrlError } from '../lib/ssrf-guard.js';
+import { quarantineAgentWebhook } from '../bap/webhook-reconciliation.js';
 import { KBPathError } from '../kb/kb-engine.js';
 import { bapRequestContext, parsePagination, paginationMeta, toIso, normalizeTimestamps, withRequiredIdempotency } from '../bap/route-helpers.js';
 import { computeOutcomeStatus } from '../tasks/outcome-status.js';
@@ -1468,7 +1473,16 @@ router.put('/me/webhook', async (req: Request, res: Response) => {
 
     const updates: string[] = [];
     const values: any[] = [];
-    if (url !== undefined) { updates.push('webhook_url = ?'); values.push(url); }
+    if (url !== undefined) {
+      updates.push('webhook_url = ?'); values.push(url);
+      // A newly-set URL was just validated (or is being cleared) above —
+      // either way, any prior quarantine from #40's reconciliation/
+      // delivery-time checks no longer applies to it. Clearing here
+      // (rather than requiring a separate admin re-enable call) is what
+      // lets an agent self-heal by simply fixing its own webhook_url.
+      updates.push('webhook_disabled_at = NULL');
+      updates.push('webhook_disabled_reason = NULL');
+    }
     if (secret !== undefined) { updates.push('webhook_secret = ?'); values.push(secret); }
     if (events !== undefined) { updates.push('webhook_events = ?'); values.push(JSON.stringify(events)); }
 
@@ -1535,7 +1549,7 @@ router.post('/me/webhook/deliveries/:deliveryId/retry', async (req: Request, res
 router.get('/agents-admin', isAuthenticated, (req: Request, res: Response) => {
   try {
     const agents = (db.prepare(
-      'SELECT id, name, description, owner, api_key_prefix, status, permissions, business_access, default_trust_tier, webhook_url, webhook_events, last_seen, total_calls, created_at FROM bap_agents ORDER BY created_at DESC'
+      'SELECT id, name, description, owner, api_key_prefix, status, permissions, business_access, default_trust_tier, webhook_url, webhook_events, webhook_disabled_at, webhook_disabled_reason, last_seen, total_calls, created_at FROM bap_agents ORDER BY created_at DESC'
     ).all() as Array<Record<string, unknown>>).map((a) => ({
       ...a,
       permissions: safeJSON(a.permissions),
@@ -1618,6 +1632,61 @@ router.post('/agents-admin/:agentId/revoke', isAuthenticated, (req: Request, res
     const agentId = String(req.params.agentId);
     db.prepare("UPDATE bap_agents SET status = 'revoked', updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(agentId);
     return res.json({ ok: true, agent_id: agentId, status: 'revoked' });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+// #40 — explicit webhook-only disable/re-enable, distinct from /revoke
+// above: revoke kills the agent's API key entirely (GET /me, tasks,
+// signals, everything), which is far more than an unsafe webhook
+// destination warrants. These only touch webhook_disabled_at/reason —
+// the agent keeps full API access either way. Reuses the same
+// quarantineAgentWebhook() the automated reconciliation pass and the
+// live delivery-time check use, so there's exactly one code path that
+// disables a webhook, however it gets triggered.
+router.post('/agents-admin/:agentId/webhook/disable', isAuthenticated, (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.agentId);
+    const agent = db.prepare('SELECT id, webhook_url FROM bap_agents WHERE id = ?').get(agentId) as { id: string; webhook_url: string | null } | undefined;
+    if (!agent) return res.status(404).json({ error: 'Agent not found.' });
+    if (!agent.webhook_url) return res.status(400).json({ error: 'Agent has no webhook configured.' });
+
+    const { reason } = req.body as { reason?: string };
+    quarantineAgentWebhook(agentId, (typeof reason === 'string' && reason.trim()) || 'Disabled manually via Settings → External Agents.');
+
+    const updated = db.prepare('SELECT webhook_disabled_at, webhook_disabled_reason FROM bap_agents WHERE id = ?').get(agentId) as Record<string, unknown>;
+    return res.json({ ok: true, agent_id: agentId, ...updated });
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message });
+  }
+});
+
+router.post('/agents-admin/:agentId/webhook/enable', isAuthenticated, async (req: Request, res: Response) => {
+  try {
+    const agentId = String(req.params.agentId);
+    const agent = db.prepare('SELECT id, webhook_url FROM bap_agents WHERE id = ?').get(agentId) as { id: string; webhook_url: string | null } | undefined;
+    if (!agent) return res.status(404).json({ error: 'Agent not found.' });
+    if (!agent.webhook_url) return res.status(400).json({ error: 'Agent has no webhook configured.' });
+
+    // Re-validate before lifting the quarantine — an operator clicking
+    // "re-enable" without first fixing the URL should not resurrect the
+    // exact same guaranteed-to-fail destination.
+    try {
+      await assertSafeWebhookUrl(agent.webhook_url);
+    } catch (err) {
+      if (err instanceof UnsafeWebhookUrlError) {
+        return res.status(400).json({ error: `Cannot re-enable — webhook is still unsafe: ${err.message}` });
+      }
+      throw err;
+    }
+
+    db.prepare(`
+      UPDATE bap_agents SET webhook_disabled_at = NULL, webhook_disabled_reason = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(agentId);
+
+    return res.json({ ok: true, agent_id: agentId, webhook_disabled_at: null, webhook_disabled_reason: null });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
   }
