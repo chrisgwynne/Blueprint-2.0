@@ -182,6 +182,19 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // summary verified against them before it is shown. An agent can be
   // granted one without the other.
   'audit_search:read',
+  // Issue #86 — safe simulation/preview mode (#67's shared primitive).
+  // Read-only in name AND in effect: POST .../simulate/task-approval runs
+  // entirely inside #67's simulation-context.ts guard, which makes any real
+  // DB write throw (assertSimulationSafeSql on every db.prepare() call) and
+  // makes approveTask() itself refuse to run beneath it
+  // (guardSimulationSideEffect at the top of task-queue.ts:approveTask) —
+  // this was verified by reading that enforcement, not assumed from the
+  // name. The only rows a simulation produces are the stored preview and
+  // its own audit-log entry, never a change to the task, a job, a receipt
+  // or anything else. Previewing an approval still requires `tasks:approve`
+  // as well (see bap-simulation.ts) — this grant alone cannot be used to
+  // probe an action the agent could not otherwise propose or approve.
+  'simulations:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

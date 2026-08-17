@@ -8,13 +8,13 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
 > Executive Command Centre, multi-business Portfolios, the "While You Were
-> Away" Digest, Explanation panels, Audit Search, and Retrospective
-> Proposals now have read-only BAP surfaces too (#77–#84, below — the
-> underlying retrospective engine and its narrative findings were already
-> exposed via `retrospectives:read`/`:trigger`; #84 added the typed,
-> reviewable operating-policy-change proposals it can produce). Two more
-> dashboard features (Playbooks, Simulation) exist but have no BAP surface
-> yet — see issues #85–#86.
+> Away" Digest, Explanation panels, Audit Search, Retrospective Proposals,
+> and Simulation/Preview mode now have read-only BAP surfaces too (#77–#84,
+> #86, below — the underlying retrospective engine and its narrative
+> findings were already exposed via `retrospectives:read`/`:trigger`; #84
+> added the typed, reviewable operating-policy-change proposals it can
+> produce). One more dashboard feature (Playbooks) exists but has no BAP
+> surface yet — see issue #85.
 
 ---
 
@@ -520,6 +520,30 @@ guarantee #73 itself was built to enforce. Read a proposal here to know
 one is pending (and what it would do) before proposing more of the pattern
 it targets; approve/reject it on the dashboard.
 
+### Simulation (2026-08)
+```
+POST /api/bap/v1/businesses/:id/simulate/task-approval  — preview approving a task, with zero side effects
+GET  /api/bap/v1/simulations/:id                        — read back a preview + live currency check
+```
+Genuinely zero side effects, not merely read-only by convention: the
+preview runs inside #67's simulation guard, which makes every real DB
+write throw and makes the actual approve function refuse to run at all
+beneath it. It returns the same envelope the dashboard's preview mode
+shows a human — planned changes, skipped work with reasons, data
+freshness, assumptions, and anything the preview genuinely can't tell you
+(it can show what Blueprint would attempt, never whether an external call
+would succeed) — evaluated as if THIS agent's own key had called
+`PATCH /tasks/:id`, so the answer reflects the autonomy limits and daily
+cap that call would actually face, never a human's exemption from them.
+Requires `tasks:approve` in addition to `simulations:read` — a preview
+cannot be used to probe an approval this agent isn't otherwise permitted
+to make. A preview expires (default 15 minutes); `GET /simulations/:id`
+always tells you whether it's still current, expired, drifted, or already
+consumed, rather than letting a stale result look current. There is no
+execute-from-preview route here — `PATCH /tasks/:id` already re-validates
+every gate against live state on every call, so it was never built to run
+off a stale snapshot in the first place.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -609,6 +633,7 @@ const valid = crypto.timingSafeEqual(
 | `explanations:read` | Read "why did Blueprint do this?" explanations |
 | `audit_search:read` | Run natural-language, cited history search (distinct from `audit:read`'s raw audit-log listing) |
 | `retrospective_proposals:read` | Read retrospective operating-policy-change proposals |
+| `simulations:read` | Preview a task approval (zero side effects) and read back previews |
 
 ---
 
