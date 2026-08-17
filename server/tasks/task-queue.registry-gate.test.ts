@@ -12,6 +12,7 @@ import { createTask, approveTask } from './task-queue.js';
 import { updateBusinessProfile } from '../business/business-profile.js';
 import { listSystemIssues } from '../system/system-issues.js';
 import { upsertActionRegistryEntry } from './action-registry.js';
+import { isExecutable } from './executor.js';
 
 const BIZ = 'biz_registry_gate_test';
 
@@ -191,6 +192,80 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
 
     const second = propose(null);
     const after = approveTask(second.id, 'dashboard:human');
+    expect(after!.status).toBe('approved');
+  });
+});
+
+// Issue #37: recurring/non-destructive operational automation (nightly
+// jobs, cron-backed workflows, folder watchers, monitoring, scheduled
+// connector checks) proposed by an external agent (e.g. Hermes) that owns
+// and runs its own cron — Blueprint only tracks/logs the task.
+describe('scheduled_workflow — Issue #37 (external recurring automation)', () => {
+  test('scheduled_workflow is registered in the Typed Action Registry', () => {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Nightly social folder automation',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: {
+        schedule: '30 2 * * *',
+        cron_job_id: '4bba7540a4ce',
+        target_system: 'Hermes cron',
+        target_resource: '/mnt/nas/Businesses/The Quirky Gift Co/Social',
+        side_effects: ['create files'],
+        publication: 'none',
+        verification: ['file count', 'manifest', 'readability/decode check'],
+        constraints: ['no prices', 'no fake reviews', 'no fake buyer photos'],
+      },
+      approval_mode: 'requires_approval',
+    })!;
+    expect(task.status).toBe('proposed');
+    expect(task.action_type).toBe('scheduled_workflow');
+  });
+
+  test('a scheduled_workflow payload missing the required schedule is rejected at proposal', () => {
+    expect(() => createTask({
+      business_id: BIZ,
+      title: 'Automation with no schedule',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { target_system: 'Hermes cron' },
+      approval_mode: 'requires_approval',
+    })).toThrow(/cannot be proposed/);
+
+    const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
+    expect(issues.some((i) => (i.metadata as any)?.issues?.[0]?.code === 'payload_schema_mismatch')).toBe(true);
+  });
+
+  test('a scheduled_workflow payload missing the required target_system is rejected at proposal', () => {
+    expect(() => createTask({
+      business_id: BIZ,
+      title: 'Automation with no target system',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { schedule: '30 2 * * *' },
+      approval_mode: 'requires_approval',
+    })).toThrow(/cannot be proposed/);
+  });
+
+  test('scheduled_workflow is deliberately NOT in executor.ts\'s auto-executable set', () => {
+    // Blueprint only tracks/logs this action type — the external system
+    // (e.g. Hermes cron) owns execution, so it must never be auto-dispatched.
+    // (executor.ts's own isExecutable() gate re-confirms this even if
+    // something enqueues a job for it — see executeTask()'s guard.)
+    expect(isExecutable('scheduled_workflow')).toBe(false);
+  });
+
+  test('a valid scheduled_workflow task clears the approval gate (registered, no connectors required)', () => {
+    const task = createTask({
+      business_id: BIZ,
+      title: 'Approve scheduled_workflow',
+      proposed_by: 'bap:hermes-agent',
+      action_type: 'scheduled_workflow',
+      action_payload: { schedule: '0 3 * * *', target_system: 'Hermes cron' },
+      approval_mode: 'requires_approval',
+    })!;
+    const after = approveTask(task.id, 'dashboard:human');
     expect(after!.status).toBe('approved');
   });
 });

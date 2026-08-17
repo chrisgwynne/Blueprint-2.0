@@ -1250,6 +1250,29 @@ const STARTUP_MIGRATIONS: string[] = [
   // schema still being the seed default so an operator's own edit is never
   // silently overwritten.
   `UPDATE action_registry SET payload_schema = '{"type":"object","required":["description"],"properties":{"description":{"type":"string","minLength":3}}}' WHERE action_type = 'research_connector' AND payload_schema = '{}'`,
+
+  // ─── Issue #37 fix: register scheduled_workflow ─────────────────────────
+  // External agents (e.g. Hermes) run recurring, non-destructive operational
+  // automation — nightly jobs, cron-backed workflows, folder watchers,
+  // monitoring, scheduled connector checks — on their own infrastructure and
+  // propose a Blueprint task purely to record/track it. There was no
+  // registered action_type for this, so every such proposal was rejected
+  // with 'unknown_action_type', forcing agents to misuse unrelated action
+  // types (e.g. content_draft) just to get the task recorded. This adds
+  // 'scheduled_workflow': external_verifiable (the proposing system, not
+  // Blueprint, performs and verifies the work — same category as
+  // github_review_deploy/research_connector), requires_approval so a human
+  // reviews the schedule/side-effects/constraints before it's trusted, and
+  // deliberately NOT added to executor.ts's EXECUTABLE_ACTION_TYPES or given
+  // dispatched_by_executor — Blueprint tracks/logs these, it never dispatches
+  // or auto-executes them itself. payload_schema requires 'schedule' (a
+  // cron-like string) and 'target_system' (who actually runs it); the rest
+  // (cron_job_id, target_resource, side_effects, constraints, verification,
+  // disable_path, publication) are optional structured detail matching the
+  // issue's example payload.
+  `INSERT OR IGNORE INTO action_registry (action_type, description, payload_schema, required_connector_types, supported_business_types, side_effect_classification, risk_level, supports_rollback, requires_approval) VALUES
+    ('scheduled_workflow', 'Track a recurring, non-destructive operational automation (cron/scheduled job) that an external system owns and executes — nightly jobs, folder watchers, monitoring, scheduled connector checks.', '{"type":"object","required":["schedule","target_system"],"properties":{"schedule":{"type":"string","minLength":1},"cron_job_id":{"type":"string"},"target_system":{"type":"string","minLength":1},"target_resource":{"type":"string"},"side_effects":{"type":"array","items":{"type":"string"}},"publication":{"type":"string"},"verification":{"type":"array","items":{"type":"string"}},"constraints":{"type":"array","items":{"type":"string"}},"disable_path":{"type":"string"}}}', '[]', '[]', 'external_verifiable', 'low', 0, 1)
+  `,
   // Social publishing tables (Issue #35)
   `CREATE TABLE IF NOT EXISTS social_posts (
     id TEXT PRIMARY KEY,
