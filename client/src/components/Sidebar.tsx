@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import {
+  Columns3,
   LayoutDashboard,
   Radio,
   CheckSquare,
@@ -95,6 +96,7 @@ const NAV_ITEMS: NavItemConfig[] = [
   { label: 'Goals',         to: '/goals',      icon: Target },
   { label: 'Opportunities', to: '/opportunities', icon: Lightbulb },
   { label: 'Recommendations', to: '/recommendations', icon: ListChecks },
+  { label: 'Compare',       to: '/comparison', icon: Columns3 },
   { label: 'Scenarios',     to: '/scenarios',  icon: Sparkles },
   { label: 'Conflicts',     to: '/conflicts',  icon: AlertTriangle },
   { label: 'Decision Centre', to: '/decision-centre', icon: Gavel },

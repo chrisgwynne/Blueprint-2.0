@@ -23,6 +23,10 @@ export type DecisionType =
   | 'strategy_selection' | 'goal_creation' | 'goal_status_change'
   | 'conflict_resolution' | 'conflict_dismissal'
   | 'opportunity_accepted' | 'opportunity_dismissed'
+  // Recommendation comparison (#66). A selection states a PREFERENCE
+  // between compared candidates; it does not approve or execute the
+  // winner, which stays the separate existing approval step.
+  | 'comparison_selection' | 'comparison_deferral'
   | 'manual';
 
 export interface RecordDecisionInput {

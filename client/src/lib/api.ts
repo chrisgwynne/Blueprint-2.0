@@ -347,6 +347,29 @@ export const modelScenario = (businessId: string, question: string, context: unk
 export const deleteScenario = (businessId: string, id: string) => del(`/scenarios/${businessId}/${id}`)
 
 // ============================================
+// Recommendation comparison (issue #66)
+//
+// `compareCandidates` is READ ONLY — it approves nothing and executes
+// nothing. `recordComparisonDecision` writes one decision-memory row and
+// still does NOT approve or execute the selected candidate.
+// ============================================
+export interface ComparisonCandidateRef { id: string; kind?: 'task' | 'opportunity' | 'strategy' }
+
+export const getComparableCandidates = (businessId: string) =>
+  get(`/comparisons/${businessId}/candidates`)
+export const compareCandidates = (businessId: string, candidates: ComparisonCandidateRef[]) =>
+  post(`/comparisons/${businessId}/compare`, { candidates })
+export const recordComparisonDecision = (
+  businessId: string,
+  payload: {
+    candidates: ComparisonCandidateRef[]
+    outcome: 'selected' | 'deferred'
+    selected_candidate_id?: string | null
+    rationale: string
+  },
+) => post(`/comparisons/${businessId}/decision`, payload)
+
+// ============================================
 // Conflicts (Feature 2)
 // ============================================
 export const getConflicts = (businessId: string, params = '') =>
