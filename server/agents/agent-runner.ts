@@ -10,7 +10,7 @@ import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest, DANGEROUS_ACTION_TYPES } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
-import { runLLM, resolveProfileLLM, getFallbackLLM, performProviderPreflight } from '../lib/llm-providers.js';
+import { runLLM, resolveProfileLLM, getFallbackLLM, performProviderPreflight, recordProviderOutcome } from '../lib/llm-providers.js';
 import { buildMetricsContext } from './context-builders.js';
 import type { InboxEntry } from './agent-inbox.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
@@ -18,6 +18,7 @@ import { detectAnomalousOutput } from '../lib/security-monitor.js';
 import { SecurityError } from '../lib/outbound-allowlist.js';
 import { checkRunCancellation, markRunCancelled, recordProviderPreflight, recordRunEvent, updateRunHeartbeat } from '../trust/trust-engine.js';
 import { classifyProviderError, isProviderErrorLike, safeErrorMessage } from '../lib/provider-errors.js';
+import { createSystemIssue, updateSystemIssueStatus } from '../system/system-issues.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '../..');
@@ -306,6 +307,7 @@ export function recoverStaleAgentRuns(): { markedStale: number } {
       'stale_timeout',
       run.id,
     );
+    checkAgentFailureStreak(run.agent_id, run.business_id);
     import('../lib/sse-bus.js')
       .then(({ pushDashboardEvent }) => pushDashboardEvent(run.business_id, 'agent_run_failed', {
         agentId: run.agent_id, runId: run.id, error: 'stale_run_timeout',
@@ -546,6 +548,107 @@ function appendRunLog(agentId: string, entry: Record<string, unknown>): void {
   mkdirSync(dir, { recursive: true });
   const logPath = join(dir, 'run-log.jsonl');
   appendFileSync(logPath, JSON.stringify(entry) + '\n', 'utf8');
+}
+
+// ─── Blueprint health checks ────────────────────────────────────────────────
+// Raise a system_issue for signals that mean something is broken about
+// Blueprint itself, not the business it runs for. `agent_consecutive_failures`
+// has been a reserved rule_id in signal-engine.ts's COOLDOWN_HOURS table
+// since #28 but was never actually wired to fire — this is that wiring,
+// as a system_issue rather than a business-facing signal (a broken agent
+// is an operator problem, not a business-risk signal).
+
+const AGENT_FAILURE_STREAK_THRESHOLD = 3; // matches system-health.ts's existing "failing" badge threshold — reusing an already-established number rather than picking a new one.
+
+/**
+ * Called after every failed run. Fires exactly once per losing streak: a
+ * still-open issue for this agent means run N already raised it, so runs
+ * N+1, N+2, ... are silent until either the agent recovers (resolved below)
+ * or a human dismisses it. Skipped runs don't count as failures or reset
+ * the streak (mirrors system-health.ts's own consecutive-failure query).
+ */
+export function checkAgentFailureStreak(agentId: string, businessId: string): void {
+  try {
+    const recentRuns = db.prepare(`
+      SELECT status FROM agent_runs
+      WHERE agent_id = ? AND status != 'skipped'
+      ORDER BY started_at DESC LIMIT 10
+    `).all(agentId) as Array<{ status: string }>;
+    let consecutiveFailures = 0;
+    for (const r of recentRuns) {
+      if (r.status === 'failed') consecutiveFailures++;
+      else break;
+    }
+    if (consecutiveFailures < AGENT_FAILURE_STREAK_THRESHOLD) return;
+
+    const open = db.prepare(
+      "SELECT id FROM system_issues WHERE issue_type = 'agent_consecutive_failures' AND status = 'open' AND json_extract(metadata, '$.agent_id') = ?"
+    ).get(agentId) as { id: string } | undefined;
+    if (open) return;
+
+    createSystemIssue({
+      business_id: businessId,
+      issue_type: 'agent_consecutive_failures',
+      severity: 'error',
+      title: `Agent '${agentId}' has failed ${consecutiveFailures} runs in a row`,
+      description: `Last ${consecutiveFailures} non-skipped run(s) all failed. Likely a bad credential, a provider outage, or a bug — not a transient blip. See agent_runs.error for the individual run failures.`,
+      metadata: { agent_id: agentId, consecutive_failures: consecutiveFailures },
+    });
+  } catch (err) {
+    console.warn('[agent-runner] checkAgentFailureStreak failed (non-fatal):', (err as Error).message);
+  }
+}
+
+/**
+ * Called after every successful run. A success ends the losing streak, so
+ * any open issue this agent raised while it was failing is stale — close
+ * it rather than leaving a human to notice the agent recovered on their own.
+ */
+export function resolveAgentFailureStreak(agentId: string): void {
+  try {
+    const open = db.prepare(
+      "SELECT id FROM system_issues WHERE issue_type = 'agent_consecutive_failures' AND status = 'open' AND json_extract(metadata, '$.agent_id') = ?"
+    ).get(agentId) as { id: string } | undefined;
+    if (open) updateSystemIssueStatus(open.id, 'resolved');
+  } catch (err) {
+    console.warn('[agent-runner] resolveAgentFailureStreak failed (non-fatal):', (err as Error).message);
+  }
+}
+
+const PROVIDER_FALLBACK_STREAK_THRESHOLD = 5; // deliberately not 1 — a single fallback is a normal transient blip (rate limit, one timeout); 5 in a row across the whole system means the primary provider itself is down, not the individual run.
+
+/**
+ * Called after every run that resolves an LLM provider (fallback or not).
+ * `recordProviderOutcome` persists the streak in `settings` so it survives
+ * a restart; this function only decides whether that streak crossing (or
+ * clearing) the threshold is system_issue-worthy, and — same dedup shape
+ * as the agent-failure check above — only acts on the transition, not on
+ * every run while the streak sits above threshold.
+ */
+export function checkProviderFallbackStreak(providerId: string, businessId: string, usedFallback: boolean): void {
+  try {
+    const streak = recordProviderOutcome(providerId, usedFallback);
+    const open = db.prepare(
+      "SELECT id FROM system_issues WHERE issue_type = 'llm_provider_on_fallback' AND status = 'open' AND json_extract(metadata, '$.provider') = ?"
+    ).get(providerId) as { id: string } | undefined;
+
+    if (streak === 0) {
+      if (open) updateSystemIssueStatus(open.id, 'resolved');
+      return;
+    }
+    if (streak < PROVIDER_FALLBACK_STREAK_THRESHOLD || open) return;
+
+    createSystemIssue({
+      business_id: businessId,
+      issue_type: 'llm_provider_on_fallback',
+      severity: 'warning',
+      title: `LLM provider '${providerId}' has been failing over to fallback for ${streak} runs straight`,
+      description: `Every agent run configured for '${providerId}' has silently used the fallback provider for its last ${streak} consecutive attempts. This usually means the primary provider is down, rate-limited, or misconfigured (bad/expired credentials) rather than a one-off blip.`,
+      metadata: { provider: providerId, streak },
+    });
+  } catch (err) {
+    console.warn('[agent-runner] checkProviderFallbackStreak failed (non-fatal):', (err as Error).message);
+  }
 }
 
 // ─── Conductor briefing ───────────────────────────────────────────────────────
@@ -1351,6 +1454,11 @@ export async function runAgent(
     const rawContent = llmResult.content;
     const costUsd = llmResult.cost_usd ?? 0;
 
+    // Blueprint health: did this run need the fallback provider? Tracked
+    // regardless of outcome below — a stuck-on-fallback provider is worth
+    // knowing about even on a run that otherwise completes fine.
+    checkProviderFallbackStreak(providerId, businessId, actualProviderId !== providerId);
+
     // 10. Parse JSON response
     let parsed: ParsedAgentOutput;
     try {
@@ -1679,6 +1787,7 @@ export async function runAgent(
     } catch (statsErr) {
       console.warn('[agent-runner] Failed to update agent stats (non-fatal):', (statsErr as Error).message);
     }
+    resolveAgentFailureStreak(agentId);
 
     // 13b. Track cost in cost_daily table
     try {
@@ -1826,6 +1935,7 @@ ${signalsDetected} signal(s) reviewed.
       UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?
       WHERE id = ?
     `).run(storedError, terminalReason, runId);
+    checkAgentFailureStreak(agentId, businessId);
 
     // Self-healing: diagnose, search for solution, create GitHub issue + draft PR
     const selfHealError = new Error(storedError);

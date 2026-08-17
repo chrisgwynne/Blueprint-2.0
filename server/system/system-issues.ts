@@ -69,7 +69,59 @@ export function createSystemIssue(params: CreateSystemIssueParams): SystemIssue 
     JSON.stringify(params.metadata ?? {}),
     now, now,
   );
-  return getSystemIssue(id) as SystemIssue;
+  const issue = getSystemIssue(id) as SystemIssue;
+  notifyIfSevereEnough(issue);
+  return issue;
+}
+
+const SEVERITY_RANK: Record<SystemIssueSeverity, number> = { info: 0, warning: 1, error: 2, critical: 3 };
+
+/**
+ * Operator-tunable floor for "page a human", read fresh on every call (not
+ * cached) so a change takes effect immediately, matching how
+ * cost_monthly_budget_usd/cost_cap_daily_usd are read in agent-runner.ts.
+ * Defaults to 'error': every current call site raises 'warning' for things
+ * a human doesn't need to be paged for (a single task blocked by policy,
+ * one payload validation failure) — those still land in the dashboard's
+ * System Issues view, just without a proactive push. An operator who wants
+ * warnings pushed too can lower this by writing
+ * settings.system_issue_notify_min_severity = '"warning"'.
+ */
+function getNotifyThreshold(): SystemIssueSeverity {
+  try {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'system_issue_notify_min_severity'").get() as { value: string } | undefined;
+    if (row) {
+      const parsed = JSON.parse(row.value);
+      if (typeof parsed === 'string' && parsed in SEVERITY_RANK) return parsed as SystemIssueSeverity;
+    }
+  } catch {}
+  return 'error';
+}
+
+/**
+ * The one place every createSystemIssue() caller gets proactive notification
+ * for free — task-queue.ts, agent-runner.ts, webhook-reconciliation.ts, and
+ * any future caller, without each of them wiring dispatch() themselves.
+ * Dynamic import breaks a real module cycle: dispatcher.ts -> telegram.ts ->
+ * task-queue.ts -> system-issues.ts would deadlock a static import at
+ * load time. Fire-and-forget (not awaited) because createSystemIssue()
+ * itself is synchronous and used that way at every call site — a Telegram
+ * delivery failure must never make raising the issue itself fail; the
+ * system_issues row above is the durable record regardless of whether
+ * this notification ever lands.
+ */
+function notifyIfSevereEnough(issue: SystemIssue): void {
+  if (SEVERITY_RANK[issue.severity] < SEVERITY_RANK[getNotifyThreshold()]) return;
+  import('../notifications/dispatcher.js')
+    .then(({ dispatchToAll }) => dispatchToAll(['dashboard', 'telegram'], {
+      business_id: issue.business_id ?? undefined,
+      severity: issue.severity,
+      title: issue.title,
+      body: issue.description ?? undefined,
+      entity_type: 'system_issue',
+      entity_id: issue.id,
+    }))
+    .catch((err: Error) => console.error('[system-issues] notify dispatch failed (non-fatal):', err.message));
 }
 
 export function getSystemIssue(id: string): SystemIssue | null {

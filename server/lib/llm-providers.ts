@@ -467,6 +467,38 @@ export function getFallbackLLM(): { provider: string; model: string } | null {
   return { provider: f.provider, model: f.model };
 }
 
+/**
+ * How many consecutive agent runs have used the fallback provider instead
+ * of `providerId`, system-wide. Persisted in `settings` (not memory) so it
+ * survives a process restart — an outage that straddles a redeploy should
+ * still be counted as ongoing, not reset to zero. Keyed by the *intended*
+ * primary provider rather than per-agent/per-business: a primary-provider
+ * outage affects every agent configured to use it at once, and keying
+ * per-agent would raise the same underlying "provider X is down" issue
+ * once per agent instead of once.
+ */
+function fallbackStreakKey(providerId: string): string {
+  return `llm_fallback_streak_${providerId}`;
+}
+
+/**
+ * Call once per run with whether it had to fall back. Returns the streak
+ * *after* this call so the caller can decide whether it just crossed a
+ * threshold. A primary success resets the streak to 0 immediately — this
+ * is "stuck on fallback", not "has ever failed once".
+ */
+export function recordProviderOutcome(providerId: string, usedFallback: boolean): number {
+  const key = fallbackStreakKey(providerId);
+  if (!usedFallback) {
+    db.prepare('DELETE FROM settings WHERE key = ?').run(key);
+    return 0;
+  }
+  const row = db.prepare('SELECT value FROM settings WHERE key = ?').get(key) as { value: string } | undefined;
+  const streak = (row ? (JSON.parse(row.value) as number) : 0) + 1;
+  db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)").run(key, JSON.stringify(streak));
+  return streak;
+}
+
 export interface ProfileLLM {
   provider?: string;
   model?: string;

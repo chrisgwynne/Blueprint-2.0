@@ -626,6 +626,67 @@ POST  /api/bap/v1/businesses/:id/agents/:id/run  — trigger run
 GET   /api/bap/v1/runs/:runId                    — run status
 ```
 
+### System Issues (2026-08)
+```
+GET   /api/bap/v1/businesses/:id/system-issues       — list (filter: status, issue_type)
+PATCH /api/bap/v1/system-issues/:id                  — acknowledge / resolve / dismiss
+```
+The audit trail for "why didn't Blueprint act" — raised whenever Blueprint
+decides *not* to do something a human might expect (a task fails Typed
+Action Registry validation, an operating policy blocks an autonomous
+approval, a daily autonomous-task cap is reached) instead of silently
+dropping the work or doing it anyway. `severity` is one of `info` /
+`warning` / `error` / `critical`; `status` is `open` / `acknowledged` /
+`resolved` / `dismissed`. `related_task_id` and `related_connector_id` are
+soft references — an issue survives deletion of the task or connector it
+points at, because it's a historical record, not a live link.
+
+`PATCH` requires `system_issues:update` and re-checks that the issue's
+`business_id` is one this agent is authorized for before allowing the
+status change — the same per-business authorization shape every other
+write-capable BAP surface in this document uses.
+
+**Blueprint-health issue types (2026-08):** three new checks raise issues
+about Blueprint's own operation, not the business it runs for — the
+dashboard's System Health page (`/api/system/health/full`) already showed
+these conditions passively, but nothing acted on them before this pass:
+
+- `agent_consecutive_failures` — an agent has failed 3 non-skipped runs in
+  a row (a bad credential, a provider outage, or a bug, not a transient
+  blip). `metadata.agent_id` / `metadata.consecutive_failures`. Raised
+  once per losing streak, auto-`resolved` the moment the agent completes
+  a run successfully again.
+- `connector_critically_stale` — a connector has gone stale (past its
+  type's expected sync cadence — see `STALE_THRESHOLDS_HOURS` in
+  `server/connectors/freshness.ts`) *and* stayed stale past 2x that
+  threshold, the same escalation point the hourly sweep already uses to
+  raise a connector_stale signal's severity from `warning` to `alert`.
+  `related_connector_id` is set; `metadata.hours_since_sync` /
+  `metadata.stale_threshold_hours` give the numbers behind it.
+- `llm_provider_on_fallback` — an agent's configured primary LLM provider
+  has failed over to the fallback provider for 5 consecutive runs
+  system-wide (not the first fallback — that's normal transient noise: a
+  rate limit, one timeout). `metadata.provider` / `metadata.streak`.
+  Severity `warning`, not `error` — the run still completed via fallback,
+  this is "degraded", not "broken". Auto-resolved the instant the primary
+  provider succeeds again.
+
+**Proactive notification (2026-08):** `createSystemIssue()` — the one
+function every issue in this table goes through, regardless of which
+subsystem raised it — now dispatches a notification (dashboard + Telegram,
+if `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` are configured) for any issue at
+or above `settings.system_issue_notify_min_severity`, an operator-tunable
+floor defaulting to `error` (so `error` and `critical` page a human;
+`warning` and `info` stay dashboard/BAP-only unless an operator lowers the
+threshold). There is no BAP write path for that setting today. **This is
+best-effort, not a delivery guarantee**: a Telegram send can fail (network,
+misconfigured token, rate limit) and does not roll back or retry the
+`system_issues` row underneath it — the row this endpoint reads is always
+the durable source of truth for "did Blueprint flag this", regardless of
+whether the notification ever actually arrived. Don't rely on "I didn't
+get a Telegram message" as evidence nothing is wrong — poll
+`GET /businesses/:id/system-issues?status=open` instead.
+
 ### Webhooks
 ```
 PUT   /api/bap/v1/me/webhook                        — configure
