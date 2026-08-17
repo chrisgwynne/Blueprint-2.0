@@ -78,6 +78,7 @@ import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
+import bapExplanationsRouter from './bap-explanations.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -319,6 +320,9 @@ router.use(bapTrustRouter);
 router.use(bapOperatingPoliciesRouter);
 // Issue #70 — verified action receipts (permission-scoped, read-only).
 router.use(bapReceiptsRouter);
+// Issue #82 — "why did Blueprint do this?" explanation panels (#60), reused
+// verbatim including the #70 redaction pass. Permission-scoped, read-only.
+router.use(bapExplanationsRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

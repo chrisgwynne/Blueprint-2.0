@@ -112,6 +112,11 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // by the approval/execution path itself and no BAP route writes one, so
   // there is deliberately no `receipts:write` counterpart to grant.
   'receipts:read',
+  // Issue #82 — "why did Blueprint do this?" explanation panels (#60).
+  // Read-only: an explanation is a rendering of records other modules
+  // already authored (signals, decisions, receipts, outcomes), so there is
+  // nothing here for a BAP agent to write — no `explanations:write` exists.
+  'explanations:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

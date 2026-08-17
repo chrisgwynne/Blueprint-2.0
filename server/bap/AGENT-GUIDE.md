@@ -7,7 +7,7 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
 > [CHANGELOG.md](/CHANGELOG.md). Ten more dashboard features (Decision
-> Centre, Comparisons, Command Centre, Portfolios, Digest, Explanations,
+> Centre, Comparisons, Command Centre, Portfolios, Digest,
 > Audit Search, Retrospectives, Playbooks, Simulation) exist but have no
 > BAP surface yet — see issues #77–#86.
 
@@ -192,6 +192,38 @@ verification evidence where available. Use this instead of polling task
 status if you need to know something genuinely landed on the other end, not
 just that Blueprint attempted it.
 
+### Explanations (2026-08)
+```
+GET  /api/bap/v1/explanations/kinds                         — vocabulary (subject kinds, evidence quality, causal claim, disposition meanings)
+GET  /api/bap/v1/businesses/:id/explanations/:kind/:id      — one explanation
+```
+Read-only. "Why did Blueprint do this?" for any of the four subject kinds
+the dashboard panel explains: `task`, `decision` (a decision-memory row,
+including comparison selections and deferrals), `hiring_analysis` (pass
+`latest` for the most recent run instead of an ID), and `hiring_candidate`.
+This is the identical engine the dashboard's "Why?" panel calls — same
+builders, same redaction pass — so there is no second code path that could
+leak something the dashboard would have caught, and no explanation you get
+here can disagree with what a human sees.
+
+The response tells you the trigger (signal / schedule / human / agent run /
+policy change), the evidence used with a `known | unknown | not_comparable`
+state and a `fresh | stale | degraded | missing | negative | not_applicable`
+quality on every item, the policy provisions that applied, a confidence that
+is never invented when nothing was recorded, the alternatives that were
+rejected/suppressed/gated/deferred, the action's stage-by-stage state, and a
+`limitations` array that is never empty — it always ends with the standing
+disclosure that the explanation can only reflect what was recorded, not
+everything that happened.
+
+A no-op, a suppression, or a deferral is a normal `200` with that honest
+`disposition` — not an error and not a fabricated "success." An unknown
+subject kind is a `400` naming the kinds that ARE explainable; an unknown or
+cross-tenant ID is a `404`, never a leak of another business's record. Use
+this before re-proposing something Blueprint has already explained away —
+e.g. check whether a candidate is `suppressed` before proposing the same
+role again.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -273,6 +305,7 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `explanations:read` | Read "why did Blueprint do this?" explanations |
 
 ---
 
