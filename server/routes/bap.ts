@@ -28,6 +28,10 @@
  *   GET    /businesses/:bid/metrics/snapshot  — latest snapshot
  *   GET    /businesses/:bid/agents            — list internal agents
  *   POST   /businesses/:bid/agents/:aid/run   — trigger agent run
+ *   GET    /businesses/:bid/hiring/status     — hiring policy + pacing + recent
+ *   GET    /businesses/:bid/hiring/analyses   — hiring analysis contracts
+ *   GET    /businesses/:bid/hiring/analyses/:id — one analysis contract
+ *   POST   /businesses/:bid/hiring/analyses   — trigger analysis (idempotent)
  *   GET    /runs/:runId                       — run status
  *   PUT    /me/webhook                        — update webhook config
  *   GET    /me/webhook/deliveries             — list deliveries

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import db from '../db/db.js';
 
 type FakeFile = { path: string };
@@ -95,9 +95,13 @@ mock.module('../lib/intelligence-events.js', () => ({
   logIntelligenceEvent: mock(() => undefined),
 }));
 
-mock.module('../tasks/task-queue.js', () => ({
-  createTask: mock(() => null),
-}));
+// NOTE: this file deliberately does NOT mock '../tasks/task-queue.js'.
+// bun's mock.module registry is process-global and cannot be restored, so a
+// module mock here leaks into every test file loaded afterwards — a
+// null-returning createTask stub silently broke the hiring suite, which
+// creates real tasks. These tests are about LLM/provider resilience and never
+// assert on task creation, so the real createTask runs against the in-memory
+// test database instead, with no cross-file blast radius.
 
 function providerError(status: number, retryAfterMs?: number): Error {
   const err = new Error(`provider google http_${status} ${status === 429 || status === 503 ? 'retryable' : 'non_retryable'}`);

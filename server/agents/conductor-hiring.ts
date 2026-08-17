@@ -27,7 +27,6 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
-import { createTask } from '../tasks/task-queue.js';
 import { resolveMode } from './hiring/policy.js';
 import {
   attachTaskToProposalSlot, claimProposalSlot, createTrial, finishAnalysisRun,
@@ -463,6 +462,11 @@ async function analysisBody(
   const creationNotes: Array<{ template_id: string; result: string }> = [];
 
   if (mode === 'live') {
+    // Resolved at call time rather than via a top-level import: task-queue
+    // pulls in the trust engine, action registry and business profile, and a
+    // static binding here also made the hiring engine capture whatever the
+    // module registry held at first load.
+    const { createTask } = await import('../tasks/task-queue.js');
     for (const rec of enriched) {
       const candidate = admittedById.get(rec.agent_id)!;
       if ((rec.confidence ?? 0) < 0.7 && !rec.degraded) {
@@ -554,6 +558,14 @@ async function analysisBody(
       trigger_reason: opts.triggerReason,
     },
   });
+
+  // A recommendation that did not become a proposal is a decision, not a
+  // silent drop — surface it (#54).
+  for (const note of creationNotes) {
+    if (note.result !== 'proposed') {
+      console.log(`[hiring] ${businessId}: ${note.template_id} not proposed — ${note.result}`);
+    }
+  }
 
   if (proposalIds.length > 0) {
     await notifyProposals(businessId, proposalIds.length, degraded);
