@@ -20,6 +20,7 @@ let server: ReturnType<express.Express['listen']>;
 let baseUrl: string;
 let keyRead: string;
 let keyTrigger: string;
+let keyProposalsRead: string;
 
 interface TestResponse { status: number; body: any } // eslint-disable-line @typescript-eslint/no-explicit-any
 
@@ -50,6 +51,33 @@ function insertRetrospective(businessId: string, overrides: Partial<Record<strin
   return id;
 }
 
+function insertProposal(businessId: string, overrides: Partial<Record<string, unknown>> = {}): string {
+  const id = generateId();
+  db.prepare(`
+    INSERT INTO retrospective_proposals (
+      id, retrospective_id, business_id, target, title, statement, basis, basis_reason,
+      period_start, period_end, cited_records, measured_effect, conflicts,
+      expected_benefit, risk, rollback_plan, expires_at, draft_ref, decision_task_id,
+      status, created_by, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+  `).run(
+    id, (overrides.retrospective_id as string | null) ?? null, businessId, 'policy',
+    (overrides.title as string) ?? "Require human approval for 'ad_spend_increase'",
+    'Add \'ad_spend_increase\' to approvals.always_require_human_action_types.',
+    (overrides.basis as string) ?? 'evidence_backed',
+    'Three measured outcomes went the wrong way this period.',
+    '2026-06-01T00:00:00.000Z', '2026-06-30T00:00:00.000Z',
+    JSON.stringify([{ kind: 'task', id: 'tsk_fixture', summary: 'fixture outcome' }]),
+    JSON.stringify(null), JSON.stringify([]),
+    'Stops the pattern from repeating unattended.', 'Throughput drops on this action type.',
+    'Roll the operating policy back via its own rollback control.',
+    '2026-07-30T00:00:00.000Z',
+    JSON.stringify({ kind: 'policy_patch', scope: 'business', scope_key: businessId, add_action_types: ['ad_spend_increase'], patch: {}, base_version: 1, next_version: 2, changes: [], valid: true }),
+    (overrides.status as string) ?? 'proposed', 'system:retrospective',
+  );
+  return id;
+}
+
 function insertCalibration(businessId: string, agentId: string, overrides: Partial<Record<string, unknown>> = {}): string {
   const id = generateId();
   db.prepare(`
@@ -69,7 +97,7 @@ beforeAll(async () => {
   db.prepare(`INSERT INTO businesses (id, name, slug, type) VALUES (?, 'BAP Review A', 'bap-rev-a', 'ecommerce') ON CONFLICT(id) DO NOTHING`).run(BIZ_A);
   db.prepare(`INSERT INTO businesses (id, name, slug, type) VALUES (?, 'BAP Review B', 'bap-rev-b', 'ecommerce') ON CONFLICT(id) DO NOTHING`).run(BIZ_B);
 
-  db.prepare(`DELETE FROM bap_agents WHERE id IN ('agt_rev_read', 'agt_rev_trigger')`).run();
+  db.prepare(`DELETE FROM bap_agents WHERE id IN ('agt_rev_read', 'agt_rev_trigger', 'agt_rev_proposals')`).run();
   keyRead = generateApiKey();
   db.prepare(`
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
@@ -81,6 +109,12 @@ beforeAll(async () => {
     INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
     VALUES (?, 'Review Trigger Agent', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
   `).run('agt_rev_trigger', await hashApiKey(keyTrigger), keyPrefix(keyTrigger), JSON.stringify(['retrospectives:read', 'retrospectives:trigger']), JSON.stringify([BIZ_A]));
+
+  keyProposalsRead = generateApiKey();
+  db.prepare(`
+    INSERT INTO bap_agents (id, name, api_key_hash, api_key_prefix, status, permissions, business_access, created_at)
+    VALUES (?, 'Review Proposals Read Agent', ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP)
+  `).run('agt_rev_proposals', await hashApiKey(keyProposalsRead), keyPrefix(keyProposalsRead), JSON.stringify(['retrospective_proposals:read']), JSON.stringify([BIZ_A]));
 
   db.prepare(`
     INSERT INTO tasks (id, business_id, title, proposed_by, status, trust_tier, approval_mode, action_type, confidence, priority, created_at, updated_at)
@@ -99,11 +133,12 @@ beforeAll(async () => {
 afterAll(() => {
   server?.close();
   db.prepare(`DELETE FROM tasks WHERE business_id IN (?, ?) AND title = 'Fixture recommendation task'`).run(BIZ_A, BIZ_B);
+  db.prepare(`DELETE FROM retrospective_proposals WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM retrospectives WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
   db.prepare(`DELETE FROM agent_calibration WHERE business_id IN (?, ?)`).run(BIZ_A, BIZ_B);
-  db.prepare(`DELETE FROM idempotency_keys WHERE agent_id IN ('agt_rev_read', 'agt_rev_trigger')`).run();
-  db.prepare(`DELETE FROM bap_audit WHERE agent_id IN ('agt_rev_read', 'agt_rev_trigger')`).run();
-  db.prepare(`DELETE FROM bap_agents WHERE id IN ('agt_rev_read', 'agt_rev_trigger')`).run();
+  db.prepare(`DELETE FROM idempotency_keys WHERE agent_id IN ('agt_rev_read', 'agt_rev_trigger', 'agt_rev_proposals')`).run();
+  db.prepare(`DELETE FROM bap_audit WHERE agent_id IN ('agt_rev_read', 'agt_rev_trigger', 'agt_rev_proposals')`).run();
+  db.prepare(`DELETE FROM bap_agents WHERE id IN ('agt_rev_read', 'agt_rev_trigger', 'agt_rev_proposals')`).run();
 });
 
 describe('GET /businesses/:id/recommendations', () => {
@@ -193,6 +228,69 @@ describe('POST /businesses/:id/retrospectives/run', () => {
   test('400 without Idempotency-Key', async () => {
     const { status } = await post(`/api/bap/v1/businesses/${BIZ_A}/retrospectives/run`, {}, { 'BAP-Key': keyTrigger });
     expect(status).toBe(400);
+  });
+});
+
+describe('GET /businesses/:id/retrospective-proposals', () => {
+  test('lists proposals for the business with basis/status/draft_ref preserved', async () => {
+    const retroId = insertRetrospective(BIZ_A);
+    insertProposal(BIZ_A, { retrospective_id: retroId, basis: 'evidence_backed' });
+    insertProposal(BIZ_A, { retrospective_id: retroId, basis: 'conflicting_evidence', status: 'rejected' });
+
+    const { status, body } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospective-proposals`, { 'BAP-Key': keyProposalsRead });
+    expect(status).toBe(200);
+    expect(body.proposals.length).toBeGreaterThanOrEqual(2);
+    const bases = body.proposals.map((p: any) => p.basis);
+    expect(bases).toContain('evidence_backed');
+    expect(bases).toContain('conflicting_evidence');
+    const rejected = body.proposals.find((p: any) => p.status === 'rejected');
+    expect(rejected.draft_ref.kind).toBe('policy_patch');
+  });
+
+  test('status filter narrows the result set', async () => {
+    const { body } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospective-proposals?status=rejected`, { 'BAP-Key': keyProposalsRead });
+    expect(body.proposals.every((p: any) => p.status === 'rejected')).toBe(true);
+  });
+
+  test('403 without retrospective_proposals:read (retrospectives:read alone is not enough)', async () => {
+    const { status } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospective-proposals`, { 'BAP-Key': keyRead });
+    expect(status).toBe(403);
+  });
+
+  test('403 for a business not in the calling agent\'s business_access', async () => {
+    const { status } = await get(`/api/bap/v1/businesses/${BIZ_B}/retrospective-proposals`, { 'BAP-Key': keyProposalsRead });
+    expect(status).toBe(403);
+  });
+});
+
+describe('GET /businesses/:id/retrospectives/:id/proposals', () => {
+  test('lists proposals scoped to one retrospective', async () => {
+    const retroId = insertRetrospective(BIZ_A);
+    const otherRetroId = insertRetrospective(BIZ_A);
+    insertProposal(BIZ_A, { retrospective_id: retroId });
+    insertProposal(BIZ_A, { retrospective_id: otherRetroId });
+
+    const { status, body } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospectives/${retroId}/proposals`, { 'BAP-Key': keyProposalsRead });
+    expect(status).toBe(200);
+    expect(body.proposals.length).toBe(1);
+    expect(body.proposals[0].retrospective_id).toBe(retroId);
+  });
+
+  test('404 for an unknown retrospective id', async () => {
+    const { status } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospectives/does-not-exist/proposals`, { 'BAP-Key': keyProposalsRead });
+    expect(status).toBe(404);
+  });
+
+  test('404 for a retrospective that belongs to another business (cross-tenant safe)', async () => {
+    const retroId = insertRetrospective(BIZ_B);
+    const { status } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospectives/${retroId}/proposals`, { 'BAP-Key': keyProposalsRead });
+    expect(status).toBe(404);
+  });
+
+  test('403 without retrospective_proposals:read', async () => {
+    const retroId = insertRetrospective(BIZ_A);
+    const { status } = await get(`/api/bap/v1/businesses/${BIZ_A}/retrospectives/${retroId}/proposals`, { 'BAP-Key': keyRead });
+    expect(status).toBe(403);
   });
 });
 

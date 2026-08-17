@@ -6,10 +6,14 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). Ten more dashboard features (Decision
+> [CHANGELOG.md](/CHANGELOG.md). Nine more dashboard features (Decision
 > Centre, Comparisons, Command Centre, Portfolios, Digest, Explanations,
-> Audit Search, Retrospectives, Playbooks, Simulation) exist but have no
-> BAP surface yet — see issues #77–#86.
+> Audit Search, Playbooks, Simulation) exist but have no BAP surface yet —
+> see issues #77–#86. (Retrospectives now has one: see "Retrospective
+> Proposals" below — the underlying retrospective engine and its narrative
+> findings were already exposed via `retrospectives:read`/`:trigger`; #84
+> added the typed, reviewable operating-policy-change proposals it can
+> produce.)
 
 ---
 
@@ -192,6 +196,33 @@ verification evidence where available. Use this instead of polling task
 status if you need to know something genuinely landed on the other end, not
 just that Blueprint attempted it.
 
+### Retrospective Proposals (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/retrospective-proposals               — list, all retrospectives (filter: status, limit)
+GET  /api/bap/v1/businesses/:id/retrospectives/:retroId/proposals     — list, one retrospective
+```
+Read-only. A retrospective doesn't just narrate what worked — it can raise
+a typed, bounded proposal to change how Blueprint operates: `target` is
+`policy` (add an action type to `always_require_human_action_types`),
+`workflow` (gate a playbook step behind approval), or `agent_lifecycle`
+(retire/pause an agent). `basis` tells you how seriously to take it —
+`evidence_backed` means measured outcome records support it, `hypothesis`
+never reaches this endpoint at all (no proposal is raised on a hunch), and
+`conflicting_evidence` means the records disagree and were surfaced
+un-averaged rather than smoothed into a false consensus. `draft_ref`
+points at the real (unapplied) artifact the proposal would activate —
+e.g. a `policy_patch` carries `base_version`/`next_version`/`changes`, the
+same diff a human reviewer sees.
+
+There is no BAP write path to review, approve, reject, or activate a
+proposal. Reviewing one is a human act on the dashboard
+(`POST /:businessId/proposals/:id/review`), which only ever reaches
+activation through the existing #61 decision-queue approval flow — the
+same "no operating change is activated without the required approval"
+guarantee #73 itself was built to enforce. Read a proposal here to know
+one is pending (and what it would do) before proposing more of the pattern
+it targets; approve/reject it on the dashboard.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -273,6 +304,7 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `retrospective_proposals:read` | Read retrospective operating-policy-change proposals |
 
 ---
 
