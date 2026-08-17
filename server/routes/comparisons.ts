@@ -17,40 +17,14 @@ import type { Request, Response } from 'express';
 import { isAuthenticated } from '../middleware/auth.js';
 import {
   buildComparison, listComparableCandidates, recordComparisonDecision,
-  ComparisonRejectedError, COMPARISON_CANDIDATE_KINDS,
-  type CandidateRef, type ComparisonCandidateKind,
+  parseCandidateRefs, ComparisonRejectedError,
 } from '../brain/comparison-engine.js';
 
 const router = Router();
 router.use(isAuthenticated);
 
-/**
- * Accepts either `["id1","id2"]` or `[{"id":"id1","kind":"task"}, ...]`.
- * An unrecognised `kind` is rejected rather than silently dropped, so a
- * typo can never quietly change which record was compared.
- */
-function parseCandidateRefs(raw: unknown): CandidateRef[] {
-  if (!Array.isArray(raw)) {
-    throw new Error('`candidates` must be an array of ids or { id, kind } objects.');
-  }
-  return raw.map((entry, i) => {
-    if (typeof entry === 'string') return { id: entry };
-    if (entry && typeof entry === 'object') {
-      const obj = entry as Record<string, unknown>;
-      const id = obj.id;
-      if (typeof id !== 'string' || !id.trim()) {
-        throw new Error(`candidates[${i}] is missing a string \`id\`.`);
-      }
-      const kind = obj.kind;
-      if (kind == null) return { id };
-      if (typeof kind !== 'string' || !COMPARISON_CANDIDATE_KINDS.includes(kind as ComparisonCandidateKind)) {
-        throw new Error(`candidates[${i}].kind must be one of ${COMPARISON_CANDIDATE_KINDS.join(' | ')}.`);
-      }
-      return { id, kind: kind as ComparisonCandidateKind };
-    }
-    throw new Error(`candidates[${i}] must be an id string or an { id, kind } object.`);
-  });
-}
+// `parseCandidateRefs` lives on the engine (#78) so this router and the BAP
+// one accept byte-for-byte the same candidate shapes.
 
 function actorFrom(req: Request): string {
   const userId = (req.session as unknown as { userId?: string } | undefined)?.userId;

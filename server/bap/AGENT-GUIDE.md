@@ -192,6 +192,38 @@ verification evidence where available. Use this instead of polling task
 status if you need to know something genuinely landed on the other end, not
 just that Blueprint attempted it.
 
+### Comparisons (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/comparisons/candidates  — what may be compared
+POST /api/bap/v1/businesses/:id/comparisons             — compare candidates you name
+```
+Read-only. When you have several candidates for the same decision, POST their
+ids (`{"candidates": ["id1","id2"]}`, or `{"id","kind"}` objects where `kind`
+is `task` | `opportunity` | `strategy`, 2–6 of them) and you get Blueprint's
+own normalised reading of them: which fields they genuinely **share**, which
+actually **differ**, and the single operating policy all of them are judged
+against — approval tier, whether each needs a human, connector blocks.
+
+Every field carries a `state` of `known` / `unknown` / `not_comparable` with a
+citation or a reason, and the holes are collected in `missing_data`. Nothing
+is defaulted, averaged or zero-filled — if Blueprint has not measured
+something, you are told that instead of being handed a number. Read the
+`comparability.warnings` too: mixed decision classes and no measured track
+record are flagged rather than smoothed over.
+
+Building a comparison is inert — `read_only: true`, no approval, no execution
+job, no status change. Candidates from a different business are a `422` naming
+the offending id: different businesses have different policies, connectors and
+evidence windows, so one table over both would be dishonest.
+
+Not to be confused with `GET /businesses/:id/recommendations`
+(`recommendations:read`), which returns the ranked list Blueprint generated
+for you. This compares the specific candidates *you* nominate.
+
+There is no BAP endpoint to record which candidate won. Recording a selection
+writes to Blueprint's decision memory, and no BAP route writes that — present
+the comparison with your recommendation and let a human record the choice.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -273,6 +305,7 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `comparisons:read` | List comparable candidates, build a side-by-side comparison |
 
 ---
 

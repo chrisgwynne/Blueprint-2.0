@@ -78,6 +78,7 @@ import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
+import bapComparisonsRouter from './bap-comparisons.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -319,6 +320,8 @@ router.use(bapTrustRouter);
 router.use(bapOperatingPoliciesRouter);
 // Issue #70 — verified action receipts (permission-scoped, read-only).
 router.use(bapReceiptsRouter);
+// Issue #78 — recommendation comparison mode (#66's engine), read-only.
+router.use(bapComparisonsRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

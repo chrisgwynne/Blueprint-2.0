@@ -112,6 +112,14 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // by the approval/execution path itself and no BAP route writes one, so
   // there is deliberately no `receipts:write` counterpart to grant.
   'receipts:read',
+  // Issue #78 — recommendation comparison (#66's engine) over BAP. Distinct
+  // from `recommendations:read`, which serves the ranked auto-generated list
+  // in bap-review.ts: this grant covers the deliberate side-by-side of
+  // candidates the caller names. Read-only — there is no
+  // `comparisons:decide`, because recording a comparison outcome writes to
+  // `decisions`, and no BAP route writes decision memory (see
+  // bap-comparisons.ts's docstring for the full reasoning).
+  'comparisons:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {
