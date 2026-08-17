@@ -128,6 +128,18 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // `decisions`, and no BAP route writes decision memory (see
   // bap-comparisons.ts's docstring for the full reasoning).
   'comparisons:read',
+  // Issue #79 — #59's cross-business executive summary over BAP. The only
+  // BAP grant that is not resolved against a `:businessId` in the path: the
+  // route spans businesses, so bap-command-centre.ts checks every id the
+  // caller names against `business_access` itself and scopes the engine to
+  // that grant. Deliberately separate from the four grants covering the
+  // surfaces it summarises (decision_queue:read, receipts:read,
+  // outcomes:read, connectors:read) — this is a bounded, ranked overview,
+  // not the full records, so an operator can hand out the triage view
+  // without handing out every receipt body. Read-only: #59 has no write
+  // path, and approving from a summary card would skip the policy re-check
+  // the decision queue performs at the moment of decision.
+  'command_centre:read',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

@@ -80,6 +80,7 @@ import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
 import bapDecisionQueueRouter from './bap-decision-queue.js';
 import bapComparisonsRouter from './bap-comparisons.js';
+import bapCommandCentreRouter from './bap-command-centre.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -327,6 +328,11 @@ router.use(bapReceiptsRouter);
 router.use(bapDecisionQueueRouter);
 // Issue #78 — recommendation comparison mode (#66's engine), read-only.
 router.use(bapComparisonsRouter);
+// Issue #79 — #59's cross-business executive command centre, read-only. The
+// only sub-router here whose paths carry no `:businessId`; it spans
+// businesses by design and enforces the agent's business_access grant
+// itself rather than through requirePermission's path check.
+router.use(bapCommandCentreRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

@@ -6,11 +6,11 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue and Comparison mode now
-> have read-only BAP surfaces too (#77, #78, below). Eight more dashboard
-> features (Command Centre, Portfolios, Digest, Explanations, Audit Search,
-> Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet —
-> see issues #79–#86.
+> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode and the
+> Executive Command Centre now have read-only BAP surfaces too (#77, #78,
+> #79, below). Seven more dashboard features (Portfolios, Digest,
+> Explanations, Audit Search, Retrospectives, Playbooks, Simulation) exist
+> but have no BAP surface yet — see issues #80–#86.
 
 ---
 
@@ -251,6 +251,64 @@ There is no BAP endpoint to record which candidate won. Recording a selection
 writes to Blueprint's decision memory, and no BAP route writes that — present
 the comparison with your recommendation and let a human record the choice.
 
+### Command Centre (2026-08)
+```
+GET  /api/bap/v1/command-centre        — cross-business executive summary
+GET  /api/bap/v1/command-centre/scope  — which businesses you may select
+```
+Read-only, permission `command_centre:read`. One call for the picture you
+would otherwise assemble from four surfaces across every business you run:
+pending decisions with lane and risk breakdown, recent verified changes from
+receipts, the outcome/ROI summary including measured declines, connector
+health, and a ranked cross-business `attention` list of what to look at first.
+
+Query `?business_ids=a,b,c` (repeated `business_ids=` params work too), plus
+`?window_days=` (default 30) and `?sample_size=` (items per section, default
+5). Omit `business_ids` for every business in your grant. A selection is
+capped at 25 businesses.
+
+Two things to read carefully before trusting a number:
+
+- **Freshness is two timestamps, not one.** Every section carries `as_of`
+  (when it was computed — always now) and `data_as_of` (the newest source
+  record behind it, or `null`). A section computed a second ago from a
+  three-week-old receipt is three weeks old and says so.
+- **Failures are visible, not silent.** Each section is an envelope with its
+  own `status` of `ok` or `failed`; a business is `ok` / `degraded` /
+  `unavailable` with a `failed_sections` list. One business's ROI outage
+  leaves every other business — and every other section of that same
+  business — intact and real. `portfolio_totals.excluded` names every
+  business and section missing from the totals, so a partial total is never
+  presented as complete.
+
+Every item carries an `evidence` link (`kind`, `id`, `business_id`, `href`)
+pointing at the real record it came from — drill into it on the owning
+surface below.
+
+Naming a business outside your `business_access` grant is a `403` listing
+`denied_business_ids`, not a partial answer: a summary of the three
+businesses you were allowed must never be mistaken for a summary of the five
+you asked about. Call `/command-centre/scope` first to see exactly what you
+may select (it also reports `unknown_business_ids` — ids in your grant with
+no matching business).
+
+`?portfolio_id=` from the dashboard route is not offered over BAP: a
+portfolio's membership can change under you between two identical calls, and
+its members are a set you never named. Name your businesses explicitly.
+
+> **Not a replacement for the per-business surfaces it summarises.** Each
+> section has its own endpoint returning full records — Decision Queue
+> (`decision_queue:read`), Receipts (`receipts:read`), Outcomes
+> (`outcomes:read`), Connectors (`connectors:read`). This one returns a
+> bounded, ranked overview across many businesses, `sample_size` items per
+> section rather than the whole list. Triage here, then drill in there via
+> each item's `evidence.id`. Holding `command_centre:read` does not confer
+> those four grants, and none of them confers this one.
+
+There is no write path. Approving from a summary card would skip the policy
+re-check the Decision Queue performs at the moment of decision, so it does
+not exist here for an agent any more than it does for a human.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -334,6 +392,7 @@ const valid = crypto.timingSafeEqual(
 | `receipts:read` | Read action receipts |
 | `decision_queue:read` | Read the pending-decision review queue (not the decision-memory log — see above) |
 | `comparisons:read` | List comparable candidates, build a side-by-side comparison |
+| `command_centre:read` | Read the cross-business executive summary and your selectable scope |
 
 ---
 
