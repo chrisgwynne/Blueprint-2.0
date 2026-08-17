@@ -110,7 +110,7 @@ describe('runSignalEngine — merchant snapshot dedup (issue #42)', () => {
     `).all(BIZ, MERCHANT_CONNECTOR_ID) as Array<{ id: string }>;
 
     expect(openSignals()).toHaveLength(1);
-    const firstId = openSignals()[0].id;
+    const firstId = openSignals()[0]!.id;
 
     // The exact same (current, previous) pair processed twice more — e.g. a
     // retried sync, or a duplicate scheduler trigger — must not create
@@ -120,6 +120,6 @@ describe('runSignalEngine — merchant snapshot dedup (issue #42)', () => {
 
     const after = openSignals();
     expect(after).toHaveLength(1);
-    expect(after[0].id).toBe(firstId);
+    expect(after[0]!.id).toBe(firstId);
   });
 });

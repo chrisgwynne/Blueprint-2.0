@@ -13,11 +13,26 @@ import { describe, test, expect, beforeAll, afterEach } from 'bun:test';
 import db, { generateId } from '../db/db.js';
 import { createTask, approveTask, cancelTask, getTask } from './task-queue.js';
 import { getActiveJobForTask } from './execution-jobs.js';
+import { upsertActionRegistryEntry } from './action-registry.js';
 
 const BIZ = 'biz_approve_test';
+const FIXTURE_ACTION_TYPE = 'test_approve_cancel_fixture_action';
 
 beforeAll(() => {
   db.prepare(`INSERT INTO businesses (id, name, slug) VALUES (?, 'Approve Test', 'approve-test') ON CONFLICT(id) DO NOTHING`).run(BIZ);
+  // A dedicated, never-reused, fake action_type registered with
+  // dispatched_by_executor: true so approveTask() enqueues a real,
+  // executable job (the thing these tests assert) -- but with no actual
+  // executor.ts dispatch case, so the execution worker's immediate
+  // wake-up never triggers real side effects (LLM calls, spawned
+  // follow-up tasks, etc.) that could leak into other test files running
+  // in the same process. A real dispatched action_type like
+  // 'investigation' was tried here previously and, once real provider
+  // packages are installed, caused genuine background execution attempts
+  // that left rows behind and broke this file's own afterEach cleanup —
+  // see the same caution already documented in
+  // task-queue.registry-gate.test.ts's 'test_unhealthy_executor_action'.
+  upsertActionRegistryEntry(FIXTURE_ACTION_TYPE, { dispatched_by_executor: true, side_effect_classification: 'internal_idempotent' });
 });
 
 afterEach(() => {
@@ -26,18 +41,11 @@ afterEach(() => {
 });
 
 function proposeTask(): { id: string } {
-  // action_type must actually be executable (in executor.ts's
-  // EXECUTABLE_ACTION_TYPES / action_registry.dispatched_by_executor) —
-  // these tests assert approveTask() enqueues a real, executable job.
-  // 'investigation' has no required connectors/business type and needs no
-  // approval-flow scaffolding beyond that. See issue #39: a registered but
-  // non-executable action_type (e.g. 'notification') is now routed to
-  // manual_review at approval instead of being enqueued.
   const task = createTask({
     business_id: BIZ,
     title: 'Approve/cancel fixture task',
     proposed_by: 'test',
-    action_type: 'investigation',
+    action_type: FIXTURE_ACTION_TYPE,
     action_payload: { note: 'x' },
     approval_mode: 'requires_approval',
   })!;
