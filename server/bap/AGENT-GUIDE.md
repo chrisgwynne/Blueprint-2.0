@@ -6,11 +6,11 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
 > that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). The Decision Centre now has a read-only BAP
-> surface too (#77, below). Nine more dashboard features (Comparisons, Command
-> Centre, Portfolios, Digest, Explanations, Audit Search, Retrospectives,
-> Playbooks, Simulation) exist but have no BAP surface yet — see issues
-> #78–#86.
+> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue and Comparison mode now
+> have read-only BAP surfaces too (#77, #78, below). Eight more dashboard
+> features (Command Centre, Portfolios, Digest, Explanations, Audit Search,
+> Retrospectives, Playbooks, Simulation) exist but have no BAP surface yet —
+> see issues #79–#86.
 
 ---
 
@@ -219,6 +219,38 @@ dashboard by design.
 > leaves the queue when reviewed and its outcome appears on that other surface,
 > so an agent that wants the full before-and-after needs both grants.
 
+### Comparisons (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/comparisons/candidates  — what may be compared
+POST /api/bap/v1/businesses/:id/comparisons             — compare candidates you name
+```
+Read-only. When you have several candidates for the same decision, POST their
+ids (`{"candidates": ["id1","id2"]}`, or `{"id","kind"}` objects where `kind`
+is `task` | `opportunity` | `strategy`, 2–6 of them) and you get Blueprint's
+own normalised reading of them: which fields they genuinely **share**, which
+actually **differ**, and the single operating policy all of them are judged
+against — approval tier, whether each needs a human, connector blocks.
+
+Every field carries a `state` of `known` / `unknown` / `not_comparable` with a
+citation or a reason, and the holes are collected in `missing_data`. Nothing
+is defaulted, averaged or zero-filled — if Blueprint has not measured
+something, you are told that instead of being handed a number. Read the
+`comparability.warnings` too: mixed decision classes and no measured track
+record are flagged rather than smoothed over.
+
+Building a comparison is inert — `read_only: true`, no approval, no execution
+job, no status change. Candidates from a different business are a `422` naming
+the offending id: different businesses have different policies, connectors and
+evidence windows, so one table over both would be dishonest.
+
+Not to be confused with `GET /businesses/:id/recommendations`
+(`recommendations:read`), which returns the ranked list Blueprint generated
+for you. This compares the specific candidates *you* nominate.
+
+There is no BAP endpoint to record which candidate won. Recording a selection
+writes to Blueprint's decision memory, and no BAP route writes that — present
+the comparison with your recommendation and let a human record the choice.
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -301,6 +333,7 @@ const valid = crypto.timingSafeEqual(
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
 | `decision_queue:read` | Read the pending-decision review queue (not the decision-memory log — see above) |
+| `comparisons:read` | List comparable candidates, build a side-by-side comparison |
 
 ---
 

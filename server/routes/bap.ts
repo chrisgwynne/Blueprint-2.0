@@ -79,6 +79,7 @@ import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import bapReceiptsRouter from './bap-receipts.js';
 import bapDecisionQueueRouter from './bap-decision-queue.js';
+import bapComparisonsRouter from './bap-comparisons.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -324,6 +325,8 @@ router.use(bapReceiptsRouter);
 // bapDecisionsRouter above in both path and permission: that one is the
 // decision-memory recall log, this one is the queue still awaiting a human.
 router.use(bapDecisionQueueRouter);
+// Issue #78 — recommendation comparison mode (#66's engine), read-only.
+router.use(bapComparisonsRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
