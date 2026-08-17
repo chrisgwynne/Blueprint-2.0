@@ -311,6 +311,58 @@ Every item carries an `evidence` link (`kind`, `id`, `business_id`, `href`)
 pointing at the real record it came from — drill into it on the owning
 surface below.
 
+**`cross_business_patterns`: correlations across your selection, not per
+business.** A single-business view cannot notice "the same signal fired in
+two of my businesses this week" or "revenue declined by a similar amount in
+three at once" — that observation only exists at the portfolio level, and
+nothing else in Blueprint surfaces it automatically. This section does,
+whenever 2+ businesses in your selection could be evaluated. It is one more
+envelope alongside the five above (`status: 'ok' | 'failed'`,
+`as_of`/`data_as_of`) — a detection failure here never touches the
+per-business sections. Its `data` (when `status` is `'ok'`) is:
+
+```
+{
+  "businesses_considered": ["biz_a", "biz_b"],
+  "excluded_businesses": [{ "business_id": "biz_c", "reason": "..." }],
+  "patterns": [
+    {
+      "id": "signal:same_rule:traffic_drop_7day:sig_1,sig_2",
+      "kind": "signal_cooccurrence",        // or "metric_comovement"
+      "match_basis": "traffic_drop_7day",   // a rule_id, "category:<type>", or a metric key
+      "description": "The same signal rule ('traffic_drop_7day') fired in 2 businesses within 48h of each other: Shop A, Shop B.",
+      "businesses": [
+        { "business_id": "biz_a", "business_name": "Shop A", "detail": "...", "occurred_at": "...", "evidence": { "kind": "signal", "id": "sig_1", ... } }
+      ],
+      "window_start": "...", "window_end": "...",
+      "caveat": "This is a correlation across businesses, not a causal claim. ..."
+    }
+  ],
+  "caveat": "This is a correlation across businesses, not a causal claim. ..."
+}
+```
+
+Two kinds of pattern, both evidence-cited and both requiring 2+ businesses:
+
+- `signal_cooccurrence` — the same `signals.rule_id` firing in 2+ businesses
+  within 48h of each other, or (weaker) the same signal `type` fired by
+  genuinely different rules within the same window.
+- `metric_comovement` — newly-attributed ROI value or decline moving in the
+  same direction by a comparable magnitude (a plain ratio check, not a
+  statistical test) across 2+ businesses, comparing the current window
+  against the equal-length window before it. A business whose ROI report
+  cannot be computed lands in `excluded_businesses` with a reason rather
+  than blocking the others, and a metric whose derivation differs across
+  the businesses involved (the same `known`/`unknown`/`not_comparable`
+  honesty rule the Portfolios comparison below already applies) is skipped
+  rather than compared.
+
+**Read `caveat` before acting on any pattern.** Every pattern states, in its
+own words, that co-occurrence is not causation — Blueprint has not checked
+whether the businesses involved actually share a cause, only that they
+moved together. Treat a pattern as something worth a human looking at, not
+a diagnosis.
+
 Naming a business outside your `business_access` grant is a `403` listing
 `denied_business_ids`, not a partial answer: a summary of the three
 businesses you were allowed must never be mistaken for a summary of the five

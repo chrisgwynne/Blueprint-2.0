@@ -463,6 +463,33 @@ describe('one failure does not hide unrelated results', () => {
     expect(b.outcomes.status).toBe('ok');
   });
 
+  test("cross_business_patterns excludes the poisoned business with a reason, without corrupting its own patterns or any other section", () => {
+    const result = assembleCommandCentre({
+      actor: 'dashboard:test', businessIds: [BIZ_A, BIZ_POISON, BIZ_B],
+    });
+
+    // The new section detects its own money-comovement patterns via
+    // computeROIReport(), same as the outcomes section — so the SAME
+    // poisoned baseline store fails it the same honest way, but only for
+    // BIZ_POISON's contribution, not the section as a whole.
+    expect(result.cross_business_patterns.status).toBe('ok');
+    const excluded = result.cross_business_patterns.data!.excluded_businesses.find((e) => e.business_id === BIZ_POISON);
+    expect(excluded).toBeDefined();
+    expect(excluded!.reason).toContain(POISON_MESSAGE);
+    expect(result.cross_business_patterns.data!.businesses_considered).toContain(BIZ_A);
+    expect(result.cross_business_patterns.data!.businesses_considered).toContain(BIZ_B);
+
+    // Every other section, of every business, is untouched by this.
+    const a = result.businesses.find((b) => b.business_id === BIZ_A)!;
+    const b = result.businesses.find((b) => b.business_id === BIZ_B)!;
+    const poison = result.businesses.find((b) => b.business_id === BIZ_POISON)!;
+    expect(a.status).toBe('ok');
+    expect(b.status).toBe('ok');
+    expect(poison.decisions.status).toBe('ok');
+    expect(poison.work_states.status).toBe('ok');
+    expect(poison.connectors.status).toBe('ok');
+  });
+
   test('an unknown business becomes one unavailable row, not a failed request', () => {
     const result = assembleCommandCentre({
       actor: 'dashboard:test', businessIds: [BIZ_A, 'biz_does_not_exist'],
