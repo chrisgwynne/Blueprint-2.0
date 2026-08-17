@@ -1727,6 +1727,34 @@ for (const sql of RECEIPT_MIGRATIONS) {
   }
 }
 
+// ─── Decision centre: human review outcomes on tasks (#61) ───────────────────
+// A reviewer working the decision queue can defer or amend a proposal, not
+// only approve or reject it. Both outcomes need a durable trace on the task
+// itself so "what did the human actually change, and who deferred this?" is
+// answerable without replaying the audit log.
+const DECISION_QUEUE_MIGRATIONS: string[] = [
+  // Who pushed this to later, as distinct from the system's own smart-spacing
+  // deferrals (jobs/constraint-check.ts), which set no actor.
+  `ALTER TABLE tasks ADD COLUMN deferred_by TEXT`,
+  // The payload exactly as proposed, kept when a reviewer amends it, so the
+  // amendment is a visible diff rather than a silent overwrite.
+  `ALTER TABLE tasks ADD COLUMN pre_amendment_payload JSON`,
+  `ALTER TABLE tasks ADD COLUMN amended_by TEXT`,
+  `ALTER TABLE tasks ADD COLUMN amended_at DATETIME`,
+  // Non-null only when a reviewer acted against the operating policy's
+  // recommendation for this item; the reason is mandatory at the API layer.
+  `ALTER TABLE tasks ADD COLUMN review_override_reason TEXT`,
+  `CREATE INDEX IF NOT EXISTS idx_tasks_business_status ON tasks(business_id, status)`,
+];
+for (const sql of DECISION_QUEUE_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] decision queue migration warning:', (err as Error).message);
+    }
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {

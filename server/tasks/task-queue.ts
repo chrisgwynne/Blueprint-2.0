@@ -101,7 +101,15 @@ function fireWebhook(event: string, data: unknown): void {
 }
 
 const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  proposed: ['approved', 'rejected', 'cancelled'],
+  // 'deferred' is reachable from 'proposed' so a human reviewer in the
+  // decision centre (#61) can push a proposal to later instead of being
+  // forced into a yes/no. The system already produced deferred tasks via
+  // jobs/constraint-check.ts's smart spacing, but it wrote the status with
+  // raw SQL, bypassing this table — a human deferral goes through
+  // updateTaskStatus()/deferTask() like every other transition, and
+  // brain/restraint.ts's resurfaceDeferredTasks() picks it back up on the
+  // same schedule.
+  proposed: ['approved', 'rejected', 'cancelled', 'deferred'],
   approved: ['executing', 'rejected', 'cancelled', 'manual_review'],
   // 'approved' here is deliberately narrow: it's ONLY used by
   // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
@@ -1027,5 +1035,147 @@ export function rejectTask(id: string, rejectedBy: string, reason = '', opts: Re
     related_goal_id: (before?.goal_id as string | null) ?? null,
   });
 
+  return after;
+}
+
+/**
+ * Defer a proposal to a later date — the decision centre's "not now" (#61).
+ *
+ * A reviewer who is neither ready to approve nor willing to reject needs an
+ * outcome that is honest about that, instead of leaving the item to rot in
+ * the queue or rejecting something they actually want later. The task moves
+ * to 'deferred' with the resurface date the reviewer chose, and
+ * brain/restraint.ts's resurfaceDeferredTasks() puts it back into 'proposed'
+ * when that date passes — the same machinery the system's own smart-spacing
+ * deferrals already use, so there is no second scheduler to maintain.
+ *
+ * The deferral is a recorded decision like any other, so it carries the
+ * operating policy version in force (#68) via recordDecision().
+ */
+export function deferTask(
+  id: string,
+  deferredBy: string,
+  reason: string,
+  deferUntil: string,
+): TaskRow | null {
+  const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string } | null;
+  if (!existing) throw new Error(`Task '${id}' not found.`);
+  if (existing.status !== 'proposed') {
+    throw new Error(`Cannot defer task in status '${existing.status}'. Task must be 'proposed'.`);
+  }
+  if (!reason || !reason.trim()) {
+    throw new Error('A deferral reason is required: a decision to postpone is still a decision, and it is recorded as one.');
+  }
+  const until = new Date(deferUntil);
+  if (Number.isNaN(until.getTime())) {
+    throw new Error(`defer_until '${deferUntil}' is not a valid ISO-8601 timestamp (e.g. 2026-09-01T09:00:00.000Z).`);
+  }
+  if (until.getTime() <= Date.now()) {
+    throw new Error('defer_until must be in the future — a deferral to a past date would resurface immediately.');
+  }
+
+  const before = parseRow(existing);
+  db.prepare(`
+    UPDATE tasks SET
+      status = 'deferred', deferred_until = ?, deferred_reason = ?, deferred_by = ?,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'proposed'
+  `).run(until.toISOString(), reason.trim(), deferredBy, id);
+  const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
+
+  audit(existing.business_id, 'task', id, 'defer', deferredBy, before, after, { reason, defer_until: until.toISOString() });
+  recordDecision({
+    business_id: existing.business_id,
+    decision_type: 'task_deferral',
+    title: `Deferred: ${existing.title}`,
+    decision: `Deferred task "${existing.title}" until ${until.toISOString()}: ${reason.trim()}`,
+    reasoning: reason.trim(),
+    author: deferredBy,
+    related_task_id: id,
+    related_signal_id: (before?.signal_id as string | null) ?? null,
+    related_goal_id: (before?.goal_id as string | null) ?? null,
+    evidence: [{ type: 'deferral', defer_until: until.toISOString(), deferred_by: deferredBy }],
+  });
+  return after;
+}
+
+/**
+ * Amend a proposal's payload before approving it — the decision centre's
+ * "yes, but not like that" (#61).
+ *
+ * Approve-with-modification only means something if the modification is
+ * visible afterwards, so the payload as proposed is preserved in
+ * pre_amendment_payload and the change is recorded as its own decision.
+ * The amendment is deliberately NOT an approval: the caller approves
+ * separately through approveTask(), which re-runs the full gate — payload
+ * validation, applicability and the risk-tier calculation — against the
+ * amended payload. A human edit therefore cannot smuggle a payload past
+ * the checks the original proposal had to pass.
+ */
+export function amendTaskPayload(
+  id: string,
+  amendedBy: string,
+  amendedPayload: Record<string, unknown>,
+  reason: string,
+): TaskRow | null {
+  const existingRaw = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> & { status: TaskStatus; business_id: string; title: string } | null;
+  if (!existingRaw) throw new Error(`Task '${id}' not found.`);
+  const existing = parseRow(existingRaw)!;
+  if (existing.status !== 'proposed') {
+    throw new Error(`Cannot amend task in status '${existing.status}'. Task must be 'proposed'.`);
+  }
+  if (!reason || !reason.trim()) {
+    throw new Error('An amendment reason is required: changing what an agent proposed is a decision, and it is recorded as one.');
+  }
+  if (!amendedPayload || typeof amendedPayload !== 'object' || Array.isArray(amendedPayload)) {
+    throw new Error('amended_payload must be a JSON object.');
+  }
+
+  // Validate the amended payload against the action's registered schema
+  // before it is stored, so a malformed human edit is rejected at the point
+  // it is made rather than surfacing later at approval time.
+  if (existing.action_type) {
+    const entry = getActionRegistryEntry(existing.action_type);
+    if (entry) {
+      const issues = validatePayloadAgainstSchema(entry.payload_schema, amendedPayload);
+      if (issues.length > 0) {
+        throw new Error(
+          `Amended payload is not valid for action type '${existing.action_type}': ` +
+          issues.map((i) => i.message).join(' ')
+        );
+      }
+    }
+  }
+
+  const originalPayload = existing.action_payload ?? {};
+  db.prepare(`
+    UPDATE tasks SET
+      action_payload = ?,
+      pre_amendment_payload = COALESCE(pre_amendment_payload, ?),
+      amended_by = ?, amended_at = CURRENT_TIMESTAMP,
+      version = version + 1,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ? AND status = 'proposed'
+  `).run(JSON.stringify(amendedPayload), JSON.stringify(originalPayload), amendedBy, id);
+  const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);
+
+  audit(existing.business_id, 'task', id, 'amend', amendedBy, existing, after, { reason });
+  recordDecision({
+    business_id: existing.business_id,
+    decision_type: 'task_amendment',
+    title: `Amended: ${existing.title}`,
+    decision: `Amended the proposed payload of task "${existing.title}" before review: ${reason.trim()}`,
+    reasoning: reason.trim(),
+    author: amendedBy,
+    related_task_id: id,
+    related_signal_id: existing.signal_id ?? null,
+    related_goal_id: existing.goal_id ?? null,
+    evidence: [{
+      type: 'payload_amendment',
+      payload_as_proposed: originalPayload,
+      payload_as_amended: amendedPayload,
+      amended_by: amendedBy,
+    }],
+  });
   return after;
 }

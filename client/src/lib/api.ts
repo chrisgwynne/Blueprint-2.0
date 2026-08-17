@@ -484,6 +484,30 @@ export const getSecurityOutboundLog = (params?: Params) => get('/security/outbou
 export const getDecisions = (businessId: string, params?: Params) => get(`/decisions/${businessId}`, params)
 export const getDecisionDetail = (businessId: string, id: string) => get(`/decisions/${businessId}/${id}`)
 
+// ─── Decision Centre — the pending review queue (#61) ───────────────────────
+// The counterpart to the decision history above: what still needs a human,
+// classified by the per-business operating policy (#68).
+export const getDecisionQueue = (businessId: string, params?: Params) => get(`/decision-queue/${businessId}`, params)
+export const getDecisionClasses = (businessId: string) => get(`/decision-queue/${businessId}/classes`)
+export const reviewPendingDecision = (
+  businessId: string,
+  taskId: string,
+  body: {
+    outcome: 'approve' | 'reject' | 'defer' | 'amend'
+    reason?: string | null
+    override_reason?: string | null
+    amended_payload?: unknown
+    approve_after_amend?: boolean
+    defer_until?: string | null
+  },
+) => post(`/decision-queue/${businessId}/${taskId}/review`, body)
+/** Previews a standing policy rule; saving stays in the policy editor (#68). */
+export const proposePolicyRule = (
+  businessId: string,
+  taskId: string,
+  ruleKind: 'always_require_human' | 'cap_auto_approve_tier',
+) => post(`/decision-queue/${businessId}/${taskId}/propose-rule`, { rule_kind: ruleKind })
+
 // ─── Knowledge Graph (Phase 3) ──────────────────────────────────────────────
 export const getGraph = (businessId: string, params: Params) => get(`/graph/${businessId}`, params)
 export const rebuildGraph = (businessId: string) => post(`/graph/${businessId}/rebuild`)

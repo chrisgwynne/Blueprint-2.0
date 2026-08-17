@@ -27,6 +27,7 @@ const Timeline       = lazy(() => import('./pages/Timeline.tsx'))
 const Settings       = lazy(() => import('./pages/Settings.tsx'))
 const Opportunities  = lazy(() => import('./pages/Opportunities.tsx'))
 const Decisions      = lazy(() => import('./pages/Decisions.tsx'))
+const DecisionCentre = lazy(() => import('./pages/DecisionCentre.tsx'))
 const Recommendations = lazy(() => import('./pages/Recommendations.tsx'))
 const Calibration    = lazy(() => import('./pages/Calibration.tsx'))
 const RelationshipGraph = lazy(() => import('./pages/RelationshipGraph.tsx'))
@@ -177,6 +178,7 @@ function App() {
           <Route path="projects/:projectId" element={<Projects />} />
           <Route path="timeline" element={<Timeline />} />
           <Route path="opportunities" element={<Opportunities />} />
+          <Route path="decision-centre" element={<DecisionCentre />} />
           <Route path="decisions" element={<Decisions />} />
           <Route path="recommendations" element={<Recommendations />} />
           <Route path="calibration" element={<Calibration />} />

@@ -218,6 +218,10 @@ const mountRoutes = async () => {
   // dashboard. Same underlying engines, isAuthenticated instead of a BAP
   // key — see each file's docstring.
   const { default: decisionsRoutes } = await import('./routes/decisions.js');
+  // Decision Centre (#61) — the pending-review queue. decisions.ts above is
+  // the read-only "why did we decide this" history; this is what still needs
+  // a human, derived from tasks and classified by the #68 operating policy.
+  const { default: decisionQueueRoutes } = await import('./routes/decision-queue.js');
   const { default: graphRoutes } = await import('./routes/graph.js');
   const { default: reviewRoutes } = await import('./routes/review.js');
   // Phase 2-INT — Autonomous Intelligence Foundation: Business Profile,
@@ -265,6 +269,7 @@ const mountRoutes = async () => {
   app.use('/api/goal-suggestions', goalSuggestionsRoutes);
   app.use('/api/security', securityRoutes);
   app.use('/api/decisions', decisionsRoutes);
+  app.use('/api/decision-queue', decisionQueueRoutes);
   app.use('/api/graph', graphRoutes);
   app.use('/api/review', reviewRoutes);
   app.use('/api/intelligence', intelligenceRoutes);

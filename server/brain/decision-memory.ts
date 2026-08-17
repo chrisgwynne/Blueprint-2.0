@@ -18,6 +18,8 @@ import { resolveOperatingPolicy } from '../policy/operating-policy.js';
 
 export type DecisionType =
   | 'task_approval' | 'task_rejection' | 'task_cancellation'
+  // Decision-centre review outcomes beyond yes/no (#61).
+  | 'task_deferral' | 'task_amendment'
   | 'strategy_selection' | 'goal_creation' | 'goal_status_change'
   | 'conflict_resolution' | 'conflict_dismissal'
   | 'opportunity_accepted' | 'opportunity_dismissed'
