@@ -3,7 +3,7 @@ services:
   blueprint:
     build: .
     ports:
-      - "3000:3000"
+      - "4000:4000"
     volumes:
       - ./data:/app/data
       - ./kb:/app/kb
@@ -29,7 +29,7 @@ services:
       - PAGESPEED_API_KEY=${PAGESPEED_API_KEY}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
