@@ -461,6 +461,41 @@ export function startScheduler(): void {
     }
   });
 
+  // ─── Autonomous hiring (issues #44-#58) ───────────────────────────────────
+  // The scheduled trigger. It carries no special authority: like the
+  // connector-sync and signal triggers it calls the one hiring-analysis
+  // service, which applies the kill switch, dry-run mode, per-business
+  // cooldown/material-change pacing and the coordination lease. Each business
+  // is isolated — one business's provider failure cannot stop the sweep.
+  scheduleWithLock('0 7 * * *', async () => {
+    try {
+      const { runScheduledHiringSweep } = await import('../agents/conductor-hiring.js');
+      const businesses = db.prepare('SELECT id FROM businesses').all() as any[];
+      const results = await runScheduledHiringSweep(businesses.map((b) => b.id));
+      const proposed = results.reduce((a, r) => a + r.proposed, 0);
+      const failures = results.filter((r) => r.status === 'failed');
+      console.log(
+        `[scheduler] Hiring sweep: ${results.length} business(es), ${proposed} proposal(s)`
+        + (failures.length ? `, ${failures.length} failed` : '')
+      );
+    } catch (err: any) {
+      console.error('[scheduler] Hiring sweep failed:', err.message);
+    }
+  });
+
+  // Reconcile hiring analyses abandoned in `running` (crashed process, hung
+  // provider call) so they cannot masquerade as in-flight work forever (#52).
+  scheduleWithLock('*/15 * * * *', async () => {
+    try {
+      const { reconcileStaleAnalysisRuns } = await import('../agents/hiring/store.js');
+      const { getHiringPolicy } = await import('../agents/hiring/policy.js');
+      const closed = reconcileStaleAnalysisRuns(getHiringPolicy().stale_run_timeout_minutes);
+      if (closed.length > 0) console.log(`[scheduler] Reconciled ${closed.length} stale hiring analysis run(s).`);
+    } catch (err: any) {
+      console.warn('[scheduler] Stale hiring run reconciliation failed:', err.message);
+    }
+  });
+
   // Weekly outcome attribution checks — Monday 9am
   scheduleWithLock('0 9 * * 1', async () => {
     try {

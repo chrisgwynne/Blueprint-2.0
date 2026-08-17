@@ -368,12 +368,25 @@ router.post('/hire-recommendations', async (req: Request, res: Response) => {
     const { business_id } = req.body as { business_id?: string };
     if (!business_id) return res.status(400).json({ error: 'business_id is required.' });
 
-    const result = await analyseAndProposeHires(business_id, { dryRun: true }) as { recommendations?: unknown[]; reason?: string };
+    // dryRun is enforced by the hiring service itself, not by this handler —
+    // it evaluates and persists the decision record but creates no tasks,
+    // installs or first runs (#57). `force` because this is an explicit
+    // human action in the onboarding wizard, which must not be debounced away.
+    const result = await analyseAndProposeHires(business_id, {
+      dryRun: true, trigger: 'onboarding_preview', force: true,
+      triggerReason: 'onboarding hire-recommendations preview',
+    });
     return res.json({
       ok: true,
       business_id,
+      analysis_id: result.analysis_id,
+      mode: result.mode,
       recommendations: result.recommendations ?? [],
       reason: result.reason ?? null,
+      terminal_reason: result.terminal_reason,
+      degraded: result.degraded,
+      suppressed: result.suppressed,
+      gated: result.gated,
     });
   } catch (err) {
     console.error('[agents] hire-recommendations error:', err);
@@ -503,15 +516,39 @@ router.post('/proposals/:taskId/approve', async (req: Request, res: Response) =>
 router.post('/proposals/:taskId/reject', async (req: Request, res: Response) => {
   try {
     const taskId = String(req.params.taskId);
-    const { reason } = req.body as { reason?: string };
+    const { reason, disposition, reconsider_policy, expires_at } = req.body as {
+      reason?: string;
+      disposition?: 'hard_suppression' | 'temporary_deferral' | 'changed_circumstances';
+      reconsider_policy?: 'never' | 'after_expiry' | 'new_evidence';
+      expires_at?: string;
+    };
     const session = req.session as unknown as Record<string, unknown>;
     const user = session?.user as Record<string, unknown> | undefined;
     const actor = (user?.email as string | undefined) || (user?.id as string | undefined) || 'human';
 
+    const validDispositions = ['hard_suppression', 'temporary_deferral', 'changed_circumstances'];
+    if (disposition && !validDispositions.includes(disposition)) {
+      return res.status(400).json({ error: `disposition must be one of: ${validDispositions.join(', ')}` });
+    }
+
+    // rejectTask persists the durable, business-scoped suppression record in
+    // the same transaction as the status change (#44), so this rejection is
+    // visible to every future hiring analysis rather than vanishing the
+    // moment the task leaves 'proposed'.
     const { rejectTask } = await import('../tasks/task-queue.js');
-    const rejected = rejectTask(taskId, actor, reason ?? 'Rejected by operator.');
+    const rejected = rejectTask(taskId, actor, reason ?? 'Rejected by operator.', {
+      disposition, reconsiderPolicy: reconsider_policy, expiresAt: expires_at ?? null,
+    });
     if (!rejected) return res.status(404).json({ error: 'Proposal not found.' });
-    res.json({ ok: true, task_id: taskId, message: 'Proposal rejected.' });
+    res.json({
+      ok: true, task_id: taskId,
+      message: 'Proposal rejected. This role will not be re-proposed unless the evidence materially changes.',
+      suppression: {
+        disposition: disposition ?? 'changed_circumstances',
+        reconsider_policy: reconsider_policy ?? 'new_evidence',
+        expires_at: expires_at ?? null,
+      },
+    });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message || 'Failed to reject proposal.' });
   }

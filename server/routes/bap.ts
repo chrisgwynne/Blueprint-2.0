@@ -64,6 +64,10 @@ import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
 import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
+import {
+  CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
+  getAnalysisContract, getHiringStatus, listAnalysisContracts,
+} from '../agents/hiring/contract.js';
 
 const router = Router();
 // Every BAP call — including /register, before bapAuth even runs — gets a
@@ -1409,6 +1413,96 @@ router.post('/businesses/:businessId/agents/:agentId/run',
     }
   }
 );
+
+// ─── HIRING ANALYSIS LIFECYCLE (issues #53, #54, #57) ───────────────────────
+//
+// The durable, versioned contract for autonomous hiring. Every response is
+// scoped to :businessId — the store layer carries `business_id = ?` on every
+// query, so an agent authorized for one business cannot observe another's
+// hiring state, proposals, suppressions or provider errors.
+
+router.get('/businesses/:businessId/hiring/status',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10) || 10));
+      return res.json(getHiringStatus(businessId, limit));
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+router.get('/businesses/:businessId/hiring/analyses',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 25) || 25));
+      return res.json({
+        contract_version: HIRING_CONTRACT_VERSION,
+        business_id: businessId,
+        terminal_reasons: HIRING_TERMINAL_REASONS,
+        analyses: listAnalysisContracts(businessId, limit),
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+router.get('/businesses/:businessId/hiring/analyses/:analysisId',
+  requirePermission('agents:read'), (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const contract = getAnalysisContract(businessId, String(req.params.analysisId));
+      // A run belonging to another business reads as "not found" here — never
+      // as a 403 that would confirm its existence.
+      if (!contract) return res.status(404).json({ error: 'Analysis not found for this business.' });
+      return res.json(contract);
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+// Idempotent trigger: repeating a request with the same Idempotency-Key
+// returns the SAME analysis rather than starting a second one (#53).
+router.post('/businesses/:businessId/hiring/analyses',
+  requirePermission('agents:trigger'), bapRateLimit('agents:trigger'),
+  async (req: Request, res: Response) => {
+    try {
+      const businessId = String(req.params.businessId);
+      if (!businessRow(businessId)) return res.status(404).json({ error: 'Business not found.' });
+      const body = (req.body ?? {}) as { idempotency_key?: string; reason?: string; dry_run?: boolean };
+      const idempotencyKey = String(req.get('Idempotency-Key') ?? body.idempotency_key ?? '').trim() || null;
+
+      const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
+      const { analyseAndProposeHires } = await import('../agents/conductor-hiring.js');
+
+      const result = await analyseAndProposeHires(businessId, {
+        trigger: 'bap',
+        triggerRef: (bapAgent?.id as string | undefined) ?? null,
+        triggerReason: body.reason ? String(body.reason).slice(0, 200) : 'BAP-triggered hiring analysis',
+        idempotencyKey,
+        dryRun: body.dry_run === true,
+        actor: `bap:${(bapAgent?.id as string | undefined) ?? 'unknown'}`,
+      });
+
+      const contract = result.analysis_id ? getAnalysisContract(businessId, result.analysis_id) : null;
+      return res.status(result.terminal_reason === 'duplicate_trigger' ? 200 : 202).json({
+        analysis_id: result.analysis_id,
+        status: result.status,
+        terminal_reason: result.terminal_reason,
+        mode: result.mode,
+        proposals_created: result.proposed_hires,
+        proposal_ids: result.proposal_ids,
+        degraded: result.degraded,
+        contract,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
 router.get('/runs/:runId', (req: Request, res: Response) => {
   try {
