@@ -19,6 +19,9 @@ import { createTaskEvent } from './task-events.js';
 import { parseJson } from '../types/shared.js';
 import { classifyAction, buildIdempotencyMarker } from './execution-safety.js';
 import { setExternalReference, type ExecutionJobRow } from './execution-jobs.js';
+import {
+  recordExecutionStarted, recordExternalAcknowledgement, recordExecutionResult, safeReceipt,
+} from './action-receipts.js';
 import type * as GithubModule from '../connectors/github/index.js';
 import type * as WixModule from '../connectors/wix/index.js';
 import type * as ShopifyModule from '../connectors/shopify/index.js';
@@ -1550,6 +1553,12 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     { action_type: task.action_type }
   );
 
+  // Verified action receipt (#70): the 'executed' clock starts here. Every
+  // receipt hook in this function is best-effort — bookkeeping must never
+  // change whether or how an action runs.
+  const taskVersion = Number(task.version ?? 1) || 1;
+  safeReceipt(() => recordExecutionStarted(task.id, taskVersion, job?.id ?? null));
+
   // Dispatch
   let result: ExecuteResult;
   try {
@@ -1594,6 +1603,22 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     if (job && classifyAction(task.action_type) === 'external_verifiable' && result.outcome_data) {
       try { setExternalReference(job.id, result.outcome_data); } catch {}
     }
+
+    // Same durability reasoning, one level up: the receipt's
+    // externally-acknowledged state is written here, BEFORE the task's
+    // 'complete' transition, so a crash in the gap still leaves a record
+    // that the external system handed back an identity. Recorded for any
+    // action whose outcome carries an external ID/permalink — not just the
+    // external_verifiable set — because "the API acknowledged it" is worth
+    // recording wherever it is true. An acknowledgement is explicitly NOT
+    // verification: nothing here claims the change took effect.
+    safeReceipt(() => recordExternalAcknowledgement({
+      taskId: task.id,
+      taskVersion,
+      actionType: task.action_type,
+      outcomeData: result.outcome_data,
+      recovered: /already (exists|created)/i.test(result.outcome ?? ''),
+    }));
   } catch (err) {
     // A missing connector means the task is blocked waiting for setup —
     // not broken. Mark it blocked so the user knows what to do, and so it
@@ -1617,6 +1642,16 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
         { error: (err as Error).message }
       );
     } catch {}
+    safeReceipt(() => recordExecutionResult({
+      taskId: task.id,
+      taskVersion,
+      status: isConnectorMissing ? 'blocked' : 'failure',
+      summary: isConnectorMissing
+        ? `Blocked before completion: ${(err as Error).message}`
+        : `Execution failed: ${(err as Error).message}`,
+      detail: { error: (err as Error).message },
+      taskStatus: newStatus,
+    }));
     if (!isConnectorMissing) {
       console.error(`[executor] Task ${taskId} failed:`, err);
       // Self-healing: diagnose executor failures (not missing-connector blocks)
@@ -1647,8 +1682,28 @@ export async function executeTask(taskId: string, job: ExecutionJobRow | null = 
     );
   } catch (err) {
     console.error(`[executor] Task ${taskId} succeeded but final transition failed:`, err);
+    safeReceipt(() => recordExecutionResult({
+      taskId: task.id,
+      taskVersion,
+      status: 'partial',
+      summary: `Execution succeeded but the task status update failed: ${(err as Error).message}`,
+      detail: result.outcome_data,
+      taskStatus: task.status,
+    }));
     return { ok: false, error: `Execution succeeded but status update failed: ${(err as Error).message}` };
   }
+
+  // A handler that deliberately settled somewhere short of 'complete'
+  // (e.g. a draft awaiting human review) is a *partial* result, not a
+  // success — the receipt says which.
+  safeReceipt(() => recordExecutionResult({
+    taskId: task.id,
+    taskVersion,
+    status: finalStatus === 'complete' ? 'success' : 'partial',
+    summary: result.outcome,
+    detail: result.outcome_data,
+    taskStatus: finalStatus,
+  }));
 
   console.log(`[executor] Task ${taskId} (${task.action_type}) executed [${finalStatus}]: ${result.outcome}`);
   return { ok: true, outcome: result.outcome, outcome_data: result.outcome_data, status: finalStatus };

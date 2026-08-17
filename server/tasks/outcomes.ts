@@ -8,6 +8,7 @@
 import db, { generateId } from '../db/db.js';
 import { createTaskEvent } from './task-events.js';
 import { getActionRegistryEntry } from './action-registry.js';
+import { recordVerification, safeReceipt } from './action-receipts.js';
 
 type Verdict = 'improved' | 'worsened' | 'no_change' | 'inconclusive';
 
@@ -108,17 +109,60 @@ export function checkTaskOutcome(taskId: string, weeksAfter: number): OutcomeRes
 
   const detail = `${task.target_metric}: ${baseline.toFixed(2)} → ${now.toFixed(2)} (${changePct > 0 ? '+' : ''}${changePct.toFixed(1)}%)`;
 
+  const outcomeId = generateId();
   db.prepare(`
     INSERT INTO task_outcomes (id, task_id, check_date, weeks_after, metric_value,
       baseline_value, change_pct, verdict, verdict_detail)
     VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?)
-  `).run(generateId(), taskId, weeksAfter, now, baseline, changePct, verdict, detail);
+  `).run(outcomeId, taskId, weeksAfter, now, baseline, changePct, verdict, detail);
 
   // Move task to 'verified' if still 'complete'
   if (task.status === 'complete') {
     db.prepare("UPDATE tasks SET status = 'verified', updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'complete'")
       .run(taskId);
   }
+
+  // Verified action receipt (#70): this — an independent measurement taken
+  // weeks later — is what 'verified' means on a receipt, as distinct from
+  // the external system's acknowledgement at execution time. The evidence
+  // is stored structured (metric, baseline, observed, delta, the rows it
+  // came from), never as a free-text claim that it worked.
+  safeReceipt(() => {
+    const measurementRuns = db.prepare(
+      'SELECT id FROM outcome_measurement_runs WHERE task_id = ? ORDER BY checkpoint_day ASC'
+    ).all(taskId) as Array<{ id: string }>;
+    const priorChecks = db.prepare(
+      'SELECT id FROM task_outcomes WHERE task_id = ? ORDER BY weeks_after ASC'
+    ).all(taskId) as Array<{ id: string }>;
+
+    return recordVerification(taskId, {
+      method: 'metric_delta',
+      source: 'task_outcomes',
+      metric: task.target_metric,
+      baseline_value: baseline,
+      observed_value: now,
+      change_pct: Math.round(changePct * 100) / 100,
+      verdict,
+      weeks_after: weeksAfter,
+      lower_is_better: isLowerBetter,
+      checks: [
+        {
+          name: 'metric_moved_in_intended_direction',
+          expected: isLowerBetter ? 'decrease' : 'increase',
+          observed: improved ? (isLowerBetter ? 'decrease' : 'increase') : (isLowerBetter ? 'increase' : 'decrease'),
+          passed: meaningful ? improved : null,
+        },
+        {
+          name: 'change_exceeds_noise_threshold',
+          expected: '>5% absolute change',
+          observed: `${Math.abs(Math.round(changePct * 10) / 10)}%`,
+          passed: meaningful,
+        },
+      ],
+      task_outcome_ids: priorChecks.map((r) => r.id),
+      measurement_run_ids: measurementRuns.map((r) => r.id),
+    });
+  });
 
   // Add timeline event
   try {

@@ -276,6 +276,14 @@ export const getAgentOutcomePerformance = (businessId: string) => get(`/outcomes
 export const getOutcomeTimeline = (businessId: string, params?: Params) => get(`/outcomes/${businessId}/timeline`, params)
 
 // ============================================
+// Verified action receipts (issue #70)
+// ============================================
+
+export const getActionReceipts = (businessId: string, params?: Params) => get(`/receipts/${businessId}`, params)
+export const getActionReceipt = (businessId: string, receiptId: string) => get(`/receipts/${businessId}/${receiptId}`)
+export const getTaskActionReceipts = (businessId: string, taskId: string) => get(`/receipts/${businessId}/task/${taskId}`)
+
+// ============================================
 // Email (Feature 5)
 // ============================================
 

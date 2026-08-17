@@ -16,6 +16,9 @@
  *   GET    /businesses/:bid/tasks             — read tasks
  *   POST   /businesses/:bid/tasks             — propose task
  *   PATCH  /tasks/:id                         — approve/reject
+ *   GET    /businesses/:bid/receipts          — list verified action receipts
+ *   GET    /tasks/:id/receipts                — receipts for one task
+ *   GET    /receipts/:id                      — receipt detail
  *   GET    /businesses/:bid/execution-jobs    — list execution jobs
  *   GET    /execution-jobs/:id                — execution job detail
  *   POST   /execution-jobs/:id/retry          — retry a stuck/dead-lettered job
@@ -74,6 +77,7 @@ import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
 import bapOperatingPoliciesRouter from './bap-operating-policies.js';
+import bapReceiptsRouter from './bap-receipts.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -313,6 +317,8 @@ router.use(bapWorldModelRouter);
 router.use(bapSystemIssuesRouter);
 router.use(bapTrustRouter);
 router.use(bapOperatingPoliciesRouter);
+// Issue #70 — verified action receipts (permission-scoped, read-only).
+router.use(bapReceiptsRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

@@ -297,6 +297,70 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    ActionReceipt:
+      type: object
+      description: >-
+        Durable, versioned record of one authorized action. `states` keeps the
+        five stages explicitly separate: an external acknowledgement (the API
+        returned an ID) is NOT verification (a later measurement confirmed the
+        change took effect). Secrets, credentials and raw provider bodies are
+        redacted at write time and again at read time.
+      properties:
+        id: { type: string }
+        receipt_version: { type: integer, description: "Receipt schema version this row was written against." }
+        business_id: { type: string }
+        task_id: { type: string }
+        task_version: { type: integer }
+        correlation_key:
+          type: string
+          description: >-
+            Stable idempotency/correlation key (`blueprint:task=<id>:v<version>`) â€” the
+            same marker embedded in externally created objects. Every retry of one
+            approved version resolves to this one receipt.
+        execution_job_id: { type: string, nullable: true }
+        action_type: { type: string, nullable: true }
+        title: { type: string, nullable: true }
+        state: { type: string, enum: [rejected_pre_execution, authorized, executing, executed, externally_acknowledged, verified, failed, ambiguous, cancelled] }
+        result_status: { type: string, enum: [pending, success, partial, failure, rejected, unknown] }
+        result_summary: { type: string, nullable: true }
+        result_detail: { type: object, nullable: true }
+        rejection:
+          type: object
+          nullable: true
+          description: "Present when the action was explicitly rejected before it ever ran."
+          properties:
+            at: { type: string, format: date-time }
+            by: { type: string, nullable: true }
+            stage: { type: string, description: "action_validation | applicability | automation_policy_cap | no_executor | payload_integrity | human_rejection | cancelled" }
+            reason: { type: string, nullable: true }
+        states:
+          type: object
+          properties:
+            requested: { type: object, properties: { at: { type: string, nullable: true }, by: { type: string, nullable: true }, reached: { type: boolean } } }
+            authorized: { type: object, properties: { at: { type: string, nullable: true }, by: { type: string, nullable: true }, reached: { type: boolean } } }
+            executed: { type: object, properties: { at: { type: string, nullable: true }, reached: { type: boolean } } }
+            externally_acknowledged:
+              type: object
+              properties:
+                at: { type: string, nullable: true }
+                reached: { type: boolean }
+                system: { type: string, nullable: true }
+                external_id: { type: string, nullable: true }
+                permalink: { type: string, nullable: true }
+            verified:
+              type: object
+              properties:
+                at: { type: string, nullable: true }
+                reached: { type: boolean }
+                evidence: { type: object, nullable: true, description: "Structured verification evidence (method, source, checks, metric delta, linked outcome/measurement rows)." }
+        external_reference: { type: object, nullable: true }
+        follow_up: { type: object, nullable: true, description: "Spawned tasks, system issues, measurement runs, notes." }
+        anomalies: { type: array, items: { type: object }, description: "Recorded ambiguities, e.g. a conflicting external reference." }
+        attempt_count: { type: integer }
+        attempt_history: { type: array, items: { type: object } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
     Signal:
       type: object
       properties:
@@ -1252,6 +1316,58 @@ paths:
       responses:
         '200': { description: "{ job_id, status: 'cancelled', cancelled: true }" }
         '409': { description: "Job is not in a cancellable state." }
+
+  /businesses/{businessId}/receipts:
+    get:
+      operationId: listActionReceipts
+      summary: >-
+        List verified action receipts â€” one per approved task version, separating
+        requested / authorized / executed / externally acknowledged / verified
+      x-bap-permission: receipts:read
+      parameters:
+        - { $ref: '#/components/parameters/BusinessIdPath' }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/Limit' }
+        - { name: state, in: query, schema: { type: string }, description: "Comma-separated: rejected_pre_execution, authorized, executing, executed, externally_acknowledged, verified, failed, ambiguous, cancelled." }
+        - { name: result_status, in: query, schema: { type: string }, description: "Comma-separated: pending, success, partial, failure, rejected, unknown." }
+        - { name: action_type, in: query, schema: { type: string } }
+        - { name: task_id, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  receipt_schema_version: { type: integer }
+                  receipts: { type: array, items: { $ref: '#/components/schemas/ActionReceipt' } }
+                  summary: { type: object, additionalProperties: { type: integer }, description: "Receipt counts by state." }
+                  total: { type: integer }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+
+  /tasks/{taskId}/receipts:
+    get:
+      operationId: getTaskActionReceipts
+      summary: Every receipt for one task (one per approved version)
+      x-bap-permission: receipts:read
+      parameters: [{ name: taskId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ receipt_schema_version, receipts }" }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /receipts/{receiptId}:
+    get:
+      operationId: getActionReceipt
+      summary: Verified action receipt detail
+      x-bap-permission: receipts:read
+      parameters: [{ name: receiptId, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: "{ receipt_schema_version, receipt }" }
+        '403': { $ref: '#/components/responses/PermissionDenied' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   /businesses/{businessId}/kb/file/{+path}:
     get:
