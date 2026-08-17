@@ -9,6 +9,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — develop branch
 
+### 2026-08-17 — Every dashboard feature from the backlog clearance now has a BAP surface
+
+PR #88 closed issues #77–#86, the follow-up filed against the entry below
+once its "Not yet BAP-facing" list was reviewed. Full technical detail in
+[server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md).
+
+**New read-only BAP surfaces:**
+- **Decision Queue** (`/businesses/:id/decision-queue`, #77) — the pending
+  review queue, distinct from the pre-existing decision-memory log at
+  `/businesses/:id/decisions`.
+- **Comparisons** (`POST /businesses/:id/comparisons`, #78) — explicit
+  side-by-side of caller-named candidates, distinct from the pre-existing
+  ranked auto-generated list at `/businesses/:id/recommendations`.
+- **Command Centre** (`/command-centre`, #79) — cross-business executive
+  summary, scoped to the agent's `business_access` grant.
+- **Portfolios** (`/portfolios`, #80) — saved multi-business groupings and
+  their comparative view, distinct from #68's policy-scoped portfolios.
+- **Digest** (`/businesses/:id/digest`, #81) — the "while you were away"
+  catch-up feed, with a BAP-agent watermark kept separate from the
+  dashboard operator's.
+- **Explanations** (`/businesses/:id/explanations/:kind/:id`, #82) — "why
+  did Blueprint do this?", the same engine and redaction pass the
+  dashboard panel uses.
+- **Audit Search** (`POST /businesses/:id/audit-search`, #83) —
+  natural-language, cited history search, distinct from the pre-existing
+  structured listing at `audit:read`.
+- **Retrospective Proposals** (`/businesses/:id/retrospective-proposals`,
+  #84) — the typed, reviewable operating-policy-change proposals a
+  retrospective can raise; the retrospectives themselves were already
+  BAP-facing via `retrospectives:read`/`:trigger`.
+- **Simulation** (`POST /businesses/:id/simulate/task-approval`, #86) —
+  zero-side-effect preview of a task approval, enforced by #67's
+  simulation guard at the DB-write layer.
+- **Playbooks** (`/businesses/:id/playbooks`, #85) — read, simulate, and
+  (uniquely among this batch) a real trigger endpoint: a triggered run's
+  steps still clear the normal Typed Action Registry + Operating Policy
+  approval gate, the same as any directly-proposed task.
+
 ### 2026-08-17 — 38-issue backlog clearance: bug fixes, autonomous hiring redesign, and 16 new dashboard features
 
 Two PRs (#75, #76) closed every open issue in the repository. Summary for
@@ -34,12 +72,12 @@ agents/integrators — full technical detail in
 - Goals, Outcomes, and Connectors endpoints (pre-existing but undocumented)
   are now documented in AGENT-GUIDE.md.
 
-**Not yet BAP-facing** (dashboard-session only — tracked in issues #77–#86
-for anyone who wants to expose them): Decision Centre, Recommendation
-Comparison, Executive Command Centre, Multi-Business Portfolio View,
-"While You Were Away" Digest, Explanation Panels, Natural-Language Audit
-Search, Automated Retrospectives, Reusable Playbooks, Safe
-Simulation/Preview Mode.
+**Not yet BAP-facing at the time of this entry** (dashboard-session only —
+tracked in issues #77–#86): Decision Centre, Recommendation Comparison,
+Executive Command Centre, Multi-Business Portfolio View, "While You Were
+Away" Digest, Explanation Panels, Natural-Language Audit Search, Automated
+Retrospectives, Reusable Playbooks, Safe Simulation/Preview Mode. All ten
+now have BAP surfaces — see the entry above.
 
 **Autonomous hiring engine — full redesign (#44-58):** business-scoped
 installed-agent lookup, durable rejection suppression, per-business

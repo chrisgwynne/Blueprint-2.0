@@ -389,8 +389,12 @@ API reference including permissions, rate limits, and client examples.
 **Running an agent against Blueprint already?** See the
 [2026-08-17 changelog entry](CHANGELOG.md#2026-08-17--38-issue-backlog-clearance-bug-fixes-autonomous-hiring-redesign-and-16-new-dashboard-features)
 for a summary of recent BAP-facing changes — a new action type, two
-behavior changes affecting task resolution, and two new read-only
-endpoints (Operating Policy, Action Receipts).
+behavior changes affecting task resolution, and ten new read-only BAP
+surfaces (Decision Queue, Comparisons, Command Centre, Portfolios, Digest,
+Explanations, Audit Search, Retrospective Proposals, Simulation, and
+Playbooks — the last of which also has a real trigger endpoint). Every
+dashboard feature shipped in the backlog clearance now has a BAP surface;
+full detail in [server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md).
 
 ## Architecture
 

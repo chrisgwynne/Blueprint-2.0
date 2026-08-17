@@ -692,6 +692,36 @@ const valid = crypto.timingSafeEqual(
 | `connectors:sync` | Trigger a connector sync |
 | `operating_policies:read` | Read effective policy, version history, audit trail |
 | `receipts:read` | Read action receipts |
+| `audit:read` | List audit-log entries by structured filter (not natural-language search — see `audit_search:read` below) |
+| `opportunities:read` | Read detected opportunities |
+| `opportunities:trigger` | Trigger an opportunity scan |
+| `conflicts:read` | Read goal conflicts |
+| `decisions:read` | Read the decision-memory log — historical decisions already made (not the pending Decision Queue — see below) |
+| `graph:read` | Read the business relationship/knowledge graph |
+| `graph:trigger` | Trigger a graph rebuild |
+| `recommendations:read` | Read the ranked, auto-generated recommendation list (not caller-driven Comparisons — see below) |
+| `retrospectives:read` | Read retrospectives and their findings |
+| `retrospectives:trigger` | Trigger a retrospective run |
+| `calibration:read` | Read calibration data behind retrospective/recommendation confidence |
+| `business_profile:read` | Read the business profile (inferred type, allowed agent/action types) |
+| `business_profile:update` | Update the business profile |
+| `action_registry:read` | Read Typed Action Registry entries |
+| `action_registry:write` | Upsert an action type's registry metadata |
+| `connector_confidence:read` | Read derived connector-confidence scores |
+| `world_model:read` | Read the derived world-model snapshot and history |
+| `system_issues:read` | List system issues |
+| `system_issues:update` | Acknowledge or resolve a system issue |
+| `capabilities:read` | Read the capability registry and evaluate applicability |
+| `capabilities:propose` | Propose a new agent capability for human review |
+| `capabilities:update` | Author/upsert a capability |
+| `corrections:read` | Read correction history and their impacts |
+| `corrections:propose` | Propose a correction for human review |
+| `revenue_paths:read` | Read revenue paths |
+| `revenue_paths:update` | Upsert a revenue path |
+| `scorecards:read` | Read an agent's scorecard |
+| `approval_policies:read` | Read the risk-tier approval policy |
+| `measurement_policies:read` | Read measurement policies |
+| `provider_preflight:read` | Read LLM provider/model preflight status |
 | `decision_queue:read` | Read the pending-decision review queue (not the decision-memory log — see above) |
 | `comparisons:read` | List comparable candidates, build a side-by-side comparison |
 | `command_centre:read` | Read the cross-business executive summary and your selectable scope |
