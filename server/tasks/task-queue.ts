@@ -7,6 +7,9 @@ import { createSystemIssue } from '../system/system-issues.js';
 import type { Connector } from '../types/db.js';
 import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
+import {
+  openReceipt, recordPreExecutionRejection, recordCancellation, recordFollowUp, safeReceipt,
+} from './action-receipts.js';
 import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -130,6 +133,26 @@ function safeJSON<T>(raw: unknown, fallback: T): T {
     console.warn('[task-queue] Failed to parse JSON field, using fallback. Raw:', String(raw).slice(0, 120));
     return fallback;
   }
+}
+
+/**
+ * The subset of a task an action receipt (#70) needs to identify what was
+ * requested. Kept here so every pre-execution rejection site records the
+ * same shape without repeating the field list.
+ */
+function receiptTaskFacts(task: {
+  id: string; business_id: string; version?: number; action_type?: string | null;
+  title?: string | null; proposed_by?: string | null; created_at?: string | null;
+}): { id: string; business_id: string; version: number; action_type: string | null; title: string | null; proposed_by: string | null; created_at: string | null } {
+  return {
+    id: task.id,
+    business_id: task.business_id,
+    version: Number(task.version ?? 1) || 1,
+    action_type: task.action_type ?? null,
+    title: task.title ?? null,
+    proposed_by: task.proposed_by ?? null,
+    created_at: task.created_at ?? null,
+  };
 }
 
 function createProposalValidationError(message: string, issues: ValidationIssue[]): Error & { issues: ValidationIssue[]; statusCode: number } {
@@ -517,6 +540,15 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
         related_task_id: id,
         related_action_type: existing.action_type,
       });
+      safeReceipt(() => recordPreExecutionRejection({
+        task: receiptTaskFacts(existing),
+        stage: 'automation_policy_cap',
+        reason:
+          `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) ` +
+          'already recorded today, so this action was never authorized or executed.',
+        actor: approvedBy,
+        evidence: { daily_cap: dailyCap, approvals_today: todayCount },
+      }));
       throw new Error(
         `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day, ` +
         `and ${todayCount} have already been approved today. A human can still approve this task via the dashboard. ` +
@@ -540,6 +572,13 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   if (approvalApplicability.status === 'not_applicable') {
     db.prepare('UPDATE tasks SET applicability_status = ?, applicability_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
       .run(approvalApplicability.status, approvalApplicability.reason, id);
+    safeReceipt(() => recordPreExecutionRejection({
+      task: receiptTaskFacts(existing),
+      stage: 'applicability',
+      reason: `Not applicable to this business: ${approvalApplicability.reason}`,
+      actor: approvedBy,
+      evidence: { applicability_status: approvalApplicability.status },
+    }));
     throw new Error(`Task cannot be approved: ${approvalApplicability.reason}`);
   }
   const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status });
@@ -567,6 +606,13 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       related_action_type: existing.action_type,
       metadata: { issues: actionValidation.issues },
     });
+    safeReceipt(() => recordPreExecutionRejection({
+      task: receiptTaskFacts(existing),
+      stage: 'action_validation',
+      reason: actionValidation.issues.map((i) => i.message).join(' '),
+      actor: approvedBy,
+      evidence: { issues: actionValidation.issues },
+    }));
     throw new Error(
       `Task cannot be approved: ${actionValidation.issues.map((i) => i.message).join(' ')} ` +
       'A Blueprint System Issue has been created explaining why.'
@@ -619,6 +665,22 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
 
     const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown>)!;
     const actionType = String(after.action_type ?? '').trim();
+
+    // Verified action receipt (#70) — opened in the SAME transaction as the
+    // approval itself, exactly like the execution job above it, so an
+    // approved action can never exist without a receipt recording who
+    // authorized it and when. The receipt is keyed on the freshly-bumped
+    // version, which is also the idempotency marker every retry and every
+    // externally-created object for this approval will carry.
+    const receipt = openReceipt({
+      task: {
+        id: after.id, business_id: after.business_id, version: after.version,
+        action_type: after.action_type, title: after.title,
+        proposed_by: after.proposed_by, created_at: after.created_at,
+      },
+      authorizedBy: approvedBy,
+    });
+
     if (actionType !== '') {
       // Issue #39: `actionValidation.entry.dispatched_by_executor` mirrors
       // executor.ts's EXECUTABLE_ACTION_TYPES set 1:1 (see db.ts migration
@@ -644,15 +706,40 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       // operator attention, so they stay 'approved' with no job, same as a
       // plain manual (action_type-less) task.
       if (actionValidation.entry?.dispatched_by_executor) {
-        enqueueExecutionJob(after);
+        const job = enqueueExecutionJob(after);
+        if (receipt) {
+          db.prepare('UPDATE action_receipts SET execution_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
+            .run(job.id, receipt.id);
+        }
       } else if (actionValidation.entry?.side_effect_classification === 'external_verifiable') {
         // No-op: task remains 'approved', tracked but not queued for
-        // Blueprint execution or manual review.
+        // Blueprint execution or manual review. The receipt records the
+        // authorization and says plainly that Blueprint is not the executor
+        // — otherwise a receipt stuck at 'authorized' forever would read as
+        // a stalled action rather than an intentional hand-off.
+        recordFollowUp(after.id, Number(after.version ?? 1), {
+          notes: [
+            `action_type '${actionType}' is executed and verified by an external system, not by Blueprint. ` +
+            'This receipt records the authorization only.',
+          ],
+        });
       } else {
-        return updateTaskStatus(id, 'manual_review', 'system:action-registry', {
-          outcome: `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
-            'implementation -- routed directly to manual review instead of being queued for automated execution.',
-        })!;
+        const reason =
+          `action_type '${actionType}' is registered in the Typed Action Registry but has no executor ` +
+          'implementation -- routed directly to manual review instead of being queued for automated execution.';
+        // Nothing will ever execute this: an explicit pre-execution
+        // rejection record, not a receipt left dangling at 'authorized'.
+        recordPreExecutionRejection({
+          task: {
+            id: after.id, business_id: after.business_id, version: after.version,
+            action_type: after.action_type, title: after.title,
+            proposed_by: after.proposed_by, created_at: after.created_at,
+          },
+          stage: 'no_executor',
+          reason,
+          actor: 'system:action-registry',
+        });
+        return updateTaskStatus(id, 'manual_review', 'system:action-registry', { outcome: reason })!;
       }
     }
     return after;
@@ -716,6 +803,12 @@ export function cancelTask(id: string, cancelledBy: string, reason = ''): TaskRo
   });
 
   const after = runCancel();
+  // A cancelled action stops mattering as "pending"; the receipt records
+  // that it never completed rather than being quietly dropped.
+  safeReceipt(() => recordCancellation(
+    id, Number((existing.version as number | undefined) ?? 1) || 1, cancelledBy,
+    reason || 'Cancelled before execution completed.',
+  ));
   audit(existing.business_id as string, 'task', id, 'cancel', cancelledBy, parseRow(existing), after, { reason });
   fireWebhook('task.cancelled', { task_id: id, business_id: existing.business_id, cancelled_by: cancelledBy, reason });
   return after;
@@ -801,6 +894,25 @@ export function rejectTask(id: string, rejectedBy: string, reason = '', opts: Re
     }
   });
   runReject();
+
+  // An explicit pre-execution rejection record (#70): a human said no, so
+  // the action provably never ran. Recorded for a task rejected while still
+  // 'proposed' as well as one rejected after approval — in the latter case
+  // it settles the receipt approval already opened.
+  safeReceipt(() => recordPreExecutionRejection({
+    task: receiptTaskFacts({
+      id,
+      business_id: existing.business_id as string,
+      version: existing.version as number | undefined,
+      action_type: existing.action_type as string | null,
+      title: existing.title as string | null,
+      proposed_by: existing.proposed_by as string | null,
+      created_at: existing.created_at as string | null,
+    }),
+    stage: 'human_rejection',
+    reason: reason || 'Rejected by a human reviewer before execution.',
+    actor: rejectedBy,
+  }));
 
   const before = parseRow(existing);
   const after = parseRow(db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Record<string, unknown> | null);

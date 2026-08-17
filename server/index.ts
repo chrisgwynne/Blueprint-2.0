@@ -197,6 +197,7 @@ const mountRoutes = async () => {
   const { default: exportRoutes } = await import('./routes/export.js');
   const { default: systemHealthRoutes } = await import('./routes/system-health.js');
   const { default: outcomesRoutes } = await import('./routes/outcomes.js');
+  const { default: receiptsRoutes } = await import('./routes/receipts.js');
   const { default: chatRoutes } = await import('./routes/chat.js');
   const { default: workflowsRoutes } = await import('./routes/workflows.js');
   const { default: goalsRoutes } = await import('./routes/goals.js');
@@ -246,6 +247,7 @@ const mountRoutes = async () => {
   app.use('/api/export', exportRoutes);
   app.use('/api/system', systemHealthRoutes);
   app.use('/api/outcomes', outcomesRoutes);
+  app.use('/api/receipts', receiptsRoutes);
   app.use('/api/chat', chatRoutes);
   app.use('/api/workflows', workflowsRoutes);
   app.use('/api/goals', goalsRoutes);

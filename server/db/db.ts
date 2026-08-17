@@ -1576,7 +1576,80 @@ try {
   }
 } catch (err) {
   console.warn('[db] business_capabilities FK migration warning:', (err as Error).message);
-}// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+}
+
+// â”€â”€â”€ Verified action receipts (issue #70) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+//
+// One durable, versioned, human-readable receipt per approved task version
+// â€” the record of what Blueprint was asked to do, who authorised it, what
+// it actually executed, what the external system acknowledged, and what a
+// later measurement verified. See server/tasks/action-receipts.ts.
+//
+// `correlation_key` is the SAME stable marker execution-safety.ts embeds
+// in the external objects it creates (`blueprint:task=<id>:v<version>`),
+// so Blueprint's receipt, its execution job (task_id + task_version) and
+// the object in GitHub/Shopify all share one identity. The UNIQUE index on
+// it is the "retries and duplicate deliveries never produce two
+// conflicting receipts" guarantee at the DB level, not by convention: a
+// retry of the same approved version can only ever update the one row.
+const RECEIPT_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS action_receipts (
+    id TEXT PRIMARY KEY,
+    receipt_version INTEGER NOT NULL DEFAULT 1,
+    business_id TEXT NOT NULL,
+    -- ON DELETE CASCADE, following the agent_run_events precedent: a
+    -- receipt describes one specific task and is meaningless without it,
+    -- so it must never outlive its subject as a dangling record.
+    -- Production never deletes tasks; this keeps fixtures/teardown honest.
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    task_version INTEGER NOT NULL DEFAULT 1,
+    correlation_key TEXT NOT NULL,
+    execution_job_id TEXT,
+    action_type TEXT,
+    title TEXT,
+    state TEXT NOT NULL DEFAULT 'authorized',
+    result_status TEXT NOT NULL DEFAULT 'pending',
+    result_summary TEXT,
+    result_detail JSON,
+    requested_at DATETIME,
+    requested_by TEXT,
+    authorized_at DATETIME,
+    authorized_by TEXT,
+    execution_started_at DATETIME,
+    executed_at DATETIME,
+    externally_acknowledged_at DATETIME,
+    verified_at DATETIME,
+    rejected_at DATETIME,
+    rejected_by TEXT,
+    rejection_stage TEXT,
+    rejection_reason TEXT,
+    external_system TEXT,
+    external_id TEXT,
+    external_permalink TEXT,
+    external_reference JSON,
+    verification_evidence JSON,
+    follow_up JSON,
+    anomalies JSON,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    attempt_history JSON,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_receipts_correlation ON action_receipts(correlation_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_business ON action_receipts(business_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_business_state ON action_receipts(business_id, state)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_receipts_task ON action_receipts(task_id, task_version)`,
+];
+for (const sql of RECEIPT_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] action receipt migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {
   try {
