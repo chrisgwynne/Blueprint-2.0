@@ -182,6 +182,18 @@ export const GRANTABLE_BAP_PERMISSIONS: readonly string[] = [
   // summary verified against them before it is shown. An agent can be
   // granted one without the other.
   'audit_search:read',
+  // Issue #85 — #74's versioned, bounded playbooks. `:read` covers list,
+  // detail, run history/detail AND the #67-style zero-side-effect simulate
+  // preview (the same "an inert POST stays under :read" precedent
+  // `comparisons:read` and `digest:read` already set — simulating creates
+  // no task, run or receipt, so it is not a second capability to gate).
+  // `:trigger` is its own, narrower grant: unlike simulate, triggering a
+  // run creates real tasks that flow through the normal Typed Action
+  // Registry + Operating Policy approval gate, same as any directly-
+  // proposed task (see bap-playbooks.ts's docstring for the full
+  // reasoning) — an operator may want an agent to read and preview
+  // playbooks without being able to start one.
+  'playbooks:read', 'playbooks:trigger',
 ];
 
 export function filterGrantablePermissions(requested: unknown): string[] {

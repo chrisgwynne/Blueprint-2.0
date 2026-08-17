@@ -12,9 +12,12 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > Proposals now have read-only BAP surfaces too (#77–#84, below — the
 > underlying retrospective engine and its narrative findings were already
 > exposed via `retrospectives:read`/`:trigger`; #84 added the typed,
-> reviewable operating-policy-change proposals it can produce). Two more
-> dashboard features (Playbooks, Simulation) exist but have no BAP surface
-> yet — see issues #85–#86.
+> reviewable operating-policy-change proposals it can produce). Reusable
+> bounded Playbooks (#85, below) now have a BAP surface too — read, #67-
+> style zero-side-effect simulate, AND a trigger endpoint, which is more
+> than any of #77–#84 exposed; see the Playbooks section for why a trigger
+> endpoint is safe here specifically. One more dashboard feature
+> (Simulation) exists but has no BAP surface yet — see issue #86.
 
 ---
 
@@ -520,6 +523,70 @@ guarantee #73 itself was built to enforce. Read a proposal here to know
 one is pending (and what it would do) before proposing more of the pattern
 it targets; approve/reject it on the dashboard.
 
+### Playbooks (2026-08)
+```
+GET  /api/bap/v1/businesses/:id/playbooks                         — list, this business
+GET  /api/bap/v1/businesses/:id/playbooks/:playbookId               — active version + step definitions + version history
+GET  /api/bap/v1/businesses/:id/playbooks/:playbookId/runs          — run history (paginated, filter by status)
+GET  /api/bap/v1/businesses/:id/playbooks/:playbookId/runs/:runId   — one run, step-by-step, receipt-backed status
+POST /api/bap/v1/businesses/:id/playbooks/:playbookId/simulate      — #74's zero-side-effect preview
+POST /api/bap/v1/businesses/:id/playbooks/:playbookId/run           — trigger a real run
+```
+A playbook is #74's versioned, bounded procedure — typed `action` steps
+that name a real `action_type` from the Typed Action Registry, or
+deliberately-labelled `manual` steps for free text. `GET /playbooks`
+lists every workflow in this business that has adopted the versioned
+system (i.e. has at least one row in `playbook_versions`); a workflow
+still on the pre-#74 free-text step shape doesn't appear here — it has no
+typed, schema-checked, risk-graded step to expose. Detail returns the
+full active-version step definitions plus a version history summary;
+authoring a new version (draft/validate/activate/rollback) has no BAP
+path and stays on the dashboard — this surface reads what's already
+authored, it does not extend the authoring lifecycle.
+
+**Simulate is `playbooks:read`, not a separate grant** — matching the
+precedent `comparisons:read` and `digest:read` already set for an inert
+POST: it creates no task, run, execution job or receipt (the identical
+zero-side-effect guarantee #67 gives the dashboard route, asserted both
+structurally and behaviourally in playbook-simulation.test.ts). Unlike
+the dashboard's own simulate route, this one never accepts a raw
+`definition` in the body — only `{ version?, inputs? }` against a
+*stored* version (or "whatever is active" if `version` is omitted) —
+because previewing an unsaved draft is an authoring-time act and
+authoring stays on the dashboard.
+
+**Triggering a run is `playbooks:trigger`, deliberately its own grant,
+and — unlike every other write-shaped surface in this document so far —
+it is genuinely a write path, not a read-only one.** Read why this is
+still safe: starting a run does not execute anything directly. Each
+`action` step becomes a real task through the exact same
+`createTask()`+`approveTask()` pair any directly-proposed BAP task goes
+through — the Typed Action Registry payload check, and the Operating
+Policy's autonomy gate (`always_require_human_action_types`, the
+auto-approve tier ceiling, required connectors, the daily cap) all run
+unchanged. A step can also pause the run at `awaiting_approval` before
+any of that — its own `approval_gate`, a registry `requires_approval`, a
+risk tier at or above the policy's human-approval floor, or an explicit
+policy match — and `manual` steps pause *unconditionally*, every time,
+by design (a bounded playbook never hands free text to an agent
+unattended). **There is no BAP endpoint to approve, reject, retry, roll
+back or cancel a run or step** — precisely #77's Decision Queue
+precedent: a step paused for a human stays paused for a human, reviewable
+only on the dashboard where the actor is attributed `dashboard:`. A run
+triggered over BAP is itself attributed `bap:{agent_id}`, never
+`dashboard:...`, so #68's autonomy gate treats everything it dispatches
+as unattended — exactly the same trust level as if the agent had
+proposed each step's task directly instead of through a playbook. Poll
+`GET .../runs/:runId` to see whether a triggered run is progressing or
+sitting on a human (`steps[].status === 'awaiting_approval'`).
+
+`POST .../run` requires an `Idempotency-Key` header like every other
+mutating BAP endpoint; the playbook engine also derives its own run-level
+idempotency from (version, inputs, that same key), so a retried request
+with the same key resolves to the same run rather than a duplicate one —
+`reused: true` in the response body distinguishes an idempotent replay
+from a fresh run (`202`) at the HTTP layer too (`200` vs `202`).
+
 ### Knowledge Base
 ```
 GET   /api/bap/v1/businesses/:id/kb/search  — search KB
@@ -609,6 +676,8 @@ const valid = crypto.timingSafeEqual(
 | `explanations:read` | Read "why did Blueprint do this?" explanations |
 | `audit_search:read` | Run natural-language, cited history search (distinct from `audit:read`'s raw audit-log listing) |
 | `retrospective_proposals:read` | Read retrospective operating-policy-change proposals |
+| `playbooks:read` | Read playbooks, versions, run history/detail, and run a zero-side-effect simulation |
+| `playbooks:trigger` | Trigger a real playbook run (its steps still clear the normal task-approval gate — see Playbooks above) |
 
 ---
 
@@ -658,6 +727,11 @@ class BlueprintClient {
   operatingPolicy(bizId)            { return this.call(`/businesses/${bizId}/operating-policy`) }
   receipts(bizId, p = {})           { return this.call(`/businesses/${bizId}/receipts?${new URLSearchParams(p)}`) }
   auditSearch(bizId, query, opts = {}) { return this.call(`/businesses/${bizId}/audit-search`, { method: 'POST', body: { query, ...opts } }) }
+  playbooks(bizId)                  { return this.call(`/businesses/${bizId}/playbooks`) }
+  simulatePlaybook(bizId, pbId, opts = {}) { return this.call(`/businesses/${bizId}/playbooks/${pbId}/simulate`, { method: 'POST', body: opts }) }
+  runPlaybook(bizId, pbId, idempotencyKey, opts = {}) {
+    return this.call(`/businesses/${bizId}/playbooks/${pbId}/run`, { method: 'POST', headers: { 'Idempotency-Key': idempotencyKey }, body: opts })
+  }
 }
 ```
 

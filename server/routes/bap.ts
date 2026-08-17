@@ -85,6 +85,7 @@ import bapCommandCentreRouter from './bap-command-centre.js';
 import bapPortfoliosRouter from './bap-portfolios.js';
 import bapDigestRouter from './bap-digest.js';
 import bapExplanationsRouter from './bap-explanations.js';
+import bapPlaybooksRouter from './bap-playbooks.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -351,6 +352,12 @@ router.use(bapDigestRouter);
 // Issue #82 — "why did Blueprint do this?" explanation panels (#60), reused
 // verbatim including the #70 redaction pass. Permission-scoped, read-only.
 router.use(bapExplanationsRouter);
+// Issue #85 — #74's versioned, bounded playbooks: read, #67-style zero-
+// side-effect simulate, AND a trigger endpoint (`playbooks:trigger`,
+// separate grant from `playbooks:read`) — see bap-playbooks.ts's docstring
+// for why triggering a run does not bypass the same approval machinery a
+// directly-proposed task would clear.
+router.use(bapPlaybooksRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 
