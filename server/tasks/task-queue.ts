@@ -8,6 +8,7 @@ import type { Connector } from '../types/db.js';
 import type { ValidationIssue } from '../types/action-registry.js';
 import { calculateApprovalTier, evaluateApplicability, explainRevenueRelevance, scheduleOutcomeMeasurements } from '../trust/trust-engine.js';
 import { abandonTrialForTask, activateTrialForTask, recordHiringDecision, releaseProposalSlotForTask } from '../agents/hiring/store.js';
+import { effectiveDailyTaskCap, evaluateAutonomyGate, resolveOperatingPolicy, tierRank } from '../policy/operating-policy.js';
 
 // â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -238,7 +239,10 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (applicability.status === 'not_applicable') {
     throw new Error(`Task is not actionable: ${applicability.reason}`);
   }
-  const risk = calculateApprovalTier({ actionType: action_type, payload: action_payload, baseTier: trust_tier, agentConfidence: confidence, applicabilityStatus: applicability.status });
+  // #68: risk tiering uses this business's Operating Policy thresholds, and
+  // the resulting evidence records which policy version produced the tier.
+  const proposalPolicy = resolveOperatingPolicy(business_id);
+  const risk = calculateApprovalTier({ actionType: action_type, payload: action_payload, baseTier: trust_tier, agentConfidence: confidence, applicabilityStatus: applicability.status, policy: proposalPolicy });
   const revenue = explainRevenueRelevance(business_id, { title, description, action_type });
 
   const id = generateId();
@@ -495,12 +499,55 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
   // action_type (manual to-do) always passes untouched.
   const businessProfile = getBusinessProfile(existing.business_id);
 
-  // â”€â”€â”€ Business Profile automation_policy: daily autonomous-task cap â”€â”€â”€â”€â”€â”€â”€â”€â”€
-  // "max_autonomous_tasks_per_day" caps how many tasks Blueprint approves
-  // through non-human channels (BAP, Telegram, timed auto-approval) in a
-  // calendar day â€” it does not cap what a human explicitly approves
-  // through the dashboard, which is always allowed to proceed.
-  const dailyCap = businessProfile?.automation_policy?.max_autonomous_tasks_per_day;
+  // â”€â”€â”€ Operating Policy: autonomy limits and approval requirements (#68) â”€â”€â”€â”€
+  // THE central policy integration point. The per-business Operating Policy
+  // decides whether Blueprint may approve this task on its own: the master
+  // autonomy switch, dry-run mode, action types that always need a human,
+  // the auto-approval tier ceiling, connector applicability rules, and the
+  // daily cap. None of it constrains a human approving through the
+  // dashboard — the policy governs what Blueprint does unattended, not what
+  // a person chooses to do.
+  //
+  // The pre-#68 setting, business_profiles.automation_policy
+  // .max_autonomous_tasks_per_day, is still honoured: effectiveDailyTaskCap()
+  // takes the STRICTER of the two, so an Operating Policy can never quietly
+  // loosen a cap an operator already set on the business profile.
+  const registryEntry = existing.action_type ? getActionRegistryEntry(existing.action_type) : null;
+  const autonomy = evaluateAutonomyGate({
+    businessId: existing.business_id,
+    approvedBy,
+    actionType: existing.action_type,
+    tier: (['green', 'yellow', 'orange', 'red'] as const).find((t) => t === existing.trust_tier) ?? null,
+    requiredConnectorTypes: registryEntry?.required_connector_types ?? [],
+  });
+  const effectivePolicy = autonomy.policy;
+
+  if (!autonomy.allowed) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: 'operating_policy_blocked_autonomous_approval',
+      severity: 'warning',
+      title: `Task "${existing.title}" cannot be auto-approved â€” blocked by operating policy`,
+      description: autonomy.reason ?? 'Blocked by this business\'s operating policy.',
+      related_task_id: id,
+      related_action_type: existing.action_type,
+      metadata: {
+        policy_code: autonomy.code,
+        policy_id: effectivePolicy.policy_id,
+        policy_version: effectivePolicy.policy_version,
+        policy_scope: effectivePolicy.policy_scope,
+      },
+    });
+    throw new Error(
+      `Task cannot be approved: ${autonomy.reason} ` +
+      'A Blueprint System Issue has been created explaining why.'
+    );
+  }
+
+  const { cap: dailyCap, source: capSource } = effectiveDailyTaskCap(
+    effectivePolicy,
+    businessProfile?.automation_policy?.max_autonomous_tasks_per_day ?? null,
+  );
   if (dailyCap != null && !approvedBy.startsWith('dashboard:')) {
     const todayCount = (db.prepare(`
       SELECT COUNT(*) as n FROM tasks
@@ -508,18 +555,28 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
         AND approved_at >= datetime('now', 'start of day')
     `).get(existing.business_id) as { n: number }).n;
     if (todayCount >= dailyCap) {
+      const capLabel = capSource === 'operating_policy'
+        ? `operating policy autonomy.max_autonomous_tasks_per_day (${effectivePolicy.citation})`
+        : 'automation_policy.max_autonomous_tasks_per_day';
       createSystemIssue({
         business_id: existing.business_id,
         issue_type: 'automation_policy_daily_cap_reached',
         severity: 'warning',
         title: `Task "${existing.title}" cannot be auto-approved â€” daily autonomous task cap reached`,
-        description: `automation_policy.max_autonomous_tasks_per_day is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
+        description: `${capLabel} is ${dailyCap}; ${todayCount} autonomous approval(s) already recorded today. A human can still approve this task via the dashboard.`,
         related_task_id: id,
         related_action_type: existing.action_type,
+        metadata: {
+          cap: dailyCap, cap_source: capSource, approved_today: todayCount,
+          policy_id: effectivePolicy.policy_id,
+          policy_version: effectivePolicy.policy_version,
+          policy_scope: effectivePolicy.policy_scope,
+        },
       });
       throw new Error(
-        `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day, ` +
-        `and ${todayCount} have already been approved today. A human can still approve this task via the dashboard. ` +
+        `Task cannot be approved: this business's automation_policy caps autonomous approvals at ${dailyCap}/day ` +
+        `(from ${capLabel}), and ${todayCount} have already been approved today. ` +
+        'A human can still approve this task via the dashboard. ' +
         'A Blueprint System Issue has been created explaining why.'
       );
     }
@@ -542,9 +599,39 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
       .run(approvalApplicability.status, approvalApplicability.reason, id);
     throw new Error(`Task cannot be approved: ${approvalApplicability.reason}`);
   }
-  const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status });
+  const approvalRisk = calculateApprovalTier({ actionType: existing.action_type, payload: existing.action_payload, baseTier: existing.trust_tier, agentConfidence: existing.confidence, applicabilityStatus: approvalApplicability.status, policy: effectivePolicy });
   db.prepare('UPDATE tasks SET trust_tier = ?, approval_risk_evidence = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
     .run(approvalRisk.tier, JSON.stringify(approvalRisk.evidence), id);
+
+  // Re-check the auto-approval ceiling against the tier just recalculated:
+  // applicability or payload may have escalated the task since it was
+  // proposed, and the gate above only saw the stored tier.
+  if (!approvedBy.startsWith('dashboard:')
+      && effectivePolicy.document.approvals.auto_approve_max_tier !== null
+      && tierRank(approvalRisk.tier) > tierRank(effectivePolicy.document.approvals.auto_approve_max_tier)) {
+    createSystemIssue({
+      business_id: existing.business_id,
+      issue_type: 'operating_policy_blocked_autonomous_approval',
+      severity: 'warning',
+      title: `Task "${existing.title}" cannot be auto-approved â€” risk tier above policy ceiling`,
+      description: `Re-evaluated approval tier is '${approvalRisk.tier}', above approvals.auto_approve_max_tier '${effectivePolicy.document.approvals.auto_approve_max_tier}'.`,
+      related_task_id: id,
+      related_action_type: existing.action_type,
+      metadata: {
+        policy_code: 'tier_above_auto_approve_ceiling',
+        recalculated_tier: approvalRisk.tier,
+        policy_id: effectivePolicy.policy_id,
+        policy_version: effectivePolicy.policy_version,
+        policy_scope: effectivePolicy.policy_scope,
+      },
+    });
+    throw new Error(
+      `Task cannot be approved: its re-evaluated approval tier is '${approvalRisk.tier}', above this business's ` +
+      `approvals.auto_approve_max_tier of '${effectivePolicy.document.approvals.auto_approve_max_tier}'. ` +
+      `A human can still approve this task via the dashboard. (effective ${effectivePolicy.citation}) ` +
+      'A Blueprint System Issue has been created explaining why.'
+    );
+  }
 
   const connectors = db.prepare('SELECT * FROM connectors WHERE business_id = ?').all(existing.business_id) as Connector[];
   const actionValidation = validateAction({
@@ -669,6 +756,19 @@ export function approveTask(id: string, approvedBy: string): TaskRow | null {
     confidence: existing.confidence ?? null,
     author: approvedBy, related_task_id: id, related_signal_id: existing.signal_id ?? null,
     related_goal_id: existing.goal_id ?? null,
+    // Cite the exact policy version the gating above used, not a fresh
+    // resolve — a policy activating mid-approval must not make the record
+    // claim a version that was not actually applied (#68).
+    effective_policy_id: effectivePolicy.policy_id,
+    effective_policy_version: effectivePolicy.policy_version,
+    effective_policy_scope: effectivePolicy.policy_scope,
+    evidence: [{
+      type: 'operating_policy',
+      citation: effectivePolicy.citation,
+      approval_tier: approvalRisk.tier,
+      auto_approve_max_tier: effectivePolicy.document.approvals.auto_approve_max_tier,
+      thresholds_applied: effectivePolicy.document.thresholds,
+    }],
   });
 
   fireWebhook('task.approved', {

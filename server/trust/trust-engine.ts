@@ -1,4 +1,8 @@
 import db, { audit, generateId } from '../db/db.js';
+import {
+  DEFAULT_OPERATING_POLICY, computeTierUnderPolicy, resolveOperatingPolicy,
+  type OperatingPolicyDocument, type ResolvedOperatingPolicy,
+} from '../policy/operating-policy.js';
 
 function sqlPrepare(query: string): any {
   return db.prepare(query);
@@ -175,12 +179,47 @@ export function explainRevenueRelevance(businessId: string, candidate: { title?:
   const relationship = /security|auth|uptime|backup|risk|compliance|reliability|bug/i.test(text) ? 'protect_existing_revenue' : score >= 0.6 ? 'improve_conversion' : 'operational_enablement';
   return { score, path_id: best ? String(best.id) : null, relationship, explanation: best ? `Ranks with revenue relevance ${score.toFixed(2)} because it relates to ${best.role} path "${best.name}" as ${relationship.replace(/_/g, ' ')}.` : 'No matching revenue path.' };
 }
-export function calculateApprovalTier(input: { actionType?: string | null; payload?: Record<string, unknown>; baseTier?: string | null; agentConfidence?: number | null; applicabilityStatus?: string | null }): { tier: ApprovalTier; evidence: Record<string, unknown> } {
-  const action = input.actionType ?? ''; const payload = input.payload ?? {}; let rank = input.baseTier === 'red' ? 3 : input.baseTier === 'orange' ? 2 : input.baseTier === 'green' ? 0 : 1;
-  const text = `${action} ${JSON.stringify(payload)}`.toLowerCase(); if (['publish','merge','live','price','inventory','send','customer','payment','auth','delete','unpublish','budget'].some((w) => text.includes(w))) rank = Math.max(rank, 3); if (['github_pr','shopify_theme_edit','draft','branch','prepare'].some((w) => text.includes(w))) rank = Math.max(rank, 2);
+/**
+ * Risk tiering, now driven by the business's Operating Policy (#68) rather
+ * than by hardcoded constants.
+ *
+ * Thresholds come from the effective policy; the keyword escalations
+ * (publish/merge/price/payment/delete...) deliberately do not, because
+ * "this action is customer-facing and irreversible" is a property of the
+ * action, not an opinion a business is allowed to hold about it.
+ *
+ * Resolution order for the thresholds used:
+ *   1. an explicitly passed `policy` (the caller already resolved it — the
+ *      task queue does this so proposal and approval cite the same version),
+ *   2. otherwise resolved from `businessId`,
+ *   3. otherwise DEFAULT_OPERATING_POLICY, whose values are exactly the
+ *      constants this function used before #68 — so a call with neither
+ *      (as in unit tests and non-business-scoped callers) behaves
+ *      identically to the pre-policy implementation.
+ *
+ * The returned evidence always names the policy version in force, which is
+ * what gets persisted onto tasks.approval_risk_evidence.
+ */
+export function calculateApprovalTier(input: { actionType?: string | null; payload?: Record<string, unknown>; baseTier?: string | null; agentConfidence?: number | null; applicabilityStatus?: string | null; businessId?: string | null; policy?: ResolvedOperatingPolicy | null }): { tier: ApprovalTier; evidence: Record<string, unknown> } {
+  const resolved: ResolvedOperatingPolicy | null = input.policy
+    ?? (input.businessId ? resolveOperatingPolicy(input.businessId) : null);
+  const document: OperatingPolicyDocument = resolved?.document ?? DEFAULT_OPERATING_POLICY;
+  const action = input.actionType ?? ''; const payload = input.payload ?? {};
   const affected = Number(payload.affected_records ?? payload.count ?? 0); const exposure = Number(payload.financial_exposure_gbp ?? payload.spend_gbp ?? payload.budget_gbp ?? 0);
-  if (affected > 100 || exposure >= 100 || input.applicabilityStatus === 'unknown') rank = Math.max(rank, 2); if (affected > 1000 || exposure >= 500 || input.applicabilityStatus === 'not_applicable') rank = Math.max(rank, 3); if (typeof input.agentConfidence === 'number' && input.agentConfidence < 0.55) rank = Math.max(rank, 2);
-  const tier = ['green', 'yellow', 'orange', 'red'][rank] as ApprovalTier; return { tier, evidence: { action_type: action, affected_records: affected, financial_exposure_gbp: exposure, agent_confidence: input.agentConfidence ?? null, applicability_status: input.applicabilityStatus ?? null, calculated_tier: tier } };
+  const tier = computeTierUnderPolicy(document, { actionType: input.actionType, payload, baseTier: input.baseTier, agentConfidence: input.agentConfidence, applicabilityStatus: input.applicabilityStatus });
+  return {
+    tier,
+    evidence: {
+      action_type: action, affected_records: affected, financial_exposure_gbp: exposure,
+      agent_confidence: input.agentConfidence ?? null, applicability_status: input.applicabilityStatus ?? null,
+      calculated_tier: tier,
+      policy_id: resolved?.policy_id ?? null,
+      policy_version: resolved?.policy_version ?? 0,
+      policy_scope: resolved?.policy_scope ?? 'system_default',
+      policy_citation: resolved?.citation ?? 'system default operating policy (v0 — no business scope supplied)',
+      thresholds_applied: { ...document.thresholds },
+    },
+  };
 }
 export function getMeasurementPolicy(businessId: string, actionType?: string | null): Record<string, unknown> { return (sqlPrepare(`SELECT * FROM measurement_policies WHERE active = 1 AND (business_id = ? OR business_id IS NULL) AND (action_type = ? OR action_type IS NULL) ORDER BY business_id IS NULL ASC, action_type IS NULL ASC LIMIT 1`).get(businessId, actionType ?? null) as Record<string, unknown> | undefined) ?? { id: 'policy_default_immediate_7_28_90', checkpoints_json: '[0,7,28,90]' }; }
 export function scheduleOutcomeMeasurements(taskId: string): number {

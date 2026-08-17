@@ -73,6 +73,7 @@ import bapConnectorConfidenceRouter from './bap-connector-confidence.js';
 import bapWorldModelRouter from './bap-world-model.js';
 import bapSystemIssuesRouter from './bap-system-issues.js';
 import bapTrustRouter from './bap-trust.js';
+import bapOperatingPoliciesRouter from './bap-operating-policies.js';
 import {
   CONTRACT_VERSION as HIRING_CONTRACT_VERSION, TERMINAL_REASONS as HIRING_TERMINAL_REASONS,
   getAnalysisContract, getHiringStatus, listAnalysisContracts,
@@ -311,6 +312,7 @@ router.use(bapConnectorConfidenceRouter);
 router.use(bapWorldModelRouter);
 router.use(bapSystemIssuesRouter);
 router.use(bapTrustRouter);
+router.use(bapOperatingPoliciesRouter);
 
 // ─── DISCOVERY ──────────────────────────────────────────────────────────────
 

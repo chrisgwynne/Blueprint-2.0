@@ -1576,7 +1576,87 @@ try {
   }
 } catch (err) {
   console.warn('[db] business_capabilities FK migration warning:', (err as Error).message);
-}// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+}
+
+// ─── Per-business Operating Policy (#68) ─────────────────────────────────────
+// A policy version is immutable once written: an edit, a scheduled change
+// and a rollback are all "a new row with a higher version", which is what
+// makes "which policy was in force when we decided X" answerable forever.
+// (scope, scope_key) is the isolation boundary — scope_key is a business_id
+// for scope='business' and a portfolio id for scope='portfolio', so there
+// is no query shape that can read across businesses by accident.
+const OPERATING_POLICY_MIGRATIONS: string[] = [
+  `CREATE TABLE IF NOT EXISTS operating_policy_portfolios (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    business_ids JSON NOT NULL DEFAULT '[]',
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE TABLE IF NOT EXISTS operating_policies (
+    id TEXT PRIMARY KEY,
+    scope TEXT NOT NULL CHECK (scope IN ('business','portfolio')),
+    scope_key TEXT NOT NULL,
+    business_id TEXT REFERENCES businesses(id),
+    portfolio_id TEXT REFERENCES operating_policy_portfolios(id),
+    version INTEGER NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('scheduled','active','superseded')),
+    document JSON NOT NULL,
+    overrides JSON NOT NULL DEFAULT '{}',
+    effective_at DATETIME NOT NULL,
+    activated_at DATETIME,
+    superseded_at DATETIME,
+    superseded_by_id TEXT,
+    source TEXT NOT NULL DEFAULT 'edit',
+    rolled_back_from_version INTEGER,
+    change_reason TEXT,
+    created_by TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(scope, scope_key, version)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_operating_policies_lookup ON operating_policies(scope, scope_key, state, effective_at)`,
+  // At most one active version per scope — enforced by the database, not
+  // only by the transaction in savePolicyVersion(), so a crash between the
+  // supersede and the insert can never leave two live policies.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_operating_policies_one_active ON operating_policies(scope, scope_key) WHERE state = 'active'`,
+  `CREATE TABLE IF NOT EXISTS operating_policy_events (
+    id TEXT PRIMARY KEY,
+    policy_id TEXT,
+    scope TEXT NOT NULL,
+    scope_key TEXT NOT NULL,
+    business_id TEXT,
+    version INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    reason TEXT,
+    changed_fields JSON DEFAULT '[]',
+    before_document JSON,
+    after_document JSON,
+    metadata JSON DEFAULT '{}',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_operating_policy_events_scope ON operating_policy_events(scope, scope_key, created_at)`,
+  // Additive for databases created before overrides were split out of the
+  // resolved document (see operating-policy.ts for why both are stored).
+  `ALTER TABLE operating_policies ADD COLUMN overrides JSON NOT NULL DEFAULT '{}'`,
+  // Every decision cites the operating policy that was in force when it was
+  // made. Version 0 / scope 'system_default' is a real answer ("no policy
+  // had been authored"), not a null hole.
+  `ALTER TABLE decisions ADD COLUMN effective_policy_id TEXT`,
+  `ALTER TABLE decisions ADD COLUMN effective_policy_version INTEGER`,
+  `ALTER TABLE decisions ADD COLUMN effective_policy_scope TEXT`,
+];
+for (const sql of OPERATING_POLICY_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    if (!/duplicate column|already exists/i.test((err as Error).message)) {
+      console.warn('[db] operating policy migration warning:', (err as Error).message);
+    }
+  }
+}
+
+// â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {
   try {
