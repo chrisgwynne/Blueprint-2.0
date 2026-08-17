@@ -120,7 +120,8 @@ describe('investigation executor — evidence-vs-confidence gate (issue #43)', (
     // happen is the task silently landing on 'complete' at confidence 0.85.
     expect(result.ok).toBe(true);
     expect(result.status).not.toBe('complete');
-    expect(['blocked', 'manual_review']).toContain(result.status);
+    expect(result.status).toBeDefined();
+    expect(['blocked', 'manual_review']).toContain(result.status!);
 
     const row = db.prepare('SELECT status, outcome_data FROM tasks WHERE id = ?').get(taskId) as { status: string; outcome_data: string };
     expect(row.status).not.toBe('complete');
