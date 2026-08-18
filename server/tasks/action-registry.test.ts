@@ -15,10 +15,31 @@ describe('seeded registry', () => {
       'wix_seo_update', 'server_file_write', 'server_file_rollback', 'gbp_update', 'klaviyo_flow_update',
       'meta_ads_update', 'connect_connector', 'research_connector', 'notification', 'strategic_review',
       'product_suggestion', 'content_brief', 'page_optimisation', 'gbp_post',
+      // Issue #90: conductor was proposing these but they were missing from the registry,
+      // causing action_validation_failure system issues to accumulate unboundedly.
+      'config_change', 'deployment_hardening',
     ];
     for (const actionType of known) {
       expect(getActionRegistryEntry(actionType), `missing registry entry for ${actionType}`).not.toBeNull();
     }
+  });
+
+  test('config_change is registered as medium risk, human-review-only (no executor)', () => {
+    const entry = getActionRegistryEntry('config_change')!;
+    expect(entry).not.toBeNull();
+    expect(entry.risk_level).toBe('medium');
+    expect(entry.requires_approval).toBe(true);
+    expect(entry.dispatched_by_executor).toBe(false);
+    expect(entry.active).toBe(true);
+  });
+
+  test('deployment_hardening is registered as medium risk, human-review-only (no executor)', () => {
+    const entry = getActionRegistryEntry('deployment_hardening')!;
+    expect(entry).not.toBeNull();
+    expect(entry.risk_level).toBe('medium');
+    expect(entry.requires_approval).toBe(true);
+    expect(entry.dispatched_by_executor).toBe(false);
+    expect(entry.active).toBe(true);
   });
 
   test('shopify_* actions are restricted to ecommerce businesses', () => {

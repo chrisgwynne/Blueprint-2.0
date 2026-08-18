@@ -241,19 +241,16 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
   if (action_type) {
     const entry = getActionRegistryEntry(action_type);
     if (!entry || entry.active === false) {
+      // Refuse UP FRONT with a structured 400 — no task row, no system issue.
+      // A system issue would accumulate on every proposal attempt for an
+      // unregistered type and never resolve; the structured error response IS
+      // the caller's signal to fix the action_type, not an issue to diagnose
+      // later. System issues are raised at approval time (validateAction) where
+      // they relate to a real task that exists but cannot execute.
       const issues: ValidationIssue[] = [{
         code: 'unknown_action_type',
         message: `Action type '${action_type}' is not registered in the Typed Action Registry.`,
       }];
-      createSystemIssue({
-        business_id,
-        issue_type: 'action_validation_failure',
-        severity: 'warning',
-        title: `Task action '${action_type}' cannot be proposed`,
-        description: issues[0]!.message,
-        related_action_type: action_type,
-        metadata: { stage: 'proposal', issues },
-      });
       throw createProposalValidationError(`Task action '${action_type}' cannot be proposed: ${issues[0]!.message}`, issues);
     }
 

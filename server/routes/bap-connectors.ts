@@ -55,8 +55,8 @@ function safeJSON<T>(val: unknown, fallback: T): T {
 /** config is not guaranteed secret-free by any code-level contract, but no current connector type puts a credential in it — see the module docstring for the credentials.ts finding this whitelist is based on. */
 function summarizeConfig(config: unknown): Record<string, unknown> {
   const parsed = safeJSON<Record<string, unknown>>(config, {});
-  const { url, siteUrl, propertyId, repos, owner, pollingIntervalMinutes, defaultDataType } = parsed;
-  return { url, siteUrl, propertyId, repos, owner, pollingIntervalMinutes, defaultDataType };
+  const { url, siteUrl, propertyId, repos, owner, pollingIntervalMinutes, defaultDataType, history_days } = parsed;
+  return { url, siteUrl, propertyId, repos, owner, pollingIntervalMinutes, defaultDataType, history_days };
 }
 
 // Issue #27: a never-used, ecommerce-only connector (e.g. google-merchant)
