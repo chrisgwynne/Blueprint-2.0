@@ -23,6 +23,7 @@ import {
   analyseAndProposeHires, runScheduledHiringSweep, __setHiringDeps, __resetHiringDeps,
 } from '../conductor-hiring.js';
 import { setHiringPolicy } from './policy.js';
+import { deferTask } from '../../tasks/task-queue.js';
 import { getCoordination, listAnalysisRuns, reconcileStaleAnalysisRuns, startAnalysisRun } from './store.js';
 import { reasonAboutHires, type ReasoningOutcome } from './reasoning.js';
 import { ProviderHttpError } from '../../lib/provider-errors.js';
@@ -387,5 +388,106 @@ describe('#52 provider failures are terminal, bounded and recoverable', () => {
     expect(closed).toEqual([a]);
     const bRow = db.prepare('SELECT status FROM hiring_analysis_runs WHERE id = ?').get(b) as any;
     expect(bRow.status).toBe('running');
+  });
+});
+
+// ─── Issue #89: duplicate batch regression ────────────────────────────────────
+// Root causes:
+//   (a) getOpenProposalTemplateIds() excluded 'deferred' status — a deferred
+//       proposal was invisible to the second analysis, which then opened a new
+//       window slot and created a duplicate. Fixed by including 'deferred' in
+//       the status filter.
+//   (b) analysisWindowKey() used Math.max(1, cooldown) minutes — with
+//       cooldown_minutes=0 (1-minute windows) two analyses crossing a minute
+//       boundary got different window keys, letting both claim proposal slots.
+//       Fixed by using a 60-minute minimum window.
+
+describe('#89 duplicate hire_agent batch regression', () => {
+  test('back-to-back triggers of different types produce exactly one proposal set per template', async () => {
+    seed(BIZ_A);
+
+    const first = await analyseAndProposeHires(BIZ_A, { trigger: 'connector_sync' });
+    expect(first.proposed_hires).toBe(1);
+
+    // Second trigger, different type, proposals from first are still open.
+    // getOpenProposalTemplateIds must catch them regardless of trigger type.
+    const second = await analyseAndProposeHires(BIZ_A, { trigger: 'signal' });
+    expect(second.proposed_hires).toBe(0);
+    expect(second.terminal_reason).toBe('all_already_proposed');
+
+    const tasks = db.prepare(
+      "SELECT id FROM tasks WHERE business_id = ? AND action_type = 'hire_agent'"
+    ).all(BIZ_A) as Array<{ id: string }>;
+    expect(tasks).toHaveLength(1);
+  });
+
+  test('a deferred hire proposal blocks re-proposal for the same template', async () => {
+    seed(BIZ_A);
+
+    const first = await analyseAndProposeHires(BIZ_A, { trigger: 'connector_sync' });
+    expect(first.proposed_hires).toBe(1);
+    const taskId = first.proposal_ids[0]!;
+
+    // Reviewer defers the proposal ("not now") — this used to be invisible to
+    // getOpenProposalTemplateIds (status='deferred' was excluded), allowing a
+    // second analysis to create a duplicate proposal for the same template.
+    const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    deferTask(taskId, 'dashboard:reviewer', 'Will revisit next sprint', futureDate);
+
+    const deferred = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId) as { status: string };
+    expect(deferred.status).toBe('deferred');
+
+    // A subsequent analysis must not propose a second task for the same template.
+    const second = await analyseAndProposeHires(BIZ_A, { trigger: 'signal' });
+    expect(second.proposed_hires).toBe(0);
+    expect(second.terminal_reason).toBe('all_already_proposed');
+
+    const tasks = db.prepare(
+      "SELECT id FROM tasks WHERE business_id = ? AND action_type = 'hire_agent'"
+    ).all(BIZ_A) as Array<{ id: string }>;
+    expect(tasks).toHaveLength(1);
+  });
+
+  test('a closed proposal is blocked by its window slot even across different trigger types', async () => {
+    seed(BIZ_A);
+
+    const first = await analyseAndProposeHires(BIZ_A, { trigger: 'connector_sync' });
+    expect(first.proposed_hires).toBe(1);
+
+    // Simulate proposal execution completion — no longer open, no longer deferred.
+    // The window-key slot in hiring_proposal_keys is the last line of defence.
+    db.prepare("UPDATE tasks SET status = 'complete' WHERE business_id = ?").run(BIZ_A);
+
+    const second = await analyseAndProposeHires(BIZ_A, { trigger: 'signal' });
+    expect(second.proposed_hires).toBe(0);
+
+    const tasks = db.prepare(
+      "SELECT id FROM tasks WHERE business_id = ? AND action_type = 'hire_agent'"
+    ).all(BIZ_A) as Array<{ id: string }>;
+    expect(tasks).toHaveLength(1);
+  });
+
+  test('window key slot prevents re-proposal in the same window even for concurrent analyses of different businesses share no state', async () => {
+    seed(BIZ_A);
+    seed(BIZ_B);
+
+    // Both businesses get proposals independently.
+    const [resA, resB] = await Promise.all([
+      analyseAndProposeHires(BIZ_A, { trigger: 'connector_sync' }),
+      analyseAndProposeHires(BIZ_B, { trigger: 'connector_sync' }),
+    ]);
+    expect(resA.proposed_hires).toBe(1);
+    expect(resB.proposed_hires).toBe(1);
+
+    // Second trigger for each — proposals still open, must not duplicate.
+    db.prepare("UPDATE tasks SET status = 'complete' WHERE business_id = ?").run(BIZ_A);
+    db.prepare("UPDATE tasks SET status = 'complete' WHERE business_id = ?").run(BIZ_B);
+
+    const [secondA, secondB] = await Promise.all([
+      analyseAndProposeHires(BIZ_A, { trigger: 'scheduled' }),
+      analyseAndProposeHires(BIZ_B, { trigger: 'scheduled' }),
+    ]);
+    expect(secondA.proposed_hires).toBe(0);
+    expect(secondB.proposed_hires).toBe(0);
   });
 });

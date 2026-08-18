@@ -2153,6 +2153,29 @@ for (const sql of RETROSPECTIVE_PROPOSAL_MIGRATIONS) {
   }
 }
 
+// ─── Issue #90: register config_change and deployment_hardening ───────────────
+// These action types were being proposed by the conductor but were absent from
+// the Typed Action Registry, causing action_validation_failure system issues to
+// accumulate on every proposal attempt. Registered here as human-review-only
+// (dispatched_by_executor = 0) so approved tasks route to manual_review instead
+// of being enqueued for automated execution — these are strategic changes that
+// require a human to carry out.
+const ISSUE_90_REGISTRY_MIGRATIONS = [
+  `INSERT OR IGNORE INTO action_registry (
+    action_type, description, required_connector_types, supported_business_types,
+    side_effect_classification, risk_level, supports_rollback, requires_approval,
+    dispatched_by_executor
+  ) VALUES
+    ('config_change', 'Apply a configuration change to a service, tool, or platform.', '[]', '[]', 'internal_idempotent', 'medium', 0, 1, 0),
+    ('deployment_hardening', 'Apply security or reliability hardening to a deployment configuration.', '[]', '[]', 'internal_idempotent', 'medium', 0, 1, 0)`,
+];
+for (const sql of ISSUE_90_REGISTRY_MIGRATIONS) {
+  try { db.exec(sql); }
+  catch (err) {
+    console.warn('[db] issue #90 registry migration warning:', (err as Error).message);
+  }
+}
+
 // â”€â”€â”€ One-off data migration: agent lifecycle redesign â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 (function applyAgentLifecycleMigration() {

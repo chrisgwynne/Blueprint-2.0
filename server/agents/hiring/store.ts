@@ -111,9 +111,14 @@ export function recordUninstallation(businessId: string, agentId: string): void 
 
 export function getOpenProposalTemplateIds(businessId: string): Set<string> {
   assertBusiness(businessId);
+  // 'deferred' is included: a reviewer who deferred a hire proposal has NOT
+  // decided against it — creating a second proposal for the same template
+  // while the first is deferred duplicates the queue and confuses the hiring
+  // engine. Deferred proposals resurface automatically via resurfaceDeferredTasks(),
+  // so no re-proposal is needed in the meantime. (Issue #89 root cause.)
   const rows = db.prepare(`
     SELECT action_payload FROM tasks
-     WHERE business_id = ? AND action_type = 'hire_agent' AND status IN ('proposed', 'approved')
+     WHERE business_id = ? AND action_type = 'hire_agent' AND status IN ('proposed', 'approved', 'deferred')
   `).all(businessId) as Array<{ action_payload: string }>;
   const out = new Set<string>();
   for (const r of rows) {

@@ -614,9 +614,16 @@ function buildInstalledRequirements(businessId: string): Map<string, string[]> {
  * The analysis window for proposal idempotency (#45). One window per business
  * per cooldown period: within it, a given template can be proposed exactly
  * once no matter how many analyses race.
+ *
+ * Minimum window is 60 minutes regardless of the configured cooldown. A shorter
+ * minimum (e.g. 1 minute when cooldown_minutes=0) means two analyses that
+ * cross a minute boundary get different window keys, allowing both to claim
+ * proposal slots — the dedup breaks at boundary edges. 60 minutes aligns with
+ * the default cooldown and is wide enough that any two analyses within a
+ * normal lease TTL share the same key. (Issue #89 root cause.)
  */
 function analysisWindowKey(cooldownMinutes: number): string {
-  const windowMs = Math.max(1, cooldownMinutes) * 60_000;
+  const windowMs = Math.max(60, cooldownMinutes) * 60_000;
   return `w${Math.floor(Date.now() / windowMs)}`;
 }
 

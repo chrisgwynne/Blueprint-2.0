@@ -58,17 +58,65 @@ describe('approveTask — Typed Action Registry gate (full enforcement)', () => 
     expect(after!.status).toBe('approved');
   });
 
-  test('an unregistered action_type blocks proposal and files a system issue', () => {
-    expect(() => propose('this_action_type_does_not_exist_anywhere')).toThrow(/not registered in the Typed Action Registry/);
+  test('an unregistered action_type is refused at propose time with a structured 400 — no task row, no system issue', () => {
+    // The structured issues error IS the signal; a system issue at proposal
+    // time would accumulate unboundedly (one per attempt) and never resolve.
+    let caughtErr: (Error & { issues?: unknown; statusCode?: number }) | null = null;
+    try {
+      propose('this_action_type_does_not_exist_anywhere');
+    } catch (err) {
+      caughtErr = err as Error & { issues?: unknown; statusCode?: number };
+    }
+
+    expect(caughtErr).not.toBeNull();
+    expect(caughtErr!.message).toMatch(/not registered in the Typed Action Registry/);
+    expect(caughtErr!.statusCode).toBe(400);
+    expect(Array.isArray((caughtErr as any).issues)).toBe(true);
+    expect((caughtErr as any).issues[0]?.code).toBe('unknown_action_type');
 
     const tasks = db.prepare('SELECT COUNT(*) AS count FROM tasks WHERE business_id = ?').get(BIZ) as { count: number };
     expect(tasks.count).toBe(0);
 
+    // No system issue — the structured throw IS the refusal mechanism.
     const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
-    expect(issues.length).toBeGreaterThan(0);
-    expect(issues[0]!.related_action_type).toBe('this_action_type_does_not_exist_anywhere');
-    expect((issues[0]!.metadata as any)?.stage).toBe('proposal');
-    expect((issues[0]!.metadata as any)?.issues?.[0]?.code).toBe('unknown_action_type');
+    expect(issues.filter((i) => i.related_action_type === 'this_action_type_does_not_exist_anywhere')).toHaveLength(0);
+  });
+
+  // Issue #90: config_change and deployment_hardening were proposed by the
+  // conductor but unregistered, causing action_validation_failure system issues
+  // to accumulate. Now they're seeded as human-review-only registry entries.
+  test('config_change is registered and can be proposed', () => {
+    const task = propose('config_change');
+    expect(task).not.toBeNull();
+    expect(task!.status).toBe('proposed');
+    expect(task!.action_type).toBe('config_change');
+  });
+
+  test('deployment_hardening is registered and can be proposed', () => {
+    const task = propose('deployment_hardening');
+    expect(task).not.toBeNull();
+    expect(task!.status).toBe('proposed');
+    expect(task!.action_type).toBe('deployment_hardening');
+  });
+
+  test('config_change and deployment_hardening route to manual_review on approval (no executor)', () => {
+    for (const actionType of ['config_change', 'deployment_hardening'] as const) {
+      db.prepare(`DELETE FROM tasks WHERE business_id = ?`).run(BIZ);
+      const task = propose(actionType);
+      const after = approveTask(task!.id, 'tester');
+      expect(after!.status).toBe('manual_review');
+
+      const jobs = db.prepare(`SELECT * FROM execution_jobs WHERE task_id = ?`).all(task!.id) as Array<{ status: string }>;
+      expect(jobs).toHaveLength(0);
+    }
+  });
+
+  test('repeated proposals of an unregistered action_type create no system issues', () => {
+    for (let i = 0; i < 3; i++) {
+      try { propose('not_a_real_action_type_ever'); } catch { /* expected */ }
+    }
+    const issues = listSystemIssues({ business_id: BIZ, issue_type: 'action_validation_failure' });
+    expect(issues.filter((i) => i.related_action_type === 'not_a_real_action_type_ever')).toHaveLength(0);
   });
 
   // product_suggestion (like the shopify_* family) is ecommerce-only, but —
