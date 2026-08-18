@@ -7,7 +7,11 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — develop branch
+## [1.0.0] — 2026-08-18
+
+First stable release, after a month of real production usage (Hermes
+agent, 3 live businesses) and a production-readiness pass driven by what
+that usage surfaced.
 
 ### 2026-08-17 — Production-readiness fixes, a rewritten README, and eight new trust/visibility features
 

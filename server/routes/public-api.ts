@@ -117,13 +117,13 @@ function safeJSON(val: unknown, fallback: any = []): any {
 // ─── System ─────────────────────────────────────────────────────────────────
 
 router.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', version: '0.9.0-beta', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', version: '1.0.0', timestamp: new Date().toISOString() });
 });
 
 router.get('/version', (_req: Request, res: Response) => {
   res.json({
     name: 'Blueprint',
-    version: '0.9.0-beta',
+    version: '1.0.0',
     protocol: 'Blueprint Public API v1',
     environment: process.env.NODE_ENV || 'development',
   });
