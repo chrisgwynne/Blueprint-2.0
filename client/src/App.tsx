@@ -90,7 +90,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         const bs = await getBusinesses()
         setBusinesses(bs || [])
         if (bs && bs.length > 0 && !currentBusiness) {
-          setCurrentBusiness(bs[0])
+          const savedId = localStorage.getItem('bp_current_business_id')
+          const saved = savedId ? bs.find((b: { id: string }) => b.id === savedId) : null
+          setCurrentBusiness(saved || bs[0])
         }
         // Decide once whether onboarding is needed.
         if (!bs || bs.length === 0) {
@@ -130,7 +132,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         // Refresh businesses then dismiss the wizard.
         getBusinesses().then((bs: any) => {
           useStore.getState().setBusinesses(bs ?? [])
-          if (bs?.length > 0) useStore.getState().setCurrentBusiness(bs[0])
+          if (bs?.length > 0) {
+            const savedId = localStorage.getItem('bp_current_business_id')
+            const saved = savedId ? bs.find((b: any) => b.id === savedId) : null
+            useStore.getState().setCurrentBusiness(saved || bs[0])
+          }
         }).catch(() => {}).finally(() => {
           setShowOnboarding(false)
         })

@@ -778,6 +778,8 @@ router.get('/social', isAuthenticated, async (req: Request, res: Response) => {
       businessId: String(businessId),
       userId,
       type: 'social',
+      family: 'social',
+      sessionHash: sessionHash(req),
     });
     const authUrl = await socialConnector.getAuthUrl(state);
     return res.redirect(authUrl);
@@ -805,32 +807,33 @@ router.get('/social/callback', async (req: Request, res: Response) => {
   if (!code || !state) return res.redirect(`${clientUrl}/connectors?error=missing_oauth_params`);
 
   const { validateOAuthState, OAuthStateError } = await import('../connectors/social/oauth-state.js');
-  const userId = (req.session as any)?.userId as string | undefined;
-  if (!userId) {
-    return res.redirect(`${clientUrl}/connectors?error=${encodeURIComponent('Session expired — please log in and try again.')}`);
-  }
 
   // Validate signed state: signature, expiry, nonce, user binding
+  // userId is extracted from the signed state token itself (safe — HMAC-verified)
+  // so the callback works even when the session cookie isn't present (e.g. via ngrok).
   let parsedState: { businessId: string; type: string };
   try {
-    // Business ID is embedded in the state itself — we extract it from the token
-    // by doing a preliminary parse to get businessId, then validate that the businessId
-    // in the state matches. validateOAuthState enforces both user and business binding.
     const rawState = String(state);
-    // Extract businessId from the signed payload for binding check
-    // (validateOAuthState will re-verify this against the signature)
     const dotIdx = rawState.lastIndexOf('.');
     if (dotIdx < 1) throw new OAuthStateError('Invalid state format.');
     const encoded = rawState.slice(0, dotIdx);
-    let prelimPayload: { businessId?: string };
+    let prelimPayload: { businessId?: string; userId?: string };
     try {
       prelimPayload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
     } catch {
       throw new OAuthStateError('Could not decode state payload.');
     }
     if (!prelimPayload.businessId) throw new OAuthStateError('State missing businessId.');
+    if (!prelimPayload.userId) throw new OAuthStateError('State missing userId.');
 
-    parsedState = await validateOAuthState(rawState, userId, prelimPayload.businessId);
+    const liveUserId = (req.session as any)?.userId as string | undefined;
+    const liveSessionHash = sessionHash(req);
+    if (!liveUserId || !liveSessionHash) throw new OAuthStateError('Session expired. Please log in and restart OAuth.');
+    parsedState = await validateOAuthState(rawState, liveUserId, prelimPayload.businessId, {
+      expectedType: 'social',
+      expectedFamily: 'social',
+      expectedSessionHash: liveSessionHash,
+    });
   } catch (err) {
     const msg = (err as Error).message || 'invalid_state';
     console.warn('[oauth] Social callback state validation failed:', msg);

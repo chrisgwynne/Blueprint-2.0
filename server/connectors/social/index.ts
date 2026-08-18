@@ -57,8 +57,6 @@ const READ_SCOPES = [
   'pages_show_list',
   'pages_read_engagement',
   'pages_read_user_content',
-  'instagram_basic',
-  'instagram_manage_insights',
   'business_management',
 ];
 
@@ -66,7 +64,6 @@ const READ_SCOPES = [
 const WRITE_SCOPES = [
   'pages_manage_posts',
   'pages_manage_metadata',
-  'instagram_content_publish',
 ];
 
 const ALL_SCOPES = [...READ_SCOPES, ...WRITE_SCOPES].join(',');

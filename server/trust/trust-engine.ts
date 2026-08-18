@@ -3,6 +3,7 @@ import {
   DEFAULT_OPERATING_POLICY, computeTierUnderPolicy, resolveOperatingPolicy,
   type OperatingPolicyDocument, type ResolvedOperatingPolicy,
 } from '../policy/operating-policy.js';
+import { evaluateDueMeasurements, prepareOutcomeMeasurement } from '../tasks/measurement-learning.js';
 
 function sqlPrepare(query: string): any {
   return db.prepare(query);
@@ -223,15 +224,15 @@ export function calculateApprovalTier(input: { actionType?: string | null; paylo
 }
 export function getMeasurementPolicy(businessId: string, actionType?: string | null): Record<string, unknown> { return (sqlPrepare(`SELECT * FROM measurement_policies WHERE active = 1 AND (business_id = ? OR business_id IS NULL) AND (action_type = ? OR action_type IS NULL) ORDER BY business_id IS NULL ASC, action_type IS NULL ASC LIMIT 1`).get(businessId, actionType ?? null) as Record<string, unknown> | undefined) ?? { id: 'policy_default_immediate_7_28_90', checkpoints_json: '[0,7,28,90]' }; }
 export function scheduleOutcomeMeasurements(taskId: string): number {
-  const task = sqlPrepare('SELECT id, business_id, action_type, target_metric_baseline FROM tasks WHERE id = ?').get(taskId) as Record<string, unknown> | undefined; if (!task) return 0;
-  const policy = getMeasurementPolicy(String(task.business_id), task.action_type ? String(task.action_type) : null); const checkpoints = parseJson<number[]>(policy.checkpoints_json, [0, 7, 28, 90]); let inserted = 0;
-  for (const day of checkpoints) { const res = sqlPrepare(`INSERT OR IGNORE INTO outcome_measurement_runs (id, task_id, business_id, policy_id, checkpoint_at, checkpoint_day, baseline_value, state, evidence_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_measurement', 'unknown', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).run(generateId(), taskId, task.business_id, policy.id ?? null, isoAfterDays(Number(day)), Number(day), task.target_metric_baseline ?? null); inserted += res.changes ?? 0; }
-  return inserted;
+  try {
+    return prepareOutcomeMeasurement(taskId).scheduled;
+  } catch {
+    return 0;
+  }
 }
 export function evaluateDueOutcomeMeasurements(): { evaluated: number; changed: number } {
-  const rows = sqlPrepare("SELECT * FROM outcome_measurement_runs WHERE state IN ('pending_measurement','measuring') AND checkpoint_at <= CURRENT_TIMESTAMP").all() as Array<Record<string, unknown>>; let changed = 0;
-  for (const r of rows) { const state = r.baseline_value == null ? 'blocked_by_missing_data' : 'inconclusive'; const diagnostic = r.baseline_value == null ? 'No verified baseline value is available; not marking unsuccessful.' : 'Checkpoint reached but no connector observation is attached yet.'; sqlPrepare('UPDATE outcome_measurement_runs SET state = ?, verdict = ?, evidence_status = ?, diagnostic = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(state, state === 'blocked_by_missing_data' ? 'blocked' : 'inconclusive', r.baseline_value == null ? 'unknown' : 'observed', diagnostic, r.id); changed++; }
-  return { evaluated: rows.length, changed };
+  const result = evaluateDueMeasurements();
+  return { evaluated: result.evaluated, changed: result.changed };
 }
 export function recordRunEvent(runId: string, eventType: string, summary: string, opts: Record<string, unknown> = {}): void {
   const run = sqlPrepare('SELECT id, agent_id, business_id FROM agent_runs WHERE id = ?').get(runId) as Record<string, unknown> | undefined; if (!run) return;

@@ -75,7 +75,11 @@ const useStore = create<StoreState>((set, get) => ({
   businesses: [],
   currentBusiness: null,
   setBusinesses: (businesses) => set({ businesses }),
-  setCurrentBusiness: (business) => set({ currentBusiness: business }),
+  setCurrentBusiness: (business) => {
+    if (business) localStorage.setItem('bp_current_business_id', business.id)
+    else localStorage.removeItem('bp_current_business_id')
+    set({ currentBusiness: business })
+  },
 
   // ============================================
   // Dashboard

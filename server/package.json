@@ -6,6 +6,7 @@
     "dev": "bun --watch index.ts",
     "start": "bun index.ts",
     "db:init": "bun db/init.ts",
+    "measurements:inspect": "bun scripts/inspect-measurements.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test"
   },
