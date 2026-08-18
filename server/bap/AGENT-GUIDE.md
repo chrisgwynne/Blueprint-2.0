@@ -18,6 +18,14 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > which is more than any of #77–#84/#86 exposed; see the Playbooks section
 > for why a trigger endpoint is safe here specifically. Every dashboard
 > feature added in the 38-issue backlog clearance now has a BAP surface.
+>
+> **Later 2026-08 update:** a second pass added Run Event Trace
+> (per-run tool-call/step visibility, see Agents below), proactive
+> notification + three new Blueprint-health checks on top of the
+> existing System Issues surface, an Operating Policy Backtest (replay
+> a draft policy change against real task history before activating
+> it), and Cross-Business Pattern detection as a new Executive Command
+> Centre section. Full detail in [CHANGELOG.md](/CHANGELOG.md).
 
 ---
 

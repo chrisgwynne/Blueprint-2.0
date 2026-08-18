@@ -49,6 +49,8 @@
     - [Safe Simulation / Preview Mode](#safe-simulation--preview-mode)
     - [Reusable Bounded Playbooks](#reusable-bounded-playbooks)
     - [Operating Policy & Action Receipts](#operating-policy--action-receipts)
+    - [Run Event Trace](#run-event-trace)
+    - [Blueprint-Health Alerting](#blueprint-health-alerting)
   - [Knowledge Base — a wiki that writes itself](#-knowledge-base)
   - [Write-Back Actions — real changes, always reversible](#-write-back-actions)
   - [External Agents (BAP)](#-external-agents-bap)
@@ -133,7 +135,15 @@ Every step is logged. Every action has a paper trail. Every write-back can be un
 
 ## ⚡ Quick Start
 
-The fastest path on any OS is Docker:
+Just want to try it? One command, handles everything except installing [Bun](https://bun.sh) itself:
+
+```bash
+npx github:chrisgwynne/Blueprint-2.0
+```
+
+This runs setup inside npm's own cache directory and prints the next step — great for a first look, but for anything you'll keep running, use Docker or a real clone below.
+
+The fastest path to a permanent install on any OS is Docker:
 
 ```bash
 git clone https://github.com/chrisgwynne/Blueprint-2.0
@@ -212,7 +222,7 @@ The layer that makes autonomous operation something you'd actually trust — eve
 Every item still waiting on a human shows up in one queue with the *reason* it's waiting — `manual_review`, `policy_gated`, or `routine` — and the risk evidence behind that lane. When you have several candidates for the same call, Comparison Mode lays them out side-by-side: what genuinely differs, what's identical, and what Blueprint simply doesn't know yet (never defaulted, never guessed).
 
 #### Executive Command Centre
-One screen for everything across every business you run: pending decisions, verified changes, ROI, connector health, and a ranked "look at this first" list — with a hard timestamp on every number so a stale figure is never mistaken for a fresh one.
+One screen for everything across every business you run: pending decisions, verified changes, ROI, connector health, and a ranked "look at this first" list — with a hard timestamp on every number so a stale figure is never mistaken for a fresh one. Includes **Cross-Business Pattern detection**: the same signal firing in 2+ businesses, or a metric moving the same direction across your portfolio — flagged explicitly as a correlation worth a look, never claimed as a shared cause.
 
 #### Multi-Business Portfolio View
 Running more than one business or client account? Save named groupings — "UK shops," "Q3 turnaround" — and compare them metric-by-metric, with every cell honestly marked `known`, `unknown`, or `not comparable` rather than forced into a misleading ranking.
@@ -236,7 +246,13 @@ Preview exactly what approving a task *would* do — the changes, the connectors
 Turn a proven multi-step sequence into a versioned, typed playbook you can run again. Every step still clears the same approval gate a one-off task would — reuse never means bypassing review.
 
 #### Operating Policy & Action Receipts
-A per-business, versioned Operating Policy governs exactly what any agent may do without a human — with scheduled activation and one-click rollback to any prior version. Every approved action gets a durable, 5-state Action Receipt (`requested` → `authorized` → `executed` → `externally_acknowledged` → `verified`) as proof of what actually landed, not just what was attempted.
+A per-business, versioned Operating Policy governs exactly what any agent may do without a human — with scheduled activation and one-click rollback to any prior version. **Backtest a draft change before you activate it**: replay it against your last 30 days of real task history and see exactly which approvals would flip either direction, evidence-cited by task id — not a guess at "would this be safer," a real answer. Every approved action gets a durable, 5-state Action Receipt (`requested` → `authorized` → `executed` → `externally_acknowledged` → `verified`) as proof of what actually landed, not just what was attempted.
+
+#### Run Event Trace
+Every agent run's step-by-step trace — what it checked, what it proposed, what it cancelled and why — was always being recorded and never shown anywhere. Now it's one click away on the Agent Detail page, and readable over BAP too, so "why did this take 40 seconds" or "what did it actually check before proposing this" has a real answer instead of a black box.
+
+#### Blueprint-Health Alerting
+Two different questions: "is my business okay?" and "is Blueprint itself okay?" Signals answer the first; this answers the second. An agent failing three runs in a row, a connector gone critically stale, an LLM provider stuck on its fallback for too long, a cost cap approaching its limit — all raised as a system issue and, for anything serious, pushed to you on Telegram the moment it happens rather than waiting for you to notice on the dashboard.
 
 ### 📚 Knowledge Base
 

@@ -9,6 +9,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] — develop branch
 
+### 2026-08-17 — Production-readiness fixes, a rewritten README, and eight new trust/visibility features
+
+Prompted by a competitive review (Cabinet, Paperclip) and a month of real
+Hermes usage across 3 businesses. Two kinds of change:
+
+**Real bugs fixed, not just documented:**
+- 4 tests (`agent-runner.provider-failure`/`search-fallback`) had been
+  silently short-circuiting since before this pass — a CWD-dependent path
+  bug meant they never reached the behavior they were meant to test. Fixed
+  at the root (resolve relative to the test file's own location, matching
+  #41's pattern) — server suite is genuinely green for the first time this
+  cycle, not just reported as such.
+- Docker deployment was broken outright: a build-breaking `COPY` of a
+  nonexistent directory, a port mismatch that made `docker compose up -d`
+  (the README's own documented quick-start) unreachable, and a lockfile
+  glob that never matched. Fixed all three, added the missing
+  `.dockerignore`.
+- The repo URL (`chrisgwynne/blueprint`, which doesn't exist) was silently
+  404-ing in README, CONTRIBUTING, CHANGELOG, and the marketing landing
+  page. Fixed everywhere.
+
+**Eight new features, each answering a specific gap found by comparing
+Blueprint against peer products or real operating experience:**
+- **Budget visibility** — both cost caps (per-agent daily, global monthly)
+  now raise a `system_issues` warning at 80% and again at 100%, instead of
+  a server-only `console.warn` nobody was watching.
+- **Run Event Trace** — the per-run `agent_run_events` timeline (already
+  collected, never surfaced) is now visible on the dashboard's Agent
+  Detail page and over BAP (`GET /runs/:runId/events`).
+- **SECURITY.md** — an explicit, code-verified data-handling policy:
+  self-hosted only, AES-256-GCM credentials at rest, outbound network
+  access restricted to a hardcoded allowlist, no telemetry anywhere in
+  the codebase.
+- **`npx github:chrisgwynne/Blueprint-2.0`** — a genuine one-command path
+  to a running local instance (`bin/blueprint.js`), alongside the existing
+  Docker/native install paths.
+- **Operating Policy Backtest** — replay a draft policy patch against real
+  task history (default 30 days) before activating it, showing exactly
+  which historical approvals would flip either direction, evidence-cited
+  by task id.
+- **Proactive Blueprint-health alerting** — `system_issues` now dispatches
+  a notification (dashboard + Telegram) for severity ≥ `error` by default,
+  and three new checks catch problems with Blueprint's own operation
+  (an agent failing repeatedly, a connector critically stale, an LLM
+  provider stuck on fallback) that were previously invisible.
+- **Cross-Business Pattern detection** — a new Executive Command Centre
+  section flags correlated signals or metric movement across 2+
+  businesses in a portfolio — explicitly marked as correlation, never a
+  causal claim.
+
+Full technical detail for every item in
+[server/bap/AGENT-GUIDE.md](server/bap/AGENT-GUIDE.md).
+
 ### 2026-08-17 — Every dashboard feature from the backlog clearance now has a BAP surface
 
 PR #88 closed issues #77–#86, the follow-up filed against the entry below
