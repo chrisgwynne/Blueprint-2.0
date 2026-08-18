@@ -1467,8 +1467,17 @@ export async function runAgent(
     let actualModel = model;
     recordRunEvent(runId, 'preflight', `Checking provider ${providerId}/${model}.`, { status: 'attempted' });
     const preflight = await performProviderPreflight(providerId, model, { timeoutMs: 60_000 });
-    const evidence = recordProviderPreflight(preflight.provider, preflight.model, preflight.status, preflight.evidence);
+    const evidence = recordProviderPreflight(preflight.provider, preflight.model, preflight.status, { ...preflight.evidence, temporary: preflight.temporary });
     if (preflight.status !== 'passed') {
+      if (preflight.temporary) {
+        // Transient failure (e.g. 429 rate limit, network blip) — mark failed, not permanently blocked.
+        // Scheduled runs will retry on the next tick; permanent config problems stay blocked.
+        db.prepare("UPDATE agent_runs SET status = 'failed', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = 'provider_preflight_temporary', actual_provider = ?, actual_model = ? WHERE id = ?")
+          .run('Provider preflight failed transiently — will retry on next schedule.', providerId || null, model || null, runId);
+        recordRunEvent(runId, 'preflight', 'Provider preflight failed transiently — will retry on next schedule.', { status: 'failed', metadata: evidence });
+        checkAgentFailureStreak(agentId, businessId);
+        return { runId, tasksProposed: 0, signalsDetected: 0, skipped: true, reason: 'provider_preflight_temporary' };
+      }
       db.prepare("UPDATE agent_runs SET status = 'blocked', error = ?, completed_at = CURRENT_TIMESTAMP, terminal_reason = ?, actual_provider = ?, actual_model = ? WHERE id = ?")
         .run('Provider preflight failed.', JSON.stringify(evidence), providerId || null, model || null, runId);
       recordRunEvent(runId, 'preflight', 'Provider preflight blocked the run before any LLM work started.', { status: 'blocked', metadata: evidence });
