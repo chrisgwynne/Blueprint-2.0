@@ -218,9 +218,11 @@ interface Summary {
   topProducts: ProductSaleEntry[];
   dailySales: DailySaleEntry[];
   dailyOrders: DailyOrderEntry[];
+  revenueBySource: Record<string, number>;
+  ordersBySource: Record<string, number>;
 }
 
-function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
+export function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
   // Only count orders that represent real revenue
   const orders = allOrders.filter(isCountableOrder);
 
@@ -228,6 +230,8 @@ function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
   const productSales: Record<string, ProductSaleEntry> = {};
   const dailySales: Record<string, number> = {};
   const dailyOrderCounts: Record<string, number> = {};
+  const revenueBySource: Record<string, number> = {};
+  const ordersBySource: Record<string, number> = {};
 
   for (const order of orders) {
     const day = orderDate(order);
@@ -236,6 +240,10 @@ function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
     revenue += amount;
     dailySales[day] = (dailySales[day] ?? 0) + amount;
     dailyOrderCounts[day] = (dailyOrderCounts[day] ?? 0) + 1;
+
+    const src = order.source_name?.trim() || 'unknown';
+    revenueBySource[src] = (revenueBySource[src] ?? 0) + amount;
+    ordersBySource[src] = (ordersBySource[src] ?? 0) + 1;
 
     for (const item of order.line_items ?? []) {
       const key = item.title;
@@ -258,6 +266,11 @@ function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
     .map(([date, count]) => ({ date, count }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  // Round per-source revenue to 2 decimal places
+  for (const src of Object.keys(revenueBySource)) {
+    revenueBySource[src] = Math.round((revenueBySource[src] ?? 0) * 100) / 100;
+  }
+
   return {
     period: periodLabel,
     orders: orders.length,
@@ -266,6 +279,8 @@ function buildSummary(allOrders: ShopifyOrder[], periodLabel: string): Summary {
     topProducts,
     dailySales: dailyArray,
     dailyOrders: dailyOrdersArray,
+    revenueBySource,
+    ordersBySource,
   };
 }
 
@@ -334,6 +349,7 @@ const connector = {
         financial_status: o.financial_status,
         fulfillment_status: o.fulfillment_status,
         cancel_reason: o.cancel_reason ?? null,
+        source_name: o.source_name ?? null,
         customer: o.customer ? `${o.customer.first_name || ''} ${o.customer.last_name || ''}`.trim() || o.email || 'Guest' : o.email || 'Guest',
         customer_id: o.customer?.id ?? null,
         item_count: (o.line_items ?? []).reduce((s, i) => s + i.quantity, 0),
@@ -423,6 +439,9 @@ const connector = {
       { name: 'orders',           value: c.orders,               data: null },
       { name: 'aov',              value: c.aov,                  data: null },
       { name: 'customers',        value: d.customerCount ?? 0,   data: null },
+      // Source breakdown: value = total (matches revenue/orders), data = {source: amount|count}
+      { name: 'revenue_by_source', value: c.revenue,             data: c.revenueBySource },
+      { name: 'orders_by_source',  value: c.orders,              data: c.ordersBySource },
       // Rich array data for tab components
       { name: 'top_products_data',    value: c.topProducts?.length ?? 0,                                                data: c.topProducts },
       { name: 'daily_revenue',        value: (() => { const last = c.dailySales[c.dailySales.length - 1]; return last ? last.amount : null; })(),       data: c.dailySales },
