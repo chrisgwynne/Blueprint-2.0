@@ -163,6 +163,10 @@ describe('runAgent search pass after provider fallback', () => {
       'custom/custom-fallback-test',
       'custom/custom-fallback-test',
     ]);
+    const firstReasoningPass = llmCalls[1]!.content;
+    expect(firstReasoningPass.match(/Blueprint Pre-LLM Context Snapshot/g)?.length).toBe(1);
+    expect(firstReasoningPass).toContain('"kind": "blueprint.pre_llm_context_snapshot.v1"');
+    expect(firstReasoningPass).toContain('"partial": false');
     expect(warnMessages.join('\n')).not.toContain(PROVIDER_BODY_MARKER);
     expect(warnMessages.join('\n')).not.toContain(SECRET_MARKER);
   });

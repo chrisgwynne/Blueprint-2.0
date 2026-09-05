@@ -63,6 +63,8 @@ interface RunRow {
   started_at: string;
 }
 
+const RECOVERABLE_AUTONOMOUS_HOLD_PREFIX = 'Held for human/policy review:';
+
 interface FailingAgentRow {
   agent_id: string;
   n: number;
@@ -399,14 +401,25 @@ function addConductorReasons(reasons: string[], businessId: string, lastRunAt: s
         `).get(businessId) as CountRow | null)?.n ?? 0;
     if (openSignals > 0) reasons.push(`signals: ${openSignals} open since last run`);
 
-    // 2. Proposed tasks waiting >2 hours without action
+    // 2. Proposed tasks are progression work regardless of age. This must be
+    // checked here because a BAP wake can arrive without a fresh event.
     const waitingTasks = (db.prepare(`
       SELECT COUNT(*) as n FROM tasks
        WHERE business_id = ?
          AND status = 'proposed'
-         AND created_at < datetime('now', '-2 hours')
     `).get(businessId) as CountRow | null)?.n ?? 0;
-    if (waitingTasks > 0) reasons.push(`tasks: ${waitingTasks} proposed >2h`);
+    if (waitingTasks > 0) reasons.push(`tasks: ${waitingTasks} proposed pending`);
+
+    // Only recoverable holds from the prior autonomous-progression classifier
+    // wake the conductor. Genuine manual_review rows represent execution
+    // outcomes and remain human-review work, not progression work.
+    const recoverableHolds = (db.prepare(`
+      SELECT COUNT(*) as n FROM tasks
+       WHERE business_id = ?
+         AND status = 'manual_review'
+         AND substr(rejection_reason, 1, length(?)) = ?
+    `).get(businessId, RECOVERABLE_AUTONOMOUS_HOLD_PREFIX, RECOVERABLE_AUTONOMOUS_HOLD_PREFIX) as CountRow | null)?.n ?? 0;
+    if (recoverableHolds > 0) reasons.push(`tasks: ${recoverableHolds} recoverable autonomous hold(s)`);
 
     // 3. Active goals at risk (deadline <7d AND progress <70%)
     const goalsAtRisk = (db.prepare(`

@@ -11,7 +11,7 @@ import { createTaskEvent } from '../tasks/task-events.js';
 import { shouldAutoApprove, sendApprovalRequest, DANGEROUS_ACTION_TYPES } from '../tasks/approval.js';
 import { approveTask } from '../tasks/task-queue.js';
 import { runLLM, resolveProfileLLM, getFallbackLLM, performProviderPreflight, recordProviderOutcome } from '../lib/llm-providers.js';
-import { buildMetricsContext } from './context-builders.js';
+import { buildMetricsContext, buildPreLLMContextSnapshot, formatPreLLMContextSnapshot } from './context-builders.js';
 import type { InboxEntry } from './agent-inbox.js';
 import { wrapInContentBoundary } from '../lib/content-sanitiser.js';
 import { detectAnomalousOutput } from '../lib/security-monitor.js';
@@ -798,6 +798,12 @@ async function buildUserContext({ agentId, profile, business, signals, existingT
   } else {
     lines.push('## Current Business Data\nNo recent metrics available — connectors may not have synced yet.');
   }
+  lines.push('');
+
+  // Blueprint state snapshot — deterministic, read-only, and assembled once
+  // before the LLM call for every real agent-run entrypoint.
+  const preLLMSnapshot = buildPreLLMContextSnapshot(business.id, agentId, db, { trigger, triggerId });
+  lines.push(formatPreLLMContextSnapshot(preLLMSnapshot));
   lines.push('');
 
   // Brain — in-flight actions currently in measurement windows.

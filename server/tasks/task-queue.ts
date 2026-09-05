@@ -56,6 +56,7 @@ export interface TaskRow {
   approved_payload_snapshot: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
+  rejection_reason?: string | null;
 }
 
 export interface CreateTaskParams {
@@ -89,6 +90,16 @@ export interface ApproveTaskOptions {
    * been used, or no longer matches the data it was computed from.
    */
   simulationPreviewId?: string | null;
+  /**
+   * Internal handoff for action types that are intentionally owned by an
+   * agent rather than executor.ts. Default approval behaviour is unchanged:
+   * registered action types with no executor still route to manual_review
+   * unless this explicit assignment is supplied.
+   */
+  agentAssignment?: {
+    agentId: string;
+    reason?: string | null;
+  } | null;
 }
 
 interface UpdateStatusMetadata {
@@ -122,7 +133,7 @@ const VALID_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   // updateTaskStatus()/deferTask() like every other transition, and
   // brain/restraint.ts's resurfaceDeferredTasks() picks it back up on the
   // same schedule.
-  proposed: ['approved', 'rejected', 'cancelled', 'deferred'],
+  proposed: ['approved', 'rejected', 'cancelled', 'deferred', 'manual_review'],
   approved: ['executing', 'rejected', 'cancelled', 'manual_review'],
   // 'approved' here is deliberately narrow: it's ONLY used by
   // execution-worker.ts's recoverStuckJobs() to put a crash-orphaned task
@@ -518,9 +529,9 @@ function triggerWorkerTick(): void {
  *      enter the automated worker queue. A typed action registered in the
  *      Typed Action Registry but with no executor.ts dispatch case (see
  *      `dispatched_by_executor`) is routed straight to 'manual_review'
- *      instead of being enqueued -- there is no executor to run it, so a
- *      job would only ever be retried and dead-lettered for no reason
- *      (issue #39).
+ *      instead of being enqueued -- unless an explicit internal
+ *      agentAssignment is supplied by the autonomous progression sweep. In
+ *      that case the task stays approved and assigned to the owning agent.
  * Trust-tier/approval-mode no longer branches into a separate immediate-
  * execution path (green+auto used to call updateTaskStatus(...,'executing',...)
  * directly here) â€” every approved typed action goes through the same queued
@@ -769,6 +780,10 @@ export function approveTask(
     );
   }
 
+  const agentAssignment = options.agentAssignment?.agentId
+    ? { agentId: options.agentAssignment.agentId, reason: options.agentAssignment.reason ?? null }
+    : null;
+
   const runApproval = db.transaction(() => {
     const now = new Date().toISOString();
     const result = db.prepare(`
@@ -778,13 +793,28 @@ export function approveTask(
         approved_at = ?,
         updated_at = ?,
         version = version + 1,
-        approved_payload_snapshot = ?
+        approved_payload_snapshot = ?,
+        assigned_to = CASE WHEN ? IS NOT NULL THEN ? ELSE assigned_to END
       WHERE id = ? AND status = 'proposed'
-    `).run(approvedBy, now, now, JSON.stringify(existing.action_payload ?? {}), id);
+        AND (? IS NULL OR assigned_to IS NULL OR assigned_to = '' OR assigned_to = ?)
+    `).run(
+      approvedBy,
+      now,
+      now,
+      JSON.stringify(existing.action_payload ?? {}),
+      agentAssignment?.agentId ?? null,
+      agentAssignment?.agentId ?? null,
+      id,
+      agentAssignment?.agentId ?? null,
+      agentAssignment?.agentId ?? null,
+    );
 
     if (!result.changes) {
       // CAS lost â€” re-check current status for an accurate error message.
-      const current = db.prepare('SELECT status FROM tasks WHERE id = ?').get(id) as { status: TaskStatus };
+      const current = db.prepare('SELECT status, assigned_to FROM tasks WHERE id = ?').get(id) as { status: TaskStatus; assigned_to: string | null };
+      if (current.status === 'proposed' && agentAssignment?.agentId && current.assigned_to && current.assigned_to !== agentAssignment.agentId) {
+        throw new Error(`Cannot approve task assigned to '${current.assigned_to}' for agent '${agentAssignment.agentId}'.`);
+      }
       throw new Error(`Cannot approve task in status '${current.status}'. Task must be 'proposed'.`);
     }
 
@@ -861,6 +891,14 @@ export function approveTask(
           db.prepare('UPDATE action_receipts SET execution_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?')
             .run(job.id, receipt.id);
         }
+      } else if (agentAssignment) {
+        recordFollowUp(after.id, Number(after.version ?? 1), {
+          notes: [
+            `action_type '${actionType}' is owned by agent '${agentAssignment.agentId}', not executor.ts. ` +
+            'Blueprint approved and assigned this routine internal task for agent execution.',
+            agentAssignment.reason ?? '',
+          ].filter(Boolean),
+        });
       } else if (actionValidation.entry?.side_effect_classification === 'external_verifiable') {
         // No-op: task remains 'approved', tracked but not queued for
         // Blueprint execution or manual review. The receipt records the
@@ -927,7 +965,7 @@ export function approveTask(
     action_type: existing.action_type,
   });
 
-  if (String(after.action_type ?? '').trim() !== '') {
+  if (String(after.action_type ?? '').trim() !== '' && actionValidation.entry?.dispatched_by_executor) {
     triggerWorkerTick();
   }
 

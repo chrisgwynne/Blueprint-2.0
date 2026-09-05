@@ -272,7 +272,14 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
   const runs: ConductorRun[] = [];
   const errors: ConductorRun[] = [];
 
-  // 5. Run signal-triggered agents. Each run is preceded by a recorded
+  // 5. Progress existing routine proposed tasks before waking more agents.
+  // The approval primitive owns the real policy/connector/permission gates;
+  // this sweep only selects the narrow class Blueprint is allowed to handle
+  // unattended.
+  const { runConductorAutonomousProgressionSweep } = await import('../tasks/autonomous-progression.js');
+  await runConductorAutonomousProgressionSweep(businessId);
+
+  // 6. Run signal-triggered agents. Each run is preceded by a recorded
   //    activation (trigger source, matched areas, selection reason,
   //    alternatives, confidence, evidence) and bracketed by lifecycle
   //    transitions standby → triggered → working → (verified|standby|blocked).
@@ -300,7 +307,7 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
     }
   }
 
-  // 6. Run scheduled jobs for agents whose cron is due
+  // 7. Run scheduled jobs for agents whose cron is due
   const { runWithActivation: runWithActivationScheduled } = await import('./agentActivationService.js');
   for (const agent of agents) {
     const profile = profileMap.get(agent.id);
@@ -340,7 +347,7 @@ export async function runConductor(businessId: string): Promise<{ runs: Conducto
     }
   }
 
-  // 7. Run signal clustering (groups related open signals) — non-fatal
+  // 8. Run signal clustering (groups related open signals) — non-fatal
   try {
     const { runClustering } = await import('../signals/cluster-engine.js') as unknown as { runClustering: (id: string) => Promise<unknown[]> };
     const clusters = await runClustering(businessId);
