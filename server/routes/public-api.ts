@@ -11,6 +11,7 @@ import { Router } from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
 import db, { generateId } from '../db/db.js';
+import { createSignalIfNotDuplicate, recordSignalSuppression } from '../signals/signal-helpers.js';
 
 interface ApiKeyRow {
   id: string;
@@ -158,11 +159,15 @@ router.get('/businesses/:id/signals', (req: Request, res: Response) => {
 router.post('/businesses/:id/signals', requireScope('write'), (req: Request, res: Response) => {
   const { type = 'external', severity = 'info', title, description, data, confidence } = req.body;
   if (!title) return res.status(400).json({ error: 'title is required.' });
-  const id = generateId();
-  db.prepare(`
-    INSERT INTO signals (id, business_id, rule_id, type, severity, title, description, data, status, confidence, agent_id, created_at)
-    VALUES (?, ?, 'api_external', ?, ?, ?, ?, ?, 'open', ?, 'api', CURRENT_TIMESTAMP)
-  `).run(id, String(req.params.id), type, severity, title, description ?? null, JSON.stringify(data ?? {}), confidence ?? null);
+  const signal = createSignalIfNotDuplicate({
+    business_id: String(req.params.id), rule_id: 'api_external', type, severity, title,
+    description: description ?? null, data: data ?? {}, confidence: confidence ?? 0.7,
+    agent_id: 'api', canonical_key: `api_external:${type}:${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+    condition_key: JSON.stringify(data ?? {}), actionable: severity !== 'info', process_through_mesh: false,
+  });
+  if (!signal) return res.status(500).json({ error: 'Failed to create signal.' });
+  const id = signal.id;
+  if (!signal.created) return res.status(200).json({ signal_id: id, created: false });
 
   try {
     import('../bap/webhook-dispatcher.js').then((m: any) =>
@@ -183,6 +188,7 @@ router.patch('/signals/:id', requireScope('write'), (req: Request, res: Response
   const { status } = req.body;
   if (!status) return res.status(400).json({ error: 'status is required.' });
   db.prepare('UPDATE signals SET status = ? WHERE id = ?').run(status, String(req.params.id));
+  if (status === 'resolved' || status === 'dismissed' || status === 'suppressed') recordSignalSuppression(String(req.params.id), `public API ${status}`);
   res.json({ ok: true });
 });
 
@@ -300,14 +306,15 @@ router.post('/businesses/:id/ingest/zapier', requireScope('write'), async (req: 
 
   try {
     if (type === 'signal') {
-      const id = generateId();
-      db.prepare(`
-        INSERT INTO signals (id, business_id, rule_id, type, severity, title, description, data, status, confidence, agent_id, created_at)
-        VALUES (?, ?, 'zapier', ?, ?, ?, ?, ?, 'open', ?, 'zapier', CURRENT_TIMESTAMP)
-      `).run(id, businessId, data.type ?? 'external', data.severity ?? 'info',
-        data.title ?? 'Zapier signal', data.description ?? null,
-        JSON.stringify(data), data.confidence ?? null);
-      return res.status(201).json({ type: 'signal', signal_id: id });
+      const signal = createSignalIfNotDuplicate({
+        business_id: businessId, rule_id: 'zapier', type: data.type ?? 'external', severity: data.severity ?? 'info',
+        title: data.title ?? 'Zapier signal', description: data.description ?? null, data,
+        confidence: data.confidence ?? 0.7, agent_id: 'zapier',
+        canonical_key: `zapier:${data.type ?? 'external'}:${String(data.title ?? 'Zapier signal').toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        condition_key: JSON.stringify(data), actionable: (data.severity ?? 'info') !== 'info', process_through_mesh: false,
+      });
+      if (!signal) return res.status(500).json({ error: 'Failed to create signal.' });
+      return res.status(signal.created ? 201 : 200).json({ type: 'signal', signal_id: signal.id, created: signal.created });
     }
 
     if (type === 'metric') {

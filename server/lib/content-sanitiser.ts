@@ -3,6 +3,7 @@
  */
 
 import type { Database } from 'bun:sqlite';
+import { createSignalIfNotDuplicate } from '../signals/signal-helpers.js';
 
 const INJECTION_PATTERNS = [
   /ignore\s+(?:the\s+)?(?:previous|all|above|prior)\s+instructions?/gi,
@@ -210,26 +211,14 @@ export function recordInjectionDetection(db: Database, params: InjectionDetectio
   if (!effectiveBusinessId) return;
 
   try {
-    const id = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `sig-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-
-    db.prepare(`
-      INSERT INTO signals (
-        id, business_id, connector_id, rule_id, type, severity,
-        title, description, data, status, confidence, created_at, agent_id
-      ) VALUES (?, ?, ?, 'security:injection_detected', 'security_risk', 'critical',
-                ?, ?, ?, 'open', 1.0, CURRENT_TIMESTAMP, ?)
-    `).run(
-      id,
-      effectiveBusinessId,
-      connectorId,
-      `Prompt injection attempt detected from ${source}`,
-      `${patternsFound} suspicious pattern(s) filtered from external content (${source}). ` +
-      `Content was sanitised before reaching the LLM. Review recent activity from this source.`,
-      JSON.stringify({ source, patterns_found: patternsFound, pattern_names: patternNames }),
-      agentId
-    );
+    createSignalIfNotDuplicate({
+      business_id: effectiveBusinessId, connector_id: connectorId, rule_id: 'security:injection_detected',
+      type: 'security_risk', severity: 'critical', title: `Prompt injection attempt detected from ${source}`,
+      description: `${patternsFound} suspicious pattern(s) filtered from external content (${source}). Content was sanitised before reaching the LLM. Review recent activity from this source.`,
+      data: { source, patterns_found: patternsFound, pattern_names: patternNames }, agent_id: agentId,
+      canonical_key: `security:injection_detected:${source}`, condition_key: JSON.stringify(patternNames),
+      actionable: true, process_through_mesh: false,
+    });
   } catch (err) {
     try {
       console.warn('[security:sanitiser] Failed to record injection signal:', (err as Error).message);

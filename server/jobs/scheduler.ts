@@ -15,6 +15,7 @@ import { writeWorldModelSnapshot, getPreviousConnectorData } from '../world-mode
 import { recoverStaleAgentRuns } from '../agents/agent-runner.js';
 import { isDurableGoogleCredential } from '../connectors/google-auth.js';
 import { createSystemIssue } from '../system/system-issues.js';
+import { createSignalIfNotDuplicate } from '../signals/signal-helpers.js';
 
 let schedulerStarted = false;
 
@@ -263,19 +264,19 @@ export async function checkStaleConnectors(): Promise<void> {
         // hasn't synced in over double its expected cadence has moved from
         // "worth watching" to "actively degrading whatever depends on it".
         const criticallyStale = hours > threshold * 2;
-        const exists = db.prepare("SELECT id FROM signals WHERE connector_id = ? AND rule_id = 'connector_stale' AND status = 'open'").get(c.id);
-        if (!exists) {
-          const { generateId: gid } = await import('../db/db.js') as unknown as { generateId: () => string };
-          db.prepare(`
-            INSERT INTO signals (id, business_id, connector_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
-            VALUES (?, ?, ?, 'connector_stale', 'risk', ?, ?, ?, '{}', 'open', 1.0, CURRENT_TIMESTAMP)
-          `).run(
-            gid(), c.business_id, c.id,
-            criticallyStale ? 'alert' : 'warning',
-            `${c.type.toUpperCase()} connector is stale`,
-            `No sync in ${Math.round(hours)} hours for ${c.business_name}. Last synced: ${c.last_sync}`
-          );
-        }
+        createSignalIfNotDuplicate({
+          business_id: c.business_id,
+          connector_id: c.id,
+          rule_id: 'connector_stale',
+          type: 'risk',
+          severity: criticallyStale ? 'alert' : 'warning',
+          title: `${c.type.toUpperCase()} connector is stale`,
+          description: `No sync in ${Math.round(hours)} hours for ${c.business_name}. Last synced: ${c.last_sync}`,
+          data: { connector_id: c.id, connector_type: c.type, last_sync: c.last_sync },
+          canonical_key: `connector_stale:${c.id}`,
+          condition_key: `connector_stale:${c.id}`,
+          actionable: true,
+        });
 
         // Blueprint-health system_issue, distinct from the business-risk
         // signal above — only raised once a connector crosses into

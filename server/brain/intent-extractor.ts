@@ -7,6 +7,7 @@
 import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { createSignalIfNotDuplicate } from '../signals/signal-helpers.js';
 
 const SYSTEM_PROMPT = `You extract business intelligence from a conversation message.
 
@@ -235,18 +236,14 @@ Agents should be aware of this decision when proposing related tasks.`;
 function handleConcern(e: Extraction, businessId: string): Record<string, unknown> | null {
   const s = e.structured ?? {};
   if (!s.area) return null;
-  const signalParams: any[] = [
-    crypto.randomUUID(), businessId,
-    `Human concern: ${s.area}`,
-    `Flagged in conversation: "${e.raw_text}". ${s.metric_to_check ? `Metric to investigate: ${s.metric_to_check}` : ''}`,
-    JSON.stringify({ area: s.area, metric_to_check: s.metric_to_check, source: 'chat' }),
-    e.confidence ?? 0.8,
-  ];
-  db.prepare(`
-    INSERT INTO signals
-    (id, business_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
-    VALUES (?, ?, 'chat_concern', 'risk', 'info', ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP)
-  `).run(...signalParams);
+  createSignalIfNotDuplicate({
+    business_id: businessId, rule_id: 'chat_concern', type: 'risk', severity: 'info', actionable: false,
+    title: `Human concern: ${s.area}`,
+    description: `Flagged in conversation: "${e.raw_text}". ${s.metric_to_check ? `Metric to investigate: ${s.metric_to_check}` : ''}`,
+    data: { area: s.area, metric_to_check: s.metric_to_check, source: 'chat' }, confidence: e.confidence ?? 0.8,
+    canonical_key: `chat_concern:${String(s.area).toLowerCase()}`, condition_key: String(s.metric_to_check ?? s.area),
+    process_through_mesh: false,
+  });
   return {
     type: 'concern_flagged',
     message: `Flagged that concern as a signal so agents will investigate.`,

@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import db from '../db/db.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
 import { pushDashboardEvent } from '../lib/sse-bus.js';
+import { createSignalIfNotDuplicate } from '../signals/signal-helpers.js';
 
 interface GoalRow {
   id: string;
@@ -106,20 +107,19 @@ async function checkGoal(goal: GoalRow): Promise<any> {
   // At-risk — create a signal
   if (isAtRisk) {
     try {
-      const exists = db.prepare(
-        "SELECT id FROM signals WHERE business_id=? AND rule_id='goal_at_risk' AND data LIKE ? AND status='open'"
-      ).get(goal.business_id, `%${goal.id}%`) as { id: string } | null;
-      if (!exists) {
-        db.prepare(`
-          INSERT INTO signals (id, business_id, rule_id, type, severity, title, description, data, status, confidence, created_at)
-          VALUES (?, ?, 'goal_at_risk', 'risk', 'warning', ?, ?, ?, 'open', 0.9, CURRENT_TIMESTAMP)
-        `).run(
-          crypto.randomUUID(), goal.business_id,
-          `Goal at risk: ${goal.title}`,
-          `${progressPct.toFixed(0)}% progress with ${daysLeft} days remaining. ${note}`,
-          JSON.stringify({ goal_id: goal.id, progress_pct: progressPct, days_left: daysLeft })
-        );
-      }
+      createSignalIfNotDuplicate({
+        business_id: goal.business_id,
+        rule_id: 'goal_at_risk',
+        type: 'risk',
+        severity: 'warning',
+        title: `Goal at risk: ${goal.title}`,
+        description: `${progressPct.toFixed(0)}% progress with ${daysLeft} days remaining. ${note}`,
+        data: { goal_id: goal.id, progress_pct: progressPct, days_left: daysLeft },
+        canonical_key: `goal_at_risk:${goal.id}`,
+        condition_key: `goal_at_risk:${goal.id}:${newStatus}`,
+        actionable: true,
+        process_through_mesh: true,
+      });
     } catch {}
   }
 

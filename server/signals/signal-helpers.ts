@@ -11,6 +11,7 @@
  */
 
 import db, { generateId } from '../db/db.js';
+import { createHash } from 'node:crypto';
 import {
   logIntelligenceEvent,
   parseSourceLabel,
@@ -29,6 +30,11 @@ type SignalParams = {
   source_label?: string | null;
   dedup_hours?: number;
   process_through_mesh?: boolean;
+  canonical_key?: string | null;
+  condition_key?: string | null;
+  actionable?: boolean;
+  agent_id?: string | null;
+  goal_id?: string | null;
 };
 
 // Default dedup window for non-connector signals. If the same rule_id produced
@@ -38,11 +44,10 @@ const DEFAULT_DEDUP_HOURS = 24;
 
 /**
  * Create a signal, or quietly merge into an existing open one if the same
- * (business_id, rule_id) pair is already live.
+ * canonical business condition is already live.
  *
- * rule_id is the dedup key. Use a stable prefix per source so collisions
- * across sources can't happen: e.g. 'kb_analyser:contradiction_<hash>',
- * 'task_outcome:worsened_<task_id>', 'agent_pattern:<signature>'.
+ * rule_id identifies the producer; canonical_key identifies the underlying
+ * business condition and is the durable dedup key.
  *
  * @returns {{ id, created } | null}  created=false if merged into an existing signal.
  */
@@ -66,18 +71,32 @@ export function createSignalIfNotDuplicate({
   // (file to KB, goal impact, agent trigger for alert/critical, connector
   // implications). Callers that do their own downstream routing can disable.
   process_through_mesh = true,
+  canonical_key = null,
+  condition_key = null,
+  actionable,
+  agent_id = null,
+  goal_id = null,
 }: SignalParams): { id: string; created: boolean } | null {
   if (!business_id || !rule_id || !title) return null;
 
-  // Collapse into any currently-open (or acknowledged) signal with the same rule.
+  const normalizedData = stableValue(data ?? {});
+  const semanticKey = canonical_key || [connector_id ?? 'none', type, signalIdentity(normalizedData, title)].join('|');
+  const canonicalFingerprint = hash(semanticKey);
+  const conditionFingerprint = hash(condition_key || JSON.stringify(normalizedData));
+
+  // Informational observations are telemetry, not active work, unless a
+  // producer explicitly marks them actionable.
+  if (!(actionable ?? severity !== 'info')) return { id: `suppressed:${canonicalFingerprint}`, created: false };
+
+  // Collapse into any currently-open (or acknowledged) signal for this condition.
   const openOrAck = db.prepare(`
     SELECT id FROM signals
      WHERE business_id = ?
-       AND rule_id = ?
+       AND canonical_fingerprint = ?
        AND status IN ('open', 'acknowledged')
      ORDER BY created_at DESC
      LIMIT 1
-  `).get(business_id, rule_id) as { id: string } | null;
+  `).get(business_id, canonicalFingerprint) as { id: string } | null;
 
   if (openOrAck) {
     db.prepare(`
@@ -96,6 +115,25 @@ export function createSignalIfNotDuplicate({
     return { id: openOrAck.id, created: false };
   }
 
+  // Dismissal/resolution is durable for the same underlying condition. A new
+  // wording variant or a later timestamp cannot resurrect it; a changed
+  // condition fingerprint can create a new generation.
+  const historical = db.prepare(`
+    SELECT id FROM signals
+     WHERE business_id = ? AND canonical_fingerprint = ?
+       AND condition_fingerprint = ?
+       AND status IN ('resolved', 'suppressed', 'dismissed')
+     ORDER BY created_at DESC, rowid DESC LIMIT 1
+  `).get(business_id, canonicalFingerprint, conditionFingerprint) as { id: string } | null;
+  if (historical) return { id: historical.id, created: false };
+
+  const explicitSuppression = db.prepare(`
+    SELECT source_signal_id FROM signal_suppressions
+     WHERE business_id = ? AND canonical_fingerprint = ? AND condition_fingerprint = ?
+     ORDER BY created_at DESC, rowid DESC LIMIT 1
+  `).get(business_id, canonicalFingerprint, conditionFingerprint) as { source_signal_id: string | null } | null;
+  if (explicitSuppression) return { id: explicitSuppression.source_signal_id ?? `suppressed:${canonicalFingerprint}`, created: false };
+
   // Skip if a resolved signal with the same rule closed recently — avoids
   // flapping. The caller can pass dedup_hours=0 to bypass this check.
   if (dedup_hours > 0) {
@@ -113,12 +151,19 @@ export function createSignalIfNotDuplicate({
 
   // Fresh signal.
   const id = generateId();
+  const generationRow = db.prepare(`
+    SELECT COALESCE(MAX(canonical_generation), 0) AS generation
+      FROM signals
+     WHERE business_id = ? AND canonical_fingerprint = ?
+  `).get(business_id, canonicalFingerprint) as { generation: number };
+  const canonicalGeneration = Number(generationRow?.generation ?? 0) + 1;
   try {
     db.prepare(`
       INSERT INTO signals (
         id, business_id, connector_id, rule_id, type, severity,
-        title, description, data, status, confidence, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP)
+        title, description, data, status, confidence, canonical_fingerprint,
+        condition_fingerprint, canonical_generation, agent_id, goal_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `).run(
       id,
       business_id,
@@ -130,6 +175,11 @@ export function createSignalIfNotDuplicate({
       description ? String(description).slice(0, 4000) : null,
       JSON.stringify(data ?? {}),
       confidence,
+      canonicalFingerprint,
+      conditionFingerprint,
+      canonicalGeneration,
+      agent_id,
+      goal_id,
     );
   } catch (err) {
     console.warn('[signal-helpers] insert failed:', (err as Error).message);
@@ -161,4 +211,36 @@ export function createSignalIfNotDuplicate({
   }
 
   return { id, created: true };
+}
+
+function hash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 32);
+}
+
+function signalIdentity(data: unknown, title: string): string {
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    const record = data as Record<string, unknown>;
+    for (const key of ['canonical_key', 'condition_key', 'metric', 'metric_name', 'resource_id', 'product_id', 'provider', 'url', 'path', 'source']) {
+      if (typeof record[key] === 'string' && record[key]) return `${key}:${record[key]}`;
+    }
+  }
+  return title.toLowerCase().replace(/\b\d+(?:\.\d+)?\b/g, '#').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
+
+function stableValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+    .filter(([key]) => !['created_at', 'recorded_at', 'timestamp', 'run_id', 'observed_at'].includes(key))
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, entry]) => [key, stableValue(entry)]));
+}
+
+/** Record a durable operator suppression for a signal's current condition. */
+export function recordSignalSuppression(signalId: string, reason: string): void {
+  const signal = db.prepare('SELECT business_id, canonical_fingerprint, condition_fingerprint FROM signals WHERE id = ?').get(signalId) as { business_id: string; canonical_fingerprint: string | null; condition_fingerprint: string | null } | null;
+  if (!signal?.canonical_fingerprint || !signal.condition_fingerprint) return;
+  db.prepare(`INSERT INTO signal_suppressions (id, business_id, canonical_fingerprint, condition_fingerprint, source_signal_id, reason) VALUES (?, ?, ?, ?, ?, ?)`).run(
+    generateId(), signal.business_id, signal.canonical_fingerprint, signal.condition_fingerprint, signalId, reason.slice(0, 500),
+  );
 }

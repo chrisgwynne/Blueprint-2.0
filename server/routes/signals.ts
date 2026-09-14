@@ -4,6 +4,7 @@ import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { getSignalJourney } from '../evidence/evidence-loop.js';
 import { createTrafficRecoveryProposal } from '../evidence/traffic-recovery.js';
+import { recordSignalSuppression } from '../signals/signal-helpers.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -397,6 +398,8 @@ router.patch('/:id', (req: Request, res: Response) => {
 
     values.push(id);
     db.prepare(`UPDATE signals SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+
+    if (newStatus === 'resolved') recordSignalSuppression(id, 'operator resolved signal');
 
     const updated = parseRow(db.prepare('SELECT * FROM signals WHERE id = ?').get(id) as Record<string, unknown> | null);
     const session = req.session as unknown as Record<string, unknown>;
