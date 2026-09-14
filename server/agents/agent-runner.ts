@@ -1660,22 +1660,16 @@ export async function runAgent(
       if (highSeverity.length > 0) {
         // Record a critical security signal so the operator sees it.
         try {
-          db.prepare(`
-            INSERT INTO signals (
-              id, business_id, connector_id, rule_id, type, severity,
-              title, description, data, status, confidence, created_at, agent_id
-            ) VALUES (?, ?, NULL, 'security:anomalous_output', 'security_risk', 'critical',
-                      ?, ?, ?, 'open', 1.0, CURRENT_TIMESTAMP, ?)
-          `).run(
-            generateId(),
-            businessId,
-            `Security: anomalous output blocked from ${agentId}`,
-            `Agent output contained suspicious patterns (${highSeverity.map(a => a.type).join(', ')}). ` +
-            `Output was blocked; no tasks or KB writes occurred. This may indicate a prompt injection attack via ` +
-            `external content (search results, connector data). Review recent ingestion sources.`,
-            JSON.stringify({ anomalies, run_id: runId }),
-            agentId
-          );
+          const { createSignalIfNotDuplicate } = await import('../signals/signal-helpers.js');
+          createSignalIfNotDuplicate({
+            business_id: businessId, rule_id: 'security:anomalous_output', type: 'security_risk', severity: 'critical',
+            title: `Security: anomalous output blocked from ${agentId}`,
+            description: `Agent output contained suspicious patterns (${highSeverity.map(a => a.type).join(', ')}). Output was blocked; no tasks or KB writes occurred. Review recent ingestion sources.`,
+            data: { anomalies, run_id: runId }, agent_id: agentId,
+            canonical_key: `security:anomalous_output:${agentId}:${highSeverity.map(a => a.type).sort().join(',')}`,
+            condition_key: JSON.stringify(highSeverity.map(a => ({ type: a.type, value: a.value }))),
+            actionable: true, process_through_mesh: false,
+          });
         } catch (sigErr) {
           console.warn('[security:agent] Failed to record anomaly signal:', (sigErr as Error).message);
         }

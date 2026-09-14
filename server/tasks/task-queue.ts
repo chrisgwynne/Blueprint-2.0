@@ -77,6 +77,7 @@ export interface CreateTaskParams {
   rollback_data?: unknown;
   approval_mode?: string;
   degraded_data?: number;
+  dedup_key?: string | null;
   parent_task_id?: string | null;
   [key: string]: unknown;  // allow extra fields passed by callers
 }
@@ -236,11 +237,28 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
     rollback_data = null,
     approval_mode = 'requires_approval',
     degraded_data = 0,
+    dedup_key = null,
   } = taskData;
 
   if (!business_id) throw new Error('business_id is required.');
   if (!title) throw new Error('title is required.');
   if (!proposed_by) throw new Error('proposed_by is required.');
+
+  // One active work item per signal/action, with cancellation and rejection
+  // treated as durable decisions. A genuinely changed signal receives a new
+  // canonical signal generation and therefore a new signal_id/key.
+  const canonicalTaskKey = dedup_key ?? (signal_id && action_type ? `${signal_id}:${action_type}` : null);
+  if (canonicalTaskKey) {
+    const duplicate = db.prepare(`
+      SELECT id, status FROM tasks
+      WHERE business_id = ? AND canonical_task_key = ?
+        AND status IN ('proposed', 'approved', 'executing', 'complete', 'verified', 'rejected', 'cancelled')
+      ORDER BY created_at DESC, rowid DESC LIMIT 1
+    `).get(business_id, canonicalTaskKey) as { id: string; status: string } | null;
+    if (duplicate) {
+      throw new Error(`A task already exists for this condition and action (${duplicate.id}, status '${duplicate.status}'). Historical rejection/cancellation must not be regenerated.`);
+    }
+  }
 
   // goal_id is a real FK (Phase 3) â€” reject silently-wrong linkage rather
   // than storing a dangling reference to another business's goal.
@@ -311,9 +329,10 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
     INSERT INTO tasks (
       id, business_id, signal_id, goal_id, mission_id, title, description,
       proposed_by, assigned_to, action_type, action_payload,
+      canonical_task_key,
       status, trust_tier, priority, confidence, estimated_impact,
       rollback_data, approval_mode, degraded_data, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     business_id,
@@ -326,6 +345,7 @@ export function createTask(taskData: CreateTaskParams): TaskRow | null {
     assigned_to,
     action_type,
     JSON.stringify(action_payload),
+    canonicalTaskKey,
     risk.tier,
     priority,
     confidence,

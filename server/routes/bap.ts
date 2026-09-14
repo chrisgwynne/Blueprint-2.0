@@ -45,6 +45,7 @@
  *   POST   /agents-admin/:id/webhook/enable   — lift quarantine (re-validates first)
  */
 import { Router } from 'express';
+import { createSignalIfNotDuplicate, recordSignalSuppression } from '../signals/signal-helpers.js';
 import type { Request, Response } from 'express';
 import crypto from 'crypto';
 import db, { generateId } from '../db/db.js';
@@ -674,17 +675,17 @@ router.post('/businesses/:businessId/signals', requirePermission('signals:create
     const bapAgent = (req as unknown as Record<string, unknown>).bapAgent as Record<string, unknown>;
 
     await withRequiredIdempotency(req, res, 'signals:create', async () => {
-      const id = generateId();
-      db.prepare(`
-        INSERT INTO signals (id, business_id, connector_id, goal_id, rule_id, type, severity,
-                             title, description, data, status, confidence, agent_id, created_at)
-        VALUES (?, ?, ?, ?, 'bap_external', ?, ?, ?, ?, ?, 'open', ?, ?, CURRENT_TIMESTAMP)
-      `).run(
-        id, businessId, connector_id ?? null, goal_id ?? null,
-        type, severity, stripThink(title) ?? title, stripThink(description),
-        JSON.stringify(data ?? {}), confidence ?? null,
-        bapAgent.id as string
-      );
+      const signal = createSignalIfNotDuplicate({
+        business_id: businessId, connector_id: connector_id ?? null, goal_id: goal_id ?? null,
+        rule_id: 'bap_external', type, severity, title: stripThink(title) ?? title,
+        description: stripThink(description), data: data ?? {}, confidence: confidence ?? 0.7,
+        agent_id: bapAgent.id as string,
+        canonical_key: `bap_external:${type}:${(stripThink(title) ?? title).toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+        condition_key: JSON.stringify(data ?? {}), actionable: severity !== 'info', process_through_mesh: false,
+      });
+      if (!signal) return { status: 500, body: { error: 'Failed to create signal.' } };
+      const id = signal.id;
+      if (!signal.created) return { status: 200, body: { signal_id: id, created: false } };
 
       // Dispatch webhook for signal.created
       try {
@@ -740,6 +741,7 @@ router.patch('/signals/:signalId', requirePermission('signals:read'), async (req
       if (status === 'resolved') updates.push('resolved_at = CURRENT_TIMESTAMP');
       values.push(signalId);
       db.prepare(`UPDATE signals SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+      if (status === 'resolved' || status === 'dismissed' || status === 'suppressed') recordSignalSuppression(signalId, `BAP ${status}`);
 
       return { status: 200, body: { signal_id: signalId, status, updated: true } };
     });

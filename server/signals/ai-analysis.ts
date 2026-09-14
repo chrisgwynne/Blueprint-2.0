@@ -2,6 +2,7 @@ import db, { generateId } from '../db/db.js';
 import { createTask } from '../tasks/task-queue.js';
 import { createTaskEvent } from '../tasks/task-events.js';
 import { runLLM, resolveProfileLLM } from '../lib/llm-providers.js';
+import { createSignalIfNotDuplicate } from './signal-helpers.js';
 
 interface LLMMessage {
   role: 'user' | 'assistant' | 'system';
@@ -586,7 +587,7 @@ Identify insights and proposed tasks based solely on this data.`;
     const healthScore = parsed.health_score ?? null;
     const summary = parsed.summary ?? '';
 
-    // 4. Commit signals + retire previous batch — all in one transaction so a
+    // 4. Commit signals through the canonical invariant gate — all in one transaction so a
     //    failed run never touches existing signals.
     let insightsCount = 0;
     let tasksCreated = 0;
@@ -594,43 +595,18 @@ Identify insights and proposed tasks based solely on this data.`;
     const validInsights = insights.filter(i => i.title && i.type && i.severity);
 
     const commitSignals = db.transaction(() => {
-      // Retire previous ai_analysis signals for this business: null out any task
-      // foreign-key references first, then soft-delete the signals.
-      const oldIds = (db.prepare(
-        `SELECT id FROM signals WHERE business_id = ? AND rule_id = 'ai_analysis' AND status = 'open'`
-      ).all(businessId) as Array<{ id: string }>).map(r => r.id);
-
-      if (oldIds.length > 0) {
-        const placeholders = oldIds.map(() => '?').join(',');
-        db.prepare(`UPDATE tasks SET signal_id = NULL WHERE signal_id IN (${placeholders})`).run(...oldIds);
-        db.prepare(`UPDATE signals SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`).run(...oldIds);
-      }
-
-      // Insert new signals
+      // Insert new signals; repeated analysis wording is merged by condition.
       for (const insight of validInsights) {
-        const signalId = generateId();
-        db.prepare(`
-          INSERT INTO signals (
-            id, business_id, connector_id, rule_id, type, severity,
-            title, description, data, status, confidence, agent_id, created_at
-          ) VALUES (?, ?, NULL, 'ai_analysis', ?, ?, ?, ?, ?, 'open', ?, 'conductor', CURRENT_TIMESTAMP)
-        `).run(
-          signalId,
-          businessId,
-          insight.type ?? null,
-          insight.severity ?? null,
-          insight.title ?? null,
-          insight.description ?? null,
-          JSON.stringify({
-            evidence: insight.evidence ?? [],
-            connectors_involved: insight.connectors_involved ?? [],
-            actionable: insight.actionable ?? false,
-            priority: insight.priority ?? 'p2',
-            proposed_task: insight.proposed_task ?? null,
-            run_id: runId,
-          }),
-          insight.confidence ?? null
-        );
+        const signal = createSignalIfNotDuplicate({
+          business_id: businessId, rule_id: 'ai_analysis', type: insight.type!, severity: insight.severity!,
+          title: insight.title!, description: insight.description ?? null,
+          data: { evidence: insight.evidence ?? [], connectors_involved: insight.connectors_involved ?? [], actionable: insight.actionable ?? false, priority: insight.priority ?? 'p2', proposed_task: insight.proposed_task ?? null, run_id: runId },
+          confidence: insight.confidence ?? 0.7, agent_id: 'conductor',
+          canonical_key: `ai_analysis:${insight.type}:${insight.title!.toLowerCase().replace(/\b\d+(?:\.\d+)?\b/g, '#').replace(/[^a-z0-9]+/g, '-').slice(0, 180)}`,
+          condition_key: JSON.stringify(insight.evidence ?? []), actionable: insight.actionable ?? false, process_through_mesh: false,
+        });
+        if (!signal || !signal.created) continue;
+        const signalId = signal.id;
 
         insightsCount++;
 

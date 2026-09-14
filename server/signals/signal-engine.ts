@@ -1,5 +1,6 @@
-import db, { generateId } from '../db/db.js';
+import db from '../db/db.js';
 import { getRulesForConnector } from './rules.js';
+import { createSignalIfNotDuplicate } from './signal-helpers.js';
 
 interface RuleResult {
   triggered: boolean;
@@ -17,43 +18,6 @@ interface SignalRule {
   name: string;
   primaryMetric?: string;
   evaluate(current: unknown, previous: unknown): RuleResult;
-}
-
-// ─── Signal cool-down (per rule) ─────────────────────────────────────────────
-// Prevents the same signal from re-firing too soon after resolution.
-
-const COOLDOWN_HOURS: Record<string, number> & { default: number } = {
-  default: 24,
-  monitor_down: 1,
-  monitor_seems_down: 1,
-  connector_stale: 6,
-  agent_consecutive_failures: 12,
-  gbp_negative_review: 48,
-  ranking_drop_keyword: 48,
-  traffic_drop_7day: 72,
-  shopify_no_orders: 12,
-};
-
-function shouldFireSignal(ruleId: string, connectorId: string, businessId: string): boolean {
-  const cooldown = COOLDOWN_HOURS[ruleId] ?? COOLDOWN_HOURS.default;
-
-  // Already open?
-  const alreadyOpen = db.prepare(`
-    SELECT id FROM signals
-    WHERE rule_id = ? AND connector_id = ? AND business_id = ? AND status = 'open'
-  `).get(ruleId, connectorId, businessId) as { id: string } | null;
-  if (alreadyOpen) return false;
-
-  // Recently resolved (in cool-down)?
-  const recentResolved = db.prepare(`
-    SELECT id FROM signals
-    WHERE rule_id = ? AND connector_id = ? AND business_id = ?
-    AND status = 'resolved'
-    AND resolved_at > datetime('now', '-' || ? || ' hours')
-  `).get(ruleId, connectorId, businessId, cooldown) as { id: string } | null;
-  if (recentResolved) return false;
-
-  return true;
 }
 
 /**
@@ -129,42 +93,32 @@ export async function runSignalEngine(
       continue;
     }
 
-    // Cool-down + dedup check — don't re-fire same rule too soon
-    if (!shouldFireSignal(rule.id, connectorId, businessId)) {
-      // If there's an open signal, update its data silently
-      const existing = db.prepare(`
-        SELECT id FROM signals
-        WHERE business_id = ? AND rule_id = ? AND status IN ('open', 'acknowledged')
-        ORDER BY created_at DESC LIMIT 1
-      `).get(businessId, rule.id) as { id: string } | null;
-      if (existing) {
-        db.prepare(`
-          UPDATE signals SET data = ?, confidence = ?, title = ?, description = ?, created_at = CURRENT_TIMESTAMP
-          WHERE id = ?
-        `).run(JSON.stringify(result.data), result.confidence, result.title, result.description, existing.id);
-      }
-      continue;
-    }
-
-    // Create a new signal
-    const signalId = generateId();
-    db.prepare(`
-      INSERT INTO signals (
-        id, business_id, connector_id, rule_id, type, severity,
-        title, description, data, status, confidence, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, CURRENT_TIMESTAMP)
-    `).run(
-      signalId,
-      businessId,
-      connectorId,
-      rule.id,
-      rule.type,
-      rule.severity,
-      result.title,
-      result.description,
-      JSON.stringify(result.data),
-      result.confidence
-    );
+    // Every connector signal goes through the shared creation gate. The
+    // semantic identity is stable across wording and timestamps; the
+    // condition fingerprint still permits a genuinely changed condition to
+    // become a new generation.
+    const signal = createSignalIfNotDuplicate({
+      business_id: businessId,
+      connector_id: connectorId,
+      rule_id: rule.id,
+      type: rule.type,
+      severity: rule.severity,
+      title: result.title,
+      description: result.description,
+      confidence: result.confidence,
+      data: result.data,
+      canonical_key: `${connectorType}:${rule.primaryMetric ?? pickPrimaryMetric(rule, currentData) ?? rule.type}:${
+        (result.data as Record<string, unknown>).resource_id ??
+        (result.data as Record<string, unknown>).url ??
+        (result.data as Record<string, unknown>).path ??
+        rule.type
+      }`,
+      condition_key: JSON.stringify(result.data),
+      actionable: true,
+      process_through_mesh: false,
+    });
+    if (!signal || !signal.created) continue;
+    const signalId = signal.id;
 
     newSignalIds.push(signalId);
     console.log(`[signal-engine] New signal created: ${signalId} (rule: ${rule.id}, severity: ${rule.severity})`);

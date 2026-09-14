@@ -3,6 +3,7 @@
  */
 
 import db from '../db/db.js';
+import { createSignalIfNotDuplicate } from '../signals/signal-helpers.js';
 
 // ─── Hardcoded defaults ───────────────────────────────────────────────────────
 
@@ -292,25 +293,14 @@ export function recordBlockedOutbound(params: BlockedOutboundParams): void {
   if (!effectiveBusinessId) return;
 
   try {
-    const id = typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `sig-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-    db.prepare(`
-      INSERT INTO signals (
-        id, business_id, connector_id, rule_id, type, severity,
-        title, description, data, status, confidence, created_at, agent_id
-      ) VALUES (?, ?, NULL, 'security:outbound_blocked', 'security_risk', 'critical',
-                ?, ?, ?, 'open', 1.0, CURRENT_TIMESTAMP, ?)
-    `).run(
-      id,
-      effectiveBusinessId,
-      `Blocked outbound call to ${hostname ?? url}`,
-      `A Blueprint component attempted an outbound HTTP call to ${hostname ?? url} ` +
-      `(${reason}) from context '${context ?? 'unknown'}'. The call was blocked. ` +
-      `Review recent agent activity and KB writes for signs of prompt injection.`,
-      JSON.stringify({ url: String(url).slice(0, 500), hostname, reason, context }),
-      agentId,
-    );
+    createSignalIfNotDuplicate({
+      business_id: effectiveBusinessId, rule_id: 'security:outbound_blocked', type: 'security_risk', severity: 'critical',
+      title: `Blocked outbound call to ${hostname ?? url}`,
+      description: `A Blueprint component attempted an outbound HTTP call to ${hostname ?? url} (${reason}) from context '${context ?? 'unknown'}'. The call was blocked. Review recent agent activity and KB writes for signs of prompt injection.`,
+      data: { url: String(url).slice(0, 500), hostname, reason, context }, agent_id: agentId,
+      canonical_key: `security:outbound_blocked:${hostname ?? url}`, condition_key: `${reason}:${context}`,
+      actionable: true, process_through_mesh: false,
+    });
   } catch (err) {
     try {
       console.warn('[security:outbound] Failed to record blocked-outbound signal:', (err as Error).message);
