@@ -225,6 +225,7 @@ export const getAnalysisStatus = (businessId: string, runId: string) => get(`/si
 export const getAIInsights = (businessId: string) => get(`/signals/insights/${businessId}`)
 export const getSignalSummary = (businessId: string) => get(`/signals/${businessId}/summary`)
 export const getSignalJourney = (businessId: string, signalId: string) => get(`/signals/${businessId}/${signalId}/journey`)
+export const createTrafficRecoveryProposal = (businessId: string, signalId: string, data: unknown) => post(`/signals/${businessId}/${signalId}/traffic-recovery`, data)
 export const createTaskFromSignal = (signalId: string, data: unknown) => post(`/signals/${signalId}/create-task`, data)
 
 // ============================================

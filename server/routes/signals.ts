@@ -3,6 +3,7 @@ import type { Request, Response } from 'express';
 import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
 import { getSignalJourney } from '../evidence/evidence-loop.js';
+import { createTrafficRecoveryProposal } from '../evidence/traffic-recovery.js';
 
 const router = Router();
 router.use(isAuthenticated);
@@ -19,6 +20,27 @@ router.get('/:businessId/:signalId/journey', (req: Request, res: Response) => {
   } catch (err) {
     console.error('[signals] journey error:', err);
     return res.status(500).json({ error: 'Failed to build signal journey.' });
+  }
+});
+
+/**
+ * POST /api/signals/:businessId/:signalId/traffic-recovery
+ * Create an approval-gated Shopify description update from a qualifying
+ * ecommerce traffic/conversion signal.
+ */
+router.post('/:businessId/:signalId/traffic-recovery', (req: Request, res: Response) => {
+  try {
+    const result = createTrafficRecoveryProposal(
+      String(req.params.businessId), String(req.params.signalId), req.body as { product_id?: string; proposed_description?: string; title?: string },
+    );
+    if ('error' in result) {
+      const status = result.code === 'signal_not_found' ? 404 : result.code === 'business_type_not_supported' || result.code === 'not_traffic_signal' ? 422 : 400;
+      return res.status(status).json(result);
+    }
+    return res.status(result.idempotent ? 200 : 201).json(result);
+  } catch (err) {
+    console.error('[signals] traffic recovery error:', err);
+    return res.status(500).json({ error: 'Failed to create traffic recovery proposal.' });
   }
 });
 

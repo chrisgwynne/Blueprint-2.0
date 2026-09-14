@@ -13,6 +13,7 @@ import {
   triggerAnalysis, getAnalysisStatus,
   getSignalSummary, createTaskFromSignal,
   getSignalJourney,
+  createTrafficRecoveryProposal,
   getSignalClusters, updateSignalCluster, runClusteringNow,
 } from '../lib/api.js'
 import { Link as LinkIcon } from 'lucide-react'
@@ -720,6 +721,22 @@ function SignalCard({ signal, onUpdate }: SignalCardProps) {
     finally { setActing(false) }
   }
 
+  async function handleTrafficRecovery() {
+    const productId = data.product_id || data.resource_id
+    const proposedDescription = data.proposed_description || data.new_description
+    if (!productId || !proposedDescription) return
+    setActing(true)
+    try {
+      await createTrafficRecoveryProposal(signal.business_id, signal.id, {
+        product_id: String(productId),
+        proposed_description: String(proposedDescription),
+      })
+      addNotification({ type: 'success', message: 'Approval-gated traffic recovery task proposed' })
+      onUpdate?.()
+    } catch (err: any) { addNotification({ type: 'error', message: err.message }) }
+    finally { setActing(false) }
+  }
+
   return (
     <div style={{
       background: 'var(--bp-surface)',
@@ -890,6 +907,16 @@ function SignalCard({ signal, onUpdate }: SignalCardProps) {
           >
             <Activity size={11} /> {journeyOpen ? 'Hide Journey' : 'Journey'}
           </button>
+          {(data.product_id || data.resource_id) && (data.proposed_description || data.new_description) && (
+            <button
+              onClick={handleTrafficRecovery}
+              disabled={acting}
+              className="bp-btn bp-btn-secondary"
+              style={{ fontSize: 10, color: 'var(--bp-green)', borderColor: 'rgba(0,201,167,0.25)' }}
+            >
+              <Zap size={11} /> Propose Recovery
+            </button>
+          )}
           <button
             onClick={() => setTaskOpen(!taskOpen)}
             disabled={acting}
