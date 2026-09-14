@@ -33,7 +33,7 @@
  *   GET    /goals/:id/strategies              — Phase 3: comparable candidate strategies
  *   POST   /goals/:id/plan                    — Phase 3: (re)run strategic planning now
  *
- * Phase 3 (see PHASE3.md, GOAL_ENGINE.md) replaced the project_id proxy
+ * The current goal model replaced the project_id proxy
  * this file used for linked_tasks/linked_signals with real foreign keys
  * (tasks.goal_id, signals.goal_id, task_outcomes.goal_id) — the proxy is
  * kept as a fallback merge for goals/tasks/signals created before the FK
@@ -260,7 +260,7 @@ router.get('/goals/:goalId', requirePermission('goals:read'), (req: Request, res
       'SELECT metric_value, progress_pct, status_change, agent_note, checked_at FROM goal_checks WHERE goal_id = ? ORDER BY checked_at DESC LIMIT 50'
     ).all(goalId) as Array<Record<string, unknown>>).map((c) => normalizeTimestamps(c, ['checked_at']));
 
-    // Real FK (Phase 3, see GOAL_ENGINE.md) — UNION with the legacy
+    // Real FK — UNION with the legacy
     // project_id proxy so goals/tasks/signals created before the FK
     // existed don't lose their linkage.
     const projectId = (row.project_id as string | null) ?? null;

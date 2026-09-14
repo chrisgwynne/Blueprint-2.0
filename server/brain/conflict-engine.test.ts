@@ -4,7 +4,7 @@
  * detectors (checkGoalConflicts, checkTaskGoalConflicts,
  * checkTaskTaskConflicts, checkSignalGoalConflicts) follow this
  * codebase's existing convention of validating Brain/LLM features via live
- * smoke testing rather than mocked unit tests — see PHASE3.md.
+ * smoke testing rather than mocked unit tests.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import db, { generateId } from '../db/db.js';

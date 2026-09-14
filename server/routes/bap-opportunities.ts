@@ -5,7 +5,7 @@
  * — already a quantified-opportunity scanner over connector data — as BAP's
  * "opportunities" surface, extended in Phase 3 with required_effort,
  * related_goal_ids, related_risks, and why_it_matters. Not a new engine or
- * a new table: reusing goal_suggestions exactly, per PHASE3.md's "extend,
+ * a new table: reusing goal_suggestions exactly, per the existing model's "extend,
  * don't fork" approach.
  *
  * No auth/rate-limit middleware here — mounted as a sub-router inside

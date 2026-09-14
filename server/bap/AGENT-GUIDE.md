@@ -2,11 +2,10 @@
 
 For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That file tells agents what Blueprint is, what tools are available, when to use each one, and how to operate. This document is the technical API reference for developers building custom integrations.
 
-> **2026-08 update:** this pass documents Goals, Outcomes, and Connectors
+> This reference documents Goals, Outcomes, and Connectors
 > (existing endpoints that were missing from this reference) and adds the
 > new Operating Policy and Receipts endpoints, plus two behavior changes
-> that affect how proposed tasks resolve. Full details in
-> [CHANGELOG.md](/CHANGELOG.md). The Decision Queue, Comparison mode, the
+> that affect how proposed tasks resolve. The Decision Queue, Comparison mode, the
 > Executive Command Centre, multi-business Portfolios, the "While You Were
 > Away" Digest, Explanation panels, Audit Search, Retrospective Proposals,
 > and Simulation/Preview mode now have read-only BAP surfaces too (#77–#84,
@@ -19,13 +18,13 @@ For agent skill installation, see [SKILL.md](/SKILL.md) in the repo root. That f
 > for why a trigger endpoint is safe here specifically. Every dashboard
 > feature added in the 38-issue backlog clearance now has a BAP surface.
 >
-> **Later 2026-08 update:** a second pass added Run Event Trace
+> It also includes Run Event Trace
 > (per-run tool-call/step visibility, see Agents below), proactive
 > notification + three new Blueprint-health checks on top of the
 > existing System Issues surface, an Operating Policy Backtest (replay
 > a draft policy change against real task history before activating
 > it), and Cross-Business Pattern detection as a new Executive Command
-> Centre section. Full detail in [CHANGELOG.md](/CHANGELOG.md).
+> Centre section.
 
 ---
 

@@ -15,7 +15,7 @@
  * there is nothing today that reliably identifies "this KB page mentions
  * competitor X" without an LLM entity-extraction pass this phase does not
  * build. createStandaloneEntity() lets a human or BAP caller register one
- * manually and link edges to it; see PHASE3.md's "remaining limitations."
+ * manually and link edges to it.
  */
 import crypto from 'crypto';
 import db from '../db/db.js';

@@ -1196,7 +1196,7 @@ const STARTUP_MIGRATIONS: string[] = [
   // action_registry's fields are backfilled FROM action-windows.ts's data
   // here so the two agree; action-windows.ts itself remains the engine
   // restraint.ts/causal.ts/conductor actually read from â€” consolidating
-  // them into one is a follow-up, not done in this phase (see PHASE2-INT.md).
+  // them into one is handled by action_registry's write-through mirror.
   // Guarded on success_metrics = '[]' so an operator's own edit is never
   // silently overwritten by a later startup.
   `UPDATE action_registry SET measurement_window_days = '[7,21,42]', success_metrics = '["gsc.avg_ctr","gsc.total_clicks","ga4.sessions"]' WHERE action_type = 'meta_update' AND success_metrics = '[]'`,

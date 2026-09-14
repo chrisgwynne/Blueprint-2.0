@@ -12,9 +12,8 @@
  * Scoping note: revenue/traffic/seo/lead_gen/marketing "trend" fields are
  * a coarse bucketing of the business's most recent open signals by
  * keyword, not a full metrics regression — a documented simplification,
- * not a claim of statistical rigor. Wiring every one of rules.ts's ~40
- * signal-evaluation functions to consume World Model state instead of raw
- * connector data is out of scope for this phase (see PHASE2-INT.md).
+ * not a claim of statistical rigor. The summary is deliberately bounded so
+ * it remains safe and explainable as the underlying data grows.
  */
 import db, { generateId } from '../db/db.js';
 import { listConnectorConfidence, isLowConfidence } from '../connectors/confidence.js';
