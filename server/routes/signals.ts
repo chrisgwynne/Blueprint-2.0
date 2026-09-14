@@ -31,8 +31,15 @@ router.get('/:businessId/:signalId/journey', (req: Request, res: Response) => {
  */
 router.post('/:businessId/:signalId/traffic-recovery', (req: Request, res: Response) => {
   try {
+    const input = req.body as { product_id?: string; proposed_description?: string; title?: string };
+    if (!input.product_id) return res.status(400).json({ code: 'product_id_required', error: 'product_id is required.' });
+    if (!input.proposed_description) return res.status(400).json({ code: 'description_required', error: 'proposed_description is required.' });
     const result = createTrafficRecoveryProposal(
-      String(req.params.businessId), String(req.params.signalId), req.body as { product_id?: string; proposed_description?: string; title?: string },
+      String(req.params.businessId), String(req.params.signalId), {
+        product_id: input.product_id,
+        proposed_description: input.proposed_description,
+        title: input.title,
+      },
     );
     if ('error' in result) {
       const status = result.code === 'signal_not_found' ? 404 : result.code === 'business_type_not_supported' || result.code === 'not_traffic_signal' ? 422 : 400;
