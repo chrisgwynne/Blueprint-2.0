@@ -18,7 +18,7 @@ interface LayoutNode extends GraphNode { x: number; y: number }
 
 /**
  * Minimal force-directed layout — no graph-visualization library is a
- * dependency of this project (see PHASE3.md's UI limitations). Plain
+ * dependency of this project. Plain
  * repulsion + spring + centering, run for a fixed number of iterations
  * synchronously; adequate for the bounded node count knowledge-graph.ts
  * already caps traversal to (MAX_NODES=200), well within what a

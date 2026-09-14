@@ -807,7 +807,7 @@ router.get('/businesses/:businessId/tasks', requirePermission('tasks:read'), asy
     if (created_from) { conditions.push('created_at >= ?'); params.push(String(created_from)); }
     if (created_to) { conditions.push('created_at <= ?'); params.push(String(created_to)); }
 
-    // goal_id is a real FK (Phase 3) — see PHASE3.md. Previously this was
+    // goal_id is a real FK. Previously this was
     // a best-effort proxy through the shared project_id column.
     if (goal_id) { conditions.push('goal_id = ?'); params.push(String(goal_id)); }
 

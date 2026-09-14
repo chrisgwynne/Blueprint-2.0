@@ -175,10 +175,9 @@ For native development instead of Docker, jump to [Installation](#-installation)
 | **Direct mail & marketing** | Stannp |
 | **Server access** | SSH / FTP, for direct read + approved write-back |
 
-Connector-specific setup guides:
-- [Meta Social Publishing](docs/META-SOCIAL-PUBLISHING.md) — Facebook Page + Instagram publishing setup
+Connector-specific setup is handled from the Connectors page after installation; credentials are encrypted at rest and write-back remains approval-gated.
 
-Building your own connector takes about 2 hours — see [CONTRIBUTING.md](CONTRIBUTING.md).
+Building your own connector takes about 2 hours — see the connector section below and the implementation examples in [`server/connectors/`](server/connectors/).
 
 ### 🤖 Agents
 
@@ -431,7 +430,7 @@ Then open **http://localhost:4000**.
 
 - **Raspberry Pi**: works on Pi 4 / Pi 5 (64-bit OS required for Bun). Use Ollama locally for zero-cost AI.
 - **Headless server / VPS**: Blueprint listens on `0.0.0.0:4000` by default. Point a reverse proxy (Caddy, Nginx, Traefik) at it.
-- **systemd service**: see [CONTRIBUTING.md](CONTRIBUTING.md) for a sample unit file.
+- **systemd service**: use the Linux deployment instructions above and keep the service running as a dedicated unprivileged user.
 
 ---
 
@@ -551,11 +550,11 @@ See [.env.example](.env.example) for full documentation of every variable Bluepr
 
 ## 🔒 Security & Data Handling
 
-Self-hosted, no cloud tier, no telemetry, AES-256-GCM credential encryption, and outbound network access restricted to an explicit allowlist enforced in code — see [SECURITY.md](SECURITY.md) for exactly what leaves your machine and what doesn't.
+Self-hosted, no cloud tier, no telemetry, AES-256-GCM credential encryption, and outbound network access restricted to an explicit allowlist enforced in code. Credentials stay encrypted at rest; external writes require approval by default.
 
 ## 🤝 Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the connector-building guide. Issues and PRs are welcome.
+For development, run the commands in the Quick Start section, keep changes focused, and include tests for behavioural changes. Issues and PRs are welcome.
 
 ## 📄 License
 

@@ -15,7 +15,7 @@
  * strategy proposing to spend more than the limit in one shot is caught;
  * many smaller actions that together exceed a monthly budget are not,
  * because nothing currently records actual spend per action. See
- * PHASE3.md's "remaining limitations."
+ * the documented limitations of the current constraint model.
  */
 import db from '../db/db.js';
 import { isWithinSeasonalVariation } from './seasonality.js';

@@ -387,7 +387,7 @@ export async function checkSignalGoalConflicts(signal: Record<string, unknown>, 
 /* ─── Goal dependency conflicts (Phase 3, deterministic — no LLM call) ──── */
 
 /**
- * A goal_dependencies edge (see GOAL_ENGINE.md) says "this goal depends on
+ * A goal_dependencies edge says "this goal depends on
  * that goal." If the dependency isn't achieved (or, for an active
  * dependency, isn't reasonably far along) while the dependent goal is
  * itself active, that is a real, checkable conflict — no judgment call
