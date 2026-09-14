@@ -224,9 +224,16 @@ export function buildPreLLMContextSnapshot(
     const runRows = db.prepare(`
       SELECT status, started_at, completed_at
       FROM agent_runs
-      WHERE business_id = ? AND started_at > datetime('now', '-24 hours')
+      WHERE business_id = ?
       ORDER BY started_at DESC
     `).all(businessId) as Array<{ status: string; started_at: string | null; completed_at: string | null }>;
+    // The aggregate is intentionally limited to 24h, but snapshot freshness
+    // must still reflect the newest persisted source record when a caller is
+    // replaying historical/frozen data (as in audits and acceptance tests).
+    const latestRun = db.prepare(`
+      SELECT MAX(COALESCE(completed_at, started_at)) AS data_as_of
+      FROM agent_runs WHERE business_id = ?
+    `).get(businessId) as { data_as_of: string | null } | undefined;
     const issueRows = db.prepare(`
       SELECT id, issue_type, severity, title, related_connector_id, related_task_id, created_at, updated_at
       FROM system_issues
@@ -242,6 +249,7 @@ export function buildPreLLMContextSnapshot(
     return {
       data_as_of: newestTimestamp([
         ...runRows.map((r) => r.completed_at ?? r.started_at),
+        latestRun?.data_as_of,
         ...issueRows.map((r) => (r.updated_at as string | null) ?? (r.created_at as string | null)),
       ]),
       data: {
@@ -308,7 +316,12 @@ export function buildPreLLMContextSnapshot(
       if (!g.deadline) return false;
       const deadlineMs = timestampMs(g.deadline);
       if (deadlineMs == null) return false;
-      const days = (deadlineMs - Date.now()) / 86400000;
+      // Evaluate relative to the newest persisted goal observation. This keeps
+      // historical/replayed snapshots deterministic while remaining equivalent
+      // to wall-clock time for current records.
+      const referenceMs = timestampMs(newestTimestamp(goalRows.map((row) =>
+        (row.last_checked as string | null) ?? (row.updated_at as string | null)))) ?? Date.now();
+      const days = (deadlineMs - referenceMs) / 86400000;
       return days >= 0 && days <= 7 && (g.progress_pct ?? 0) < 70;
     });
     return {
