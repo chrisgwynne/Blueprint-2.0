@@ -2,9 +2,25 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import db, { generateId, audit } from '../db/db.js';
 import { isAuthenticated } from '../middleware/auth.js';
+import { getSignalJourney } from '../evidence/evidence-loop.js';
 
 const router = Router();
 router.use(isAuthenticated);
+
+/**
+ * GET /api/signals/:businessId/:signalId/journey
+ * One auditable signal → task → receipt → outcome thread.
+ */
+router.get('/:businessId/:signalId/journey', (req: Request, res: Response) => {
+  try {
+    const journey = getSignalJourney(String(req.params.businessId), String(req.params.signalId));
+    if (!journey) return res.status(404).json({ error: 'Signal not found.' });
+    return res.json(journey);
+  } catch (err) {
+    console.error('[signals] journey error:', err);
+    return res.status(500).json({ error: 'Failed to build signal journey.' });
+  }
+});
 
 // ─── Static-prefix routes (must come before /:businessId and /:id param routes) ─
 
