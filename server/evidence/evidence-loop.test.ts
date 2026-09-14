@@ -32,7 +32,7 @@ test('joins a task and outcome while keeping the journey business-scoped', () =>
   const journey = getSignalJourney(BUSINESS, signalId);
   expect(journey?.current_phase).toBe('measured');
   expect(journey?.phases.measured.reached).toBe(true);
-  expect(journey?.tasks[0].latest_outcome).toMatchObject({ id: outcomeId, verdict: 'improved', change_pct: 20 });
+  expect(journey?.tasks[0]?.latest_outcome).toMatchObject({ id: outcomeId, verdict: 'improved', change_pct: 20 });
   expect(journey?.provenance.map((item) => item.kind)).toEqual(['signal', 'task', 'outcome']);
   expect(getSignalJourney('another_business', signalId)).toBeNull();
 

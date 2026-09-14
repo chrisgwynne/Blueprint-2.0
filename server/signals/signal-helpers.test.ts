@@ -31,7 +31,7 @@ describe('signal and task invariant gates', () => {
       process_through_mesh: false,
     });
     expect(first?.created).toBe(true);
-    expect(second).toEqual({ id: first?.id, created: false });
+    expect(second).toEqual({ id: first!.id, created: false });
     expect((db.prepare('SELECT COUNT(*) AS count FROM signals WHERE business_id = ?').get(BIZ) as any).count).toBe(1);
   });
 
