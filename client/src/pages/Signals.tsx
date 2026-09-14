@@ -12,6 +12,7 @@ import {
   getSignals, updateSignal, createTask,
   triggerAnalysis, getAnalysisStatus,
   getSignalSummary, createTaskFromSignal,
+  getSignalJourney,
   getSignalClusters, updateSignalCluster, runClusteringNow,
 } from '../lib/api.js'
 import { Link as LinkIcon } from 'lucide-react'
@@ -68,6 +69,62 @@ function healthColor(score: number | null | undefined): string {
 function fmt(dt: any): string {
   if (!dt) return '—'
   return formatDistanceToNow(parseTimestamp(dt) || new Date(), { addSuffix: true })
+}
+
+const JOURNEY_PHASES = ['detected', 'proposed', 'approved', 'executed', 'measured']
+
+function SignalJourneyPanel({ businessId, signalId }: { businessId: string; signalId: string }) {
+  const [journey, setJourney] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    setLoading(true)
+    getSignalJourney(businessId, signalId)
+      .then((data) => { if (active) setJourney(data) })
+      .catch((err: any) => { if (active) setError(err.message || 'Unable to load journey') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [businessId, signalId])
+
+  if (loading) return <div style={{ marginTop: 10, color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>Loading evidence journey…</div>
+  if (error) return <div style={{ marginTop: 10, color: 'var(--bp-red)', fontFamily: 'var(--bp-font-mono)', fontSize: 10 }}>{error}</div>
+  if (!journey) return null
+
+  const currentIndex = JOURNEY_PHASES.indexOf(journey.current_phase)
+  return (
+    <div style={{ marginTop: 10, padding: '12px 14px', background: 'var(--bp-base)', border: '1px solid var(--bp-border-2)', borderRadius: 4 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+        <span style={{ fontFamily: 'var(--bp-font-display)', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--bp-text)' }}>Evidence journey</span>
+        <span style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-blue)' }}>{journey.current_phase}</span>
+      </div>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 10 }}>
+        {JOURNEY_PHASES.map((phase, index) => (
+          <React.Fragment key={phase}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ height: 4, borderRadius: 2, background: index <= currentIndex ? 'var(--bp-green)' : 'var(--bp-surface-3)' }} />
+              <div style={{ marginTop: 4, fontFamily: 'var(--bp-font-mono)', fontSize: 8, color: index <= currentIndex ? 'var(--bp-text-2)' : 'var(--bp-text-3)', textTransform: 'uppercase' }}>{phase}</div>
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+      <div style={{ fontFamily: 'var(--bp-font-mono)', fontSize: 10, color: 'var(--bp-text-2)' }}>{journey.next_step}</div>
+      {journey.tasks?.length > 0 && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {journey.tasks.map((task: any) => (
+            <div key={task.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontFamily: 'var(--bp-font-mono)', fontSize: 9, color: 'var(--bp-text-3)' }}>
+              <span style={{ color: 'var(--bp-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{task.title}</span>
+              <span style={{ color: task.phase === 'measured' ? 'var(--bp-green)' : 'var(--bp-blue)', textTransform: 'uppercase', flexShrink: 0 }}>{task.phase}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ marginTop: 10, color: 'var(--bp-text-3)', fontFamily: 'var(--bp-font-mono)', fontSize: 9 }}>
+        {journey.provenance?.length ?? 0} evidence records linked · source and freshness preserved
+      </div>
+    </div>
+  )
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -632,6 +689,7 @@ function SignalCard({ signal, onUpdate }: SignalCardProps) {
   const [taskOpen, setTaskOpen]       = useState(false)
   const [acting, setActing]           = useState(false)
   const [investigating, setInvestigating] = useState(false)
+  const [journeyOpen, setJourneyOpen] = useState(false)
 
   const sev  = SEVERITY_CONFIG[signal.severity] || SEVERITY_CONFIG.info
   const data = parseData(signal)
@@ -825,6 +883,14 @@ function SignalCard({ signal, onUpdate }: SignalCardProps) {
             <Search size={11} /> Investigate
           </button>
           <button
+            onClick={() => setJourneyOpen(!journeyOpen)}
+            disabled={acting}
+            className="bp-btn bp-btn-secondary"
+            style={{ fontSize: 10 }}
+          >
+            <Activity size={11} /> {journeyOpen ? 'Hide Journey' : 'Journey'}
+          </button>
+          <button
             onClick={() => setTaskOpen(!taskOpen)}
             disabled={acting}
             className="bp-btn bp-btn-secondary"
@@ -899,6 +965,10 @@ function SignalCard({ signal, onUpdate }: SignalCardProps) {
           onClose={() => setInvestigating(false)}
           signal={signal}
         />
+
+        {journeyOpen && signal.business_id && (
+          <SignalJourneyPanel businessId={signal.business_id} signalId={signal.id} />
+        )}
 
 
         {/* Raw data for non-AI signals */}

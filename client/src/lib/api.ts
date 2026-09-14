@@ -224,6 +224,7 @@ export const triggerAnalysis = (businessId: string) => post(`/signals/analyse/${
 export const getAnalysisStatus = (businessId: string, runId: string) => get(`/signals/analyse/${businessId}/status/${runId}`)
 export const getAIInsights = (businessId: string) => get(`/signals/insights/${businessId}`)
 export const getSignalSummary = (businessId: string) => get(`/signals/${businessId}/summary`)
+export const getSignalJourney = (businessId: string, signalId: string) => get(`/signals/${businessId}/${signalId}/journey`)
 export const createTaskFromSignal = (signalId: string, data: unknown) => post(`/signals/${signalId}/create-task`, data)
 
 // ============================================
